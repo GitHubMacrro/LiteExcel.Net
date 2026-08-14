@@ -1,0 +1,892 @@
+using LiteExcel.Internal;
+using System.Globalization;
+using System.IO.Compression;
+using System.Text;
+
+namespace LiteExcel;
+public static partial class XlsxWriter
+{
+    internal const string MainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    private const string RelNs = "http://schemas.openxmlformats.org/package/2006/relationships";
+    private const string OfficeRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    /// <summary>写出单表 </summary>
+    public static void Write(string path, SheetData data)
+    {
+        Write(path, new[] { data }, null);
+    }
+
+    /// <summary>写出单表，并携带文档属性 </summary>
+    public static void Write(string path, SheetData data, WorkbookProperties? properties)
+    {
+        Write(path, new[] { data }, properties);
+    }
+
+    /// <summary>写出多表 </summary>
+    public static void Write(string path, IReadOnlyList<SheetData> sheets)
+    {
+        Write(path, sheets, null);
+    }
+
+    /// <summary>写出多表，并携带文档属性 </summary>
+    public static void Write(string path, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties)
+    {
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+        Write(fs, sheets, properties);
+    }
+
+    /// <summary>写出单表到流 </summary>
+    public static void Write(Stream stream, SheetData data)
+    {
+        Write(stream, new[] { data }, null);
+    }
+
+    /// <summary>写出单表到流，并携带文档属性 </summary>
+    public static void Write(Stream stream, SheetData data, WorkbookProperties? properties)
+    {
+        Write(stream, new[] { data }, properties);
+    }
+
+    /// <summary>写出多表到流 </summary>
+    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets)
+    {
+        Write(stream, sheets, null);
+    }
+
+    /// <summary>写出多表到流，并携带文档属性 </summary>
+    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties)
+    {
+        if (sheets is null || sheets.Count == 0)
+            throw new ArgumentException("至少需要一张工作表", nameof(sheets));
+
+        // 0. Sheet 名校验（入口拦截，不影响写出逻辑）
+        foreach (var sheet in sheets)
+        {
+            ValidateSheetName(sheet?.SheetName);
+        }
+
+        //   收集共享字符串和样式（跨所有表）
+        var sharedStrings = new List<string>();
+        var sharedIndex = new Dictionary<string, int>();
+        var stylesheet = new Stylesheet();
+
+        // 预扫描：注册所有字符串和样式
+        foreach (var sheet in sheets)
+        {
+            if (sheet.Headers is not null)
+            {
+                foreach (var h in sheet.Headers)
+                    RegisterSharedString(h, sharedStrings, sharedIndex);
+            }
+            foreach (var row in sheet.Rows)
+            {
+                foreach (var cell in row)
+                {
+                    if (cell.Type == CellType.Text && cell.Text is not null)
+                        RegisterSharedString(cell.Text, sharedStrings, sharedIndex);
+                }
+            }
+        }
+
+        //   构建 zip
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+
+        // 预计算哪些 sheet 有批注
+        var sheetsWithComments = new List<int>();
+        for (int i = 0; i < sheets.Count; i++)
+        {
+            if (sheets[i].Comments is { Count: > 0 })
+                sheetsWithComments.Add(i);
+        }
+
+        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null));
+        WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null));
+        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets));
+        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count));
+
+        // 文档属性（文件属性对话框信息）
+        if (properties is not null)
+        {
+            WriteXmlEntry(zip, "docProps/core.xml", CorePropsXml(properties));
+            WriteXmlEntry(zip, "docProps/app.xml", AppPropsXml(properties, sheets));
+        }
+
+        for (int i = 0; i < sheets.Count; i++)
+        {
+            var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet);
+            WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
+
+            // 批注：每张有批注的 sheet 对应一个 comments 文件
+            if (sheets[i].Comments is { Count: > 0 })
+            {
+                WriteXmlEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.xml.rels", SheetRelsXml(i + 1));
+                WriteXmlEntry(zip, $"xl/comments{i + 1}.xml", CommentsXml(sheets[i].Comments!));
+            }
+        }
+
+        WriteXmlEntry(zip, "xl/sharedStrings.xml", SharedStringsXml(sharedStrings));
+        WriteXmlEntry(zip, "xl/styles.xml", stylesheet.BuildStylesXml());
+    }
+
+    /// <summary>
+    /// 追加数据到已有文件 同名 sheet 合并列后追加行；不同名则作为新 sheet 加入 
+    /// 文件不存在时直接创建 
+    /// </summary>
+    public static void Append(string path, SheetData? newData, WorkbookProperties? updateProperties = null)
+    {
+        if (newData is null || newData.Rows is null || newData.Rows.Count == 0)
+            return;
+
+        if (!File.Exists(path))
+        {
+            Write(path, newData, updateProperties);
+            return;
+        }
+
+        var allSheets = XlsxReader.ReadAll(path);
+        var properties = XlsxReader.ReadProperties(path);
+        ApplyPropertyUpdates(properties, updateProperties);
+        // Preserve existing metadata while recording this append operation.
+        properties.Modified = DateTime.Now;
+        var name = newData.SheetName ?? "";
+        int idx = allSheets.FindIndex(s => s.SheetName == name);
+
+        if (idx >= 0)
+        {
+            // 同名 sheet：合并列头，追加行
+            AppendToSheet(allSheets[idx], newData);
+        }
+        else
+        {
+            allSheets.Add(newData);
+        }
+
+        Write(path, allSheets, properties);
+    }
+
+    private static void ApplyPropertyUpdates(WorkbookProperties target, WorkbookProperties? updates)
+    {
+        if (updates is null) return;
+
+        if (updates.Creator is not null) target.Creator = updates.Creator;
+        if (updates.LastModifiedBy is not null) target.LastModifiedBy = updates.LastModifiedBy;
+        if (updates.Title is not null) target.Title = updates.Title;
+        if (updates.Subject is not null) target.Subject = updates.Subject;
+        if (updates.Application is not null) target.Application = updates.Application;
+        if (updates.Created is not null) target.Created = updates.Created;
+    }
+
+    private static void AppendToSheet(SheetData existing, SheetData newData)
+    {
+        //   合并 Headers
+        var mergedHeaders = new List<string>(existing.Headers);
+        if (newData.Headers is not null)
+        {
+            foreach (var h in newData.Headers)
+            {
+                if (!mergedHeaders.Contains(h))
+                    mergedHeaders.Add(h);
+            }
+        }
+        existing.Headers = mergedHeaders;
+
+        //   构建列名映射
+        var newHeaderMap = new Dictionary<string, int>();
+        if (newData.Headers is not null)
+        {
+            for (int i = 0; i < newData.Headers.Count; i++)
+            {
+                if (!newHeaderMap.ContainsKey(newData.Headers[i]))
+                    newHeaderMap[newData.Headers[i]] = i;
+            }
+        }
+
+        int colCount = mergedHeaders.Count;
+
+        //   追加行
+        foreach (var row in newData.Rows)
+        {
+            var padded = new List<Cell>(colCount);
+            for (int c = 0; c < colCount; c++)
+            {
+                string colName = mergedHeaders[c];
+                if (newHeaderMap.TryGetValue(colName, out int srcIdx) && srcIdx < row.Count)
+                {
+                    padded.Add(row[srcIdx]);
+                }
+                else
+                {
+                    padded.Add(Cell.Empty);
+                }
+            }
+            existing.Rows.Add(padded);
+        }
+    }
+
+    // ── Sheet 名校验 ──
+
+    private static readonly char[] InvalidSheetNameChars = new[] { '\\', '/', '?', '*', '[', ']', ':' };
+
+    private static void ValidateSheetName(string? sheetName)
+    {
+        bool invalid = string.IsNullOrEmpty(sheetName)
+            || sheetName!.Length > 31
+            || sheetName.IndexOfAny(InvalidSheetNameChars) >= 0;
+
+        if (invalid)
+        {
+            throw new InvalidSheetNameException(
+                sheetName ?? "",
+                "Sheet 名不能为空/超过 31 字符/包含 \\ / ? * [ ] : 字符");
+        }
+    }
+
+    // ── 共享字符串管理 ──
+
+    private static int RegisterSharedString(string? s, List<string> shared, Dictionary<string, int> index)
+    {
+        if (string.IsNullOrEmpty(s)) return -1;
+        if (index.TryGetValue(s, out var i)) return i;
+        i = shared.Count;
+        shared.Add(s);
+        index[s] = i;
+        return i;
+    }
+
+    // ── 工作表 XML 构建 ──
+
+    private static string BuildSheetXml(SheetData sheet,
+        Dictionary<string, int> sharedIndex, Stylesheet stylesheet)
+    {
+        var sb = new StringBuilder(4096);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<worksheet xmlns=\"{MainNs}\"");
+
+        // sheetView（冻结表头）
+        if (sheet.FreezeHeader)
+        {
+            sb.Append(">");
+            sb.Append("<sheetViews><sheetView workbookViewId=\"0\">");
+            sb.Append("<pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/>");
+            sb.Append("<selection pane=\"bottomLeft\"/>");
+            sb.Append("</sheetView></sheetViews>");
+        }
+        else
+        {
+            sb.Append("><sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>");
+        }
+
+        // 列宽
+        if (sheet.ColumnWidths is { Count: > 0 })
+        {
+            sb.Append("<cols>");
+            for (int i = 0; i < sheet.ColumnWidths.Count; i++)
+            {
+                sb.Append($"<col min=\"{i + 1}\" max=\"{i + 1}\" width=\"{FormatDouble(sheet.ColumnWidths[i])}\" customWidth=\"1\"/>");
+            }
+            sb.Append("</cols>");
+        }
+
+        sb.Append("<sheetData>");
+
+        int rowIndex = 1;
+        int headerStyleId = stylesheet.GetOrCreateXfId(sheet.HeaderStyle);
+
+        // 表头行
+        if (sheet.Headers is { Count: > 0 })
+        {
+            int headerRow = rowIndex++;
+            sb.Append($"<row r=\"{headerRow}\">");
+            for (int col = 0; col < sheet.Headers.Count; col++)
+            {
+                // 表头样式优先级: HeaderStyle > ColumnStyles > DefaultStyle
+                var headerCellStyle = sheet.HeaderStyle
+                    ?? (sheet.ColumnStyles is not null && sheet.ColumnStyles.TryGetValue(col, out var cs) ? cs : null)
+                    ?? sheet.DefaultStyle;
+                int headerCellStyleId = stylesheet.GetOrCreateXfId(headerCellStyle);
+                WriteTextCell(sb, headerRow, col, sheet.Headers[col], sharedIndex, headerCellStyleId);
+            }
+            sb.Append("</row>");
+        }
+
+        // 计算筛选 hidden 行（如果有筛选条件但没手动设 HiddenRows）
+        var hiddenRows = sheet.Filter?.HiddenRows;
+        if (sheet.Filter is not null && sheet.Filter.Columns.Count > 0 && hiddenRows is not null && hiddenRows.Count == 0)
+        {
+            hiddenRows = FilterEvaluator.EvaluateHiddenRows(sheet);
+        }
+
+        // 数据行
+        int dataRowIdx = 0;
+        foreach (var row in sheet.Rows)
+        {
+            int currentRow = rowIndex++;
+            int maxCol = row.Count - 1;
+            if (maxCol < 0) { dataRowIdx++; continue; }
+
+            // 行级样式
+            CellStyle? rowStyle = null;
+            if (sheet.RowStyles is not null && sheet.RowStyles.TryGetValue(dataRowIdx, out var rs))
+                rowStyle = rs;
+
+            bool isHidden = hiddenRows is not null && hiddenRows.Contains(dataRowIdx);
+            string hiddenAttr = isHidden ? " hidden=\"1\"" : "";
+            string heightAttr = "";
+            if (sheet.RowHeights is not null && sheet.RowHeights.TryGetValue(dataRowIdx, out var ht))
+            {
+                heightAttr = $" ht=\"{FormatDouble(ht)}\" customHeight=\"1\"";
+            }
+            sb.Append($"<row r=\"{currentRow}\"{hiddenAttr}{heightAttr}>");
+            for (int col = 0; col <= maxCol; col++)
+            {
+                var cell = col < row.Count ? row[col] : Cell.Empty;
+
+                // 样式优先级: Cell.Style > RowStyle > ColumnStyle > DefaultStyle
+                CellStyle? resolvedStyle = cell.Style;
+                if (resolvedStyle is null)
+                {
+                    resolvedStyle = rowStyle;
+                    if (resolvedStyle is null && sheet.ColumnStyles is not null && sheet.ColumnStyles.TryGetValue(col, out var cs))
+                        resolvedStyle = cs;
+                    if (resolvedStyle is null)
+                        resolvedStyle = sheet.DefaultStyle;
+                }
+
+                WriteCell(sb, currentRow, col, cell, sharedIndex, stylesheet, resolvedStyle);
+            }
+            sb.Append("</row>");
+            dataRowIdx++;
+        }
+
+        sb.Append("</sheetData>");
+
+        // 数据验证
+        if (sheet.Validations is { Count: > 0 })
+        {
+            sb.Append($"<dataValidations count=\"{sheet.Validations.Count}\">");
+            foreach (var dv in sheet.Validations)
+            {
+                string typeAttr = dv.Type switch
+                {
+                    DataValidationType.List => "list",
+                    DataValidationType.WholeNumber => "whole",
+                    DataValidationType.Decimal => "decimal",
+                    DataValidationType.Date => "date",
+                    _ => "list",
+                };
+                string allowBlankAttr = dv.AllowBlank ? " allowBlank=\"1\"" : "";
+                string promptTitleAttr = dv.PromptTitle is not null ? $" promptTitle=\"{XmlEscape(dv.PromptTitle)}\"" : "";
+                string promptAttr = dv.Prompt is not null ? $" prompt=\"{XmlEscape(dv.Prompt)}\"" : "";
+
+                sb.Append($"<dataValidation type=\"{typeAttr}\" sqref=\"{XmlEscape(dv.Sqref)}\"{allowBlankAttr}{promptTitleAttr}{promptAttr}>");
+                sb.Append($"<formula1>{XmlEscape(dv.Formula1)}</formula1>");
+                if (dv.Formula2 is not null)
+                {
+                    sb.Append($"<formula2>{XmlEscape(dv.Formula2)}</formula2>");
+                }
+                sb.Append("</dataValidation>");
+            }
+            sb.Append("</dataValidations>");
+        }
+
+        // 自动筛选
+        if (sheet.Filter is not null)
+        {
+            string filterRange = sheet.Filter.Range;
+            if (string.IsNullOrEmpty(filterRange) && sheet.Headers.Count > 0)
+            {
+                // 自动计算范围：表头行到最后一数据行
+                int totalRows = sheet.Headers.Count + sheet.Rows.Count;
+                filterRange = $"{CellRef.ToString(0, 0)}:{CellRef.ToString(totalRows - 1, sheet.Headers.Count - 1)}";
+            }
+
+            if (!string.IsNullOrEmpty(filterRange))
+            {
+                sb.Append($"<autoFilter ref=\"{filterRange}\">");
+                foreach (var col in sheet.Filter.Columns)
+                {
+                    sb.Append($"<filterColumn colId=\"{col.ColumnIndex}\">");
+                    sb.Append(BuildFilterColumnXml(col));
+                    sb.Append("</filterColumn>");
+                }
+                sb.Append("</autoFilter>");
+            }
+        }
+
+        // 合并单元格
+        if (sheet.MergedRanges is { Count: > 0 })
+        {
+            // 表头占 1 行（如果有 Headers），MergedRanges 行号是相对于 Rows 的，需要偏移
+            int headerOffset = (sheet.Headers is { Count: > 0 }) ? 1 : 0;
+            sb.Append("<mergeCells count=\"" + sheet.MergedRanges.Count + "\">");
+            foreach (var range in sheet.MergedRanges)
+            {
+                var from = CellRef.ToString(range.FirstRow + headerOffset, range.FirstCol);
+                var to = CellRef.ToString(range.LastRow + headerOffset, range.LastCol);
+                sb.Append($"<mergeCell ref=\"{from}:{to}\"/>");
+            }
+            sb.Append("</mergeCells>");
+        }
+
+        sb.Append("</worksheet>");
+        return sb.ToString();
+    }
+
+    private static string BuildFilterColumnXml(FilterColumn col)
+    {
+        var sb = new StringBuilder();
+        switch (col.Type)
+        {
+            case FilterType.Equals:
+                sb.Append("<filters>");
+                foreach (var v in col.Values)
+                    sb.Append($"<filter val=\"{XmlEscape(v)}\"/>");
+                sb.Append("</filters>");
+                break;
+
+            case FilterType.Blank:
+                if (col.Values.Count == 0)
+                    sb.Append("<filters><blank/></filters>");
+                else
+                    sb.Append("<filters/>");
+                break;
+
+            case FilterType.Compare:
+                if (col.Operator == FilterOperator.Between && col.MinValue is not null && col.MaxValue is not null)
+                {
+                    sb.Append("<customFilters and=\"1\">");
+                    sb.Append($"<customFilter operator=\"greaterThanOrEqual\" val=\"{XmlEscape(col.MinValue)}\"/>");
+                    sb.Append($"<customFilter operator=\"lessThanOrEqual\" val=\"{XmlEscape(col.MaxValue)}\"/>");
+                    sb.Append("</customFilters>");
+                }
+                else
+                {
+                    sb.Append("<customFilters>");
+                    for (int i = 0; i < col.Values.Count; i++)
+                    {
+                        string op = col.Operator switch
+                        {
+                            FilterOperator.GreaterThan => "greaterThan",
+                            FilterOperator.GreaterThanOrEqual => "greaterThanOrEqual",
+                            FilterOperator.LessThan => "lessThan",
+                            FilterOperator.LessThanOrEqual => "lessThanOrEqual",
+                            _ => "equal",
+                        };
+                        sb.Append($"<customFilter operator=\"{op}\" val=\"{XmlEscape(col.Values[i])}\"/>");
+                    }
+                    sb.Append("</customFilters>");
+                }
+                break;
+
+            case FilterType.Contains:
+                sb.Append("<customFilters>");
+                foreach (var v in col.Values)
+                    sb.Append($"<customFilter operator=\"equal\" val=\"*{XmlEscape(v)}*\"/>");
+                sb.Append("</customFilters>");
+                break;
+
+            case FilterType.BeginsWith:
+                sb.Append("<customFilters>");
+                foreach (var v in col.Values)
+                    sb.Append($"<customFilter operator=\"equal\" val=\"{XmlEscape(v)}*\"/>");
+                sb.Append("</customFilters>");
+                break;
+
+            case FilterType.EndsWith:
+                sb.Append("<customFilters>");
+                foreach (var v in col.Values)
+                    sb.Append($"<customFilter operator=\"equal\" val=\"*{XmlEscape(v)}\"/>");
+                sb.Append("</customFilters>");
+                break;
+        }
+        return sb.ToString();
+    }
+
+    private static void WriteTextCell(StringBuilder sb, int row1Based, int col, string text,
+        Dictionary<string, int> sharedIndex, int styleId = 0)
+    {
+        var styleAttr = styleId > 0 ? $" s=\"{styleId}\"" : "";
+        if (string.IsNullOrEmpty(text))
+        {
+            sb.Append($"<c r=\"{CellRef.ToString(row1Based - 1, col)}\"{styleAttr}/>");
+            return;
+        }
+        var idx = sharedIndex.TryGetValue(text, out var i) ? i : -1;
+        if (idx >= 0)
+        {
+            sb.Append($"<c r=\"{CellRef.ToString(row1Based - 1, col)}\"{styleAttr} t=\"s\"><v>{idx}</v></c>");
+        }
+        else
+        {
+            sb.Append($"<c r=\"{CellRef.ToString(row1Based - 1, col)}\"{styleAttr} t=\"inlineStr\"><is><t>{XmlEscape(text)}</t></is></c>");
+        }
+    }
+
+    private static void WriteCell(StringBuilder sb, int row, int col, Cell cell,
+        Dictionary<string, int> sharedIndex, Stylesheet stylesheet, CellStyle? resolvedStyle = null)
+    {
+        var cellRef = CellRef.ToString(row - 1, col);
+        // 使用解析后的样式（优先级已在外部处理），或 cell 自带的样式
+        int styleId = stylesheet.GetOrCreateXfId(resolvedStyle ?? cell.Style, cell.NumberFormat);
+        var styleAttr = styleId > 0 ? $" s=\"{styleId}\"" : "";
+
+        switch (cell.Type)
+        {
+            case CellType.Empty:
+                sb.Append($"<c r=\"{cellRef}\"{styleAttr}/>");
+                break;
+
+            case CellType.Text:
+                if (string.IsNullOrEmpty(cell.Text))
+                {
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr}/>");
+                }
+                else if (sharedIndex.TryGetValue(cell.Text, out var idx))
+                {
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr} t=\"s\"><v>{idx}</v></c>");
+                }
+                else
+                {
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr} t=\"inlineStr\"><is><t>{XmlEscape(cell.Text)}</t></is></c>");
+                }
+                break;
+
+            case CellType.Number:
+                sb.Append($"<c r=\"{cellRef}\"{styleAttr}><v>{FormatDouble(cell.Number)}</v></c>");
+                break;
+
+            case CellType.Date:
+                var serial = cell.Date.ToOADate();
+                sb.Append($"<c r=\"{cellRef}\"{styleAttr}><v>{FormatDouble(serial)}</v></c>");
+                break;
+
+            case CellType.Boolean:
+                sb.Append($"<c r=\"{cellRef}\"{styleAttr} t=\"b\"><v>{(cell.Boolean ? 1 : 0)}</v></c>");
+                break;
+        }
+    }
+
+    // ── OOXML 部件构建 ──
+
+    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps)
+    {
+        var sb = new StringBuilder(512);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
+        sb.Append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
+        sb.Append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
+        sb.Append("<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>");
+        for (int i = 1; i <= sheetCount; i++)
+        {
+            sb.Append($"<Override PartName=\"/xl/worksheets/sheet{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>");
+        }
+        sb.Append("<Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>");
+        sb.Append("<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>");
+        // 批注部件 Override
+        foreach (var sheetIdx in sheetsWithComments)
+        {
+            sb.Append($"<Override PartName=\"/xl/comments{sheetIdx + 1}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml\"/>");
+        }
+        // 文档属性 Override
+        if (hasProps)
+        {
+            sb.Append("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
+            sb.Append("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
+        }
+        sb.Append("</Types>");
+        return sb.ToString();
+    }
+
+    private static string SheetRelsXml(int sheetNumber)
+    {
+        var sb = new StringBuilder(256);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<Relationships xmlns=\"{RelNs}\">");
+        sb.Append($"<Relationship Id=\"rId1\" Type=\"{OfficeRelNs}/comments\" Target=\"../comments{sheetNumber}.xml\"/>");
+        sb.Append("</Relationships>");
+        return sb.ToString();
+    }
+
+    private static string CommentsXml(IReadOnlyDictionary<string, string> comments)
+    {
+        var sb = new StringBuilder(512);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<comments xmlns=\"{MainNs}\">");
+        sb.Append("<authors><author>LiteExcel</author></authors>");
+        sb.Append("<commentList>");
+        foreach (var kv in comments)
+        {
+            var refAttr = XmlEscape(kv.Key);
+            var text = XmlEscape(kv.Value);
+            // 保留前导/尾随空格
+            string spaceAttr = "";
+            if (kv.Value.Length > 0 && (char.IsWhiteSpace(kv.Value[0]) || char.IsWhiteSpace(kv.Value[kv.Value.Length - 1])))
+            {
+                spaceAttr = " xml:space=\"preserve\"";
+            }
+            sb.Append($"<comment ref=\"{refAttr}\" authorId=\"0\"><text><t{spaceAttr}>{text}</t></text></comment>");
+        }
+        sb.Append("</commentList>");
+        sb.Append("</comments>");
+        return sb.ToString();
+    }
+
+    private static string RootRelsXml(bool hasProps)
+    {
+        var sb = new StringBuilder(256);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<Relationships xmlns=\"{RelNs}\">");
+        sb.Append($"<Relationship Id=\"rId1\" Type=\"{OfficeRelNs}/officeDocument\" Target=\"xl/workbook.xml\"/>");
+        if (hasProps)
+        {
+            sb.Append($"<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/>");
+            sb.Append($"<Relationship Id=\"rId3\" Type=\"{OfficeRelNs}/extended-properties\" Target=\"docProps/app.xml\"/>");
+        }
+        sb.Append("</Relationships>");
+        return sb.ToString();
+    }
+
+    private static string CorePropsXml(WorkbookProperties props)
+    {
+        var now = DateTime.UtcNow;
+        var created = props.Created ?? now;
+        var modified = props.Modified ?? now;
+        var sb = new StringBuilder(512);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"");
+        sb.Append(" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"");
+        sb.Append(" xmlns:dcterms=\"http://purl.org/dc/terms/\"");
+        sb.Append(" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\"");
+        sb.Append(" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">");
+        if (!string.IsNullOrEmpty(props.Creator))
+            sb.Append($"<dc:creator>{XmlEscape(props.Creator!)}</dc:creator>");
+        if (!string.IsNullOrEmpty(props.LastModifiedBy))
+            sb.Append($"<cp:lastModifiedBy>{XmlEscape(props.LastModifiedBy!)}</cp:lastModifiedBy>");
+        sb.Append($"<dcterms:created xsi:type=\"dcterms:W3CDTF\">{XmlEscape(created.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture))}</dcterms:created>");
+        sb.Append($"<dcterms:modified xsi:type=\"dcterms:W3CDTF\">{XmlEscape(modified.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture))}</dcterms:modified>");
+        if (!string.IsNullOrEmpty(props.Title))
+            sb.Append($"<dc:title>{XmlEscape(props.Title!)}</dc:title>");
+        if (!string.IsNullOrEmpty(props.Subject))
+            sb.Append($"<dc:subject>{XmlEscape(props.Subject!)}</dc:subject>");
+        sb.Append("</cp:coreProperties>");
+        return sb.ToString();
+    }
+
+    private static string AppPropsXml(WorkbookProperties props, IReadOnlyList<SheetData> sheets)
+    {
+        // Application 默认取宿主程序集名；显式设置则优先
+        string application = !string.IsNullOrEmpty(props.Application)
+            ? props.Application!
+            : (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name ?? "LiteExcel");
+
+        var sb = new StringBuilder(512);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"");
+        sb.Append(" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\">");
+        sb.Append($"<Application>{XmlEscape(application)}</Application>");
+        sb.Append("<DocSecurity>0</DocSecurity>");
+        sb.Append("<ScaleCrop>false</ScaleCrop>");
+        sb.Append($"<HeadingPairs><vt:vector size=\"2\" baseType=\"variant\"><vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant><vt:variant><vt:i4>{sheets.Count}</vt:i4></vt:variant></vt:vector></HeadingPairs>");
+        sb.Append($"<TitlesOfParts><vt:vector size=\"{sheets.Count}\" baseType=\"lpstr\">");
+        foreach (var sheet in sheets)
+            sb.Append($"<vt:lpstr>{XmlEscape(sheet.SheetName)}</vt:lpstr>");
+        sb.Append("</vt:vector></TitlesOfParts>");
+        sb.Append("<Company></Company>");
+        sb.Append("<LinksUpToDate>false</LinksUpToDate>");
+        sb.Append("<SharedDoc>false</SharedDoc>");
+        sb.Append("<HyperlinksChanged>false</HyperlinksChanged>");
+        sb.Append("<AppVersion>16.0300</AppVersion>");
+        sb.Append("</Properties>");
+        return sb.ToString();
+    }
+
+    private static string WorkbookXml(IReadOnlyList<SheetData> sheets)
+    {
+        var sb = new StringBuilder(256);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<workbook xmlns=\"{MainNs}\" xmlns:r=\"{OfficeRelNs}\">");
+        sb.Append("<sheets>");
+        for (int i = 0; i < sheets.Count; i++)
+        {
+            var name = XmlEscape(sheets[i].SheetName);
+            if (string.IsNullOrEmpty(name)) name = $"Sheet{i + 1}";
+            sb.Append($"<sheet name=\"{name}\" sheetId=\"{i + 1}\" r:id=\"rId{i + 1}\"/>");
+        }
+        sb.Append("</sheets>");
+        sb.Append("</workbook>");
+        return sb.ToString();
+    }
+
+    private static string WorkbookRelsXml(int sheetCount)
+    {
+        var sb = new StringBuilder(256);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<Relationships xmlns=\"{RelNs}\">");
+        for (int i = 1; i <= sheetCount; i++)
+        {
+            sb.Append($"<Relationship Id=\"rId{i}\" Type=\"{OfficeRelNs}/worksheet\" Target=\"worksheets/sheet{i}.xml\"/>");
+        }
+        sb.Append($"<Relationship Id=\"rId{sheetCount + 1}\" Type=\"{OfficeRelNs}/sharedStrings\" Target=\"sharedStrings.xml\"/>");
+        sb.Append($"<Relationship Id=\"rId{sheetCount + 2}\" Type=\"{OfficeRelNs}/styles\" Target=\"styles.xml\"/>");
+        sb.Append("</Relationships>");
+        return sb.ToString();
+    }
+
+    private static string SharedStringsXml(List<string> shared)
+    {
+        var sb = new StringBuilder(shared.Count * 32 + 128);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<sst xmlns=\"{MainNs}\" count=\"{shared.Count}\" uniqueCount=\"{shared.Count}\">");
+        foreach (var s in shared)
+        {
+            sb.Append("<si><t");
+            if (s.Length > 0 && (char.IsWhiteSpace(s[0]) || char.IsWhiteSpace(s[s.Length - 1])))
+            {
+                sb.Append(" xml:space=\"preserve\"");
+            }
+            sb.Append(">").Append(XmlEscape(s)).Append("</t></si>");
+        }
+        sb.Append("</sst>");
+        return sb.ToString();
+    }
+
+    // ── 工具方法 ──
+
+    private static void WriteXmlEntry(ZipArchive zip, string entryName, string xml)
+    {
+        var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
+        using var stream = entry.Open();
+        var bytes = new UTF8Encoding(false).GetBytes(xml);
+        stream.Write(bytes, 0, bytes.Length);
+    }
+
+    internal static string FormatDouble(double d)
+    {
+        if (double.IsNaN(d) || double.IsInfinity(d)) return "0";
+        if (d == Math.Floor(d) && Math.Abs(d) < 1e15)
+        {
+            return ((long)d).ToString(CultureInfo.InvariantCulture);
+        }
+        return d.ToString("R", CultureInfo.InvariantCulture);
+    }
+
+    internal static string XmlEscape(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        var sb = new StringBuilder(s.Length + 16);
+        foreach (var ch in s)
+        {
+            switch (ch)
+            {
+                case '&': sb.Append("&amp;"); break;
+                case '<': sb.Append("&lt;"); break;
+                case '>': sb.Append("&gt;"); break;
+                case '"': sb.Append("&quot;"); break;
+                case '\'': sb.Append("&apos;"); break;
+                default: sb.Append(ch); break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    // ── 列宽自适应 ──
+
+    /// <summary>
+    /// 估算并设置每列的宽度（中文字符算 2，英文/数字算 1），范围 [8, 50] 
+    /// 调用此方法后再调用 <see cref="Write(string, SheetData)"/> 
+    /// </summary>
+    public static void AutoColumnWidths(SheetData sheet)
+    {
+        if (sheet is null) throw new ArgumentNullException(nameof(sheet));
+
+        int colCount = 0;
+        if (sheet.Headers is { Count: > 0 }) colCount = sheet.Headers.Count;
+        foreach (var row in sheet.Rows)
+        {
+            if (row.Count > colCount) colCount = row.Count;
+        }
+        if (colCount == 0) return;
+
+        var widths = new double[colCount];
+
+        // 表头
+        if (sheet.Headers is not null)
+        {
+            for (int c = 0; c < sheet.Headers.Count; c++)
+            {
+                double w = EstimateTextWidth(sheet.Headers[c] ?? "");
+                if (w > widths[c]) widths[c] = w;
+            }
+        }
+
+        // 数据行
+        foreach (var row in sheet.Rows)
+        {
+            for (int c = 0; c < row.Count; c++)
+            {
+                double w = EstimateCellWidth(row[c]);
+                if (w > widths[c]) widths[c] = w;
+            }
+        }
+
+        // 应用最小/最大限制
+        var result = new List<double>(colCount);
+        for (int i = 0; i < colCount; i++)
+        {
+            double w = widths[i];
+            if (w < 8) w = 8;
+            if (w > 50) w = 50;
+            result.Add(w);
+        }
+        sheet.ColumnWidths = result;
+    }
+
+    private static double EstimateTextWidth(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0;
+        double w = 0;
+        foreach (var ch in s)
+        {
+            w += IsWideChar(ch) ? 2 : 1;
+        }
+        return w;
+    }
+
+    private static double EstimateCellWidth(Cell cell)
+    {
+        switch (cell.Type)
+        {
+            case CellType.Text:
+                return EstimateTextWidth(cell.Text ?? "");
+            case CellType.Number:
+                return EstimateTextWidth(FormatDouble(cell.Number));
+            case CellType.Date:
+                return EstimateTextWidth(cell.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            case CellType.Boolean:
+                return cell.Boolean ? 4 : 5; // TRUE / FALSE
+            case CellType.Empty:
+            default:
+                return 0;
+        }
+    }
+
+    private static bool IsWideChar(char ch)
+    {
+        // CJK 及全角字符算宽字符
+        if (ch >= 0x1100 && ch <= 0x115F) return true;   // Hangul Jamo
+        if (ch >= 0x2E80 && ch <= 0x303E) return true;   // CJK Radicals / Kangxi
+        if (ch >= 0x3040 && ch <= 0x33BF) return true;   // Hiragana / Katakana / CJK symbols
+        if (ch >= 0x3400 && ch <= 0x4DBF) return true;   // CJK Unified Extension A
+        if (ch >= 0x4E00 && ch <= 0x9FFF) return true;   // CJK Unified Ideographs
+        if (ch >= 0xA000 && ch <= 0xA4CF) return true;   // Yi
+        if (ch >= 0xAC00 && ch <= 0xD7A3) return true;   // Hangul Syllables
+        if (ch >= 0xF900 && ch <= 0xFAFF) return true;   // CJK Compatibility Ideographs
+        if (ch >= 0xFE30 && ch <= 0xFE4F) return true;   // CJK Compatibility Forms
+        if (ch >= 0xFF00 && ch <= 0xFF60) return true;   // Fullwidth Forms
+        if (ch >= 0xFFE0 && ch <= 0xFFE6) return true;   // Fullwidth Signs
+        if (ch >= 0x20000 && ch <= 0x2FFFD) return true; // CJK Extension B-F
+        if (ch >= 0x30000 && ch <= 0x3FFFD) return true; // CJK Extension G+
+        return false;
+    }
+}
+
