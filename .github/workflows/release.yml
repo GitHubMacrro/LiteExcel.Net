@@ -39,7 +39,4 @@ jobs:
         shell: pwsh
         run: |
           $pkg = Get-ChildItem nupkg/*.nupkg | Select-Object -First 1
-          dotnet nuget push $pkg.FullName
-                 --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
-                 --source https://www.nuget.org/api/v2/package
-                 --skip-duplicate
+          dotnet nuget push $pkg.FullName --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://www.nuget.org/api/v2/package --skip-duplicate
