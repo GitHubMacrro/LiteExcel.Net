@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.2.2] - 2026-08-15
+
+### Added
+- **`xls` 读取后端**：`Excel.Open("file.xls")` 现可读取传统 `.xls` 文件（OLE2/CFB 复合文档 + BIFF8，Excel 97+）。
+  - 数据单元格：文本 / 数字 / 日期（1900/1904 系统、内置与自定义格式识别）/ 布尔 / 错误。
+  - 共享字符串表（SST）：支持压缩与 UTF-16 字符串，以及跨 `CONTINUE` 记录续接（含续接段重新声明编码）。
+  - 合并单元格、列宽（COLINFO）、行高（ROW）、冻结表头（Pane）。
+  - 公式单元格返回缓存结果值；公式文本暂不解析（已知限制）。
+  - `xls` 写入暂不支持，`SaveAs` 到 `.xls` 抛 `NotSupportedException`。
+
+### Added（内部实现）
+- 新增 OLE2/CFB 容器解析器 `Internal/Cfb/CfbFile.cs`（FAT / DIFAT / 目录 / mini stream）。
+- 新增 BIFF8 记录读取器 `Internal/Biff/BiffRecords.cs`、Unicode 字符串续接读取器 `Internal/Biff/BiffStringReader.cs`、读取后端 `Internal/Biff/XlsBackend.cs`。
+
+### Notes / 兼容性
+- 既有 API 无任何破坏性变更；`xlsb` 仍未实现，图片、图表、透视表等高级能力不在本版本范围。
+- `xls` 读取保持 AOT 友好（无反射）与 net48 兼容。
+- **真实文件验证**：新增由 Microsoft Excel 生成的 fixture `excel-authored.xls`（中文表名、合并、冻结、列宽、公式、3000 行唯一字符串强制 SST 跨 CONTINUE），读取结果与期望值逐单元格一致（9011 行全匹配）。
+
 ## [2.2.1] - 2026-08-15
 
 ### Added

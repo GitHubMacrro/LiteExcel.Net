@@ -1,6 +1,6 @@
 # LiteExcel
 
-轻量级 xlsx/xlsm/csv 读写库，零第三方依赖，AOT 友好。**版本 2.2.1**
+轻量级 xlsx/xlsm/csv 读写库，零第三方依赖，AOT 友好。**版本 2.2.2**
 
 > [English README](README.en.md)
 
@@ -23,7 +23,7 @@ dotnet add package LiteExcel
 或本地 .nupkg 引用：
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.2.1" />
+<PackageReference Include="LiteExcel" Version="2.2.2" />
 ```
 
 ## 快速上手（推荐：对象模型 API）

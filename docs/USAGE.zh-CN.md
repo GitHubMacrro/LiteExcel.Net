@@ -1,6 +1,6 @@
 # LiteExcel 使用手册
 
-**版本**：2.2.1  
+**版本**：2.2.2  
 **目标框架**：net48 + net8.0  
 **依赖**：零第三方依赖，仅用 .NET BCL
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.1" />
+  <PackageReference Include="LiteExcel" Version="2.2.2" />
 </ItemGroup>
 ```
 
@@ -266,8 +266,10 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 | `xlsx` | ✅ | ✅ | 完整读写 |
 | `xlsm` | ✅ | ✅ | 读写保存；宏部件 `vbaProject.bin` 保存时保留 |
 | `csv` | ✅ | ✅ | 仅表格数据，无样式/合并等 |
+| `xls` | ✅ | ❌ | 读取（BIFF8，Excel 97+）；写入暂不支持 |
 | `xlsb` | ⚠️ 占位 | ❌ | 枚举已定义，未实现 |
-| `xls` | ⚠️ 占位 | ❌ | 枚举已定义，未实现 |
+
+> **xls 读取范围**：`Excel.Open("file.xls")` 可读取 BIFF8 工作簿的数据单元格（文本/数字/日期/布尔）、共享字符串（含跨 CONTINUE 续接）、合并单元格、列宽、行高、冻结表头。公式单元格返回缓存结果值，公式文本暂不解析；写入 `xls` 会抛 `NotSupportedException`。
 
 > **保存保真**：通过 `Excel.Open` 打开后修改再保存时，LiteExcel 会重建已映射的部件（工作表数据、样式、合并、批注、验证、筛选、公式等），并将**未映射的 OOXML 部件按原始字节保留**（如宏 `vbaProject.bin`、主题、绘图、图表、表格、外部链接等）。因此 `xlsm` 打开→修改→保存后宏不会丢失。
 >

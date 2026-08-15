@@ -1,6 +1,6 @@
 # LiteExcel Usage Guide
 
-**Version**: 2.2.1  
+**Version**: 2.2.2  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.1" />
+  <PackageReference Include="LiteExcel" Version="2.2.2" />
 </ItemGroup>
 ```
 
@@ -266,8 +266,10 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 | `xlsx` | ✅ | ✅ | full read/write |
 | `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part preserved on save |
 | `csv` | ✅ | ✅ | tabular data only, no styles/merge |
+| `xls` | ✅ | ❌ | read only (BIFF8, Excel 97+); write not supported yet |
 | `xlsb` | ⚠️ placeholder | ❌ | enum defined, not implemented |
-| `xls` | ⚠️ placeholder | ❌ | enum defined, not implemented |
+
+> **xls read scope**: `Excel.Open("file.xls")` reads BIFF8 workbooks: data cells (text/number/date/boolean), shared strings (including cross-CONTINUE continuation), merged cells, column widths, row heights, frozen header. Formula cells return the cached result value; formula text is not parsed yet. Writing `xls` throws `NotSupportedException`.
 
 > **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros.
 >
