@@ -14,7 +14,7 @@ public static class Excel
 {
     // ── 打开 / 新建 ──
 
-    /// <summary>打开工作簿，按扩展名自动识别格式。已支持 xlsx/xlsm/xls/csv；xlsb 暂抛 <see cref="NotSupportedException"/> </summary>
+    /// <summary>打开工作簿，按扩展名自动识别格式。已支持 xlsx/xlsm/xls/xlsb/csv </summary>
     public static Workbook Open(string path, ExcelReadOptions? options = null)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -55,8 +55,13 @@ public static class Excel
                 var sheets = XlsBackend.ReadAll(path);
                 return Workbook.FromSheetData(sheets, null, ExcelFormat.Xls, path);
             }
+            case ExcelFormat.Xlsb:
+            {
+                var sheets = XlsbBackend.ReadAll(path);
+                return Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
+            }
             default:
-                throw new NotSupportedException($"{format} 读取后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls");
+                throw new NotSupportedException($"{format} 读取后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls/xlsb");
         }
 
         // 单次解压内完成读表/读属性/捕获保留部件，保证三者来自同一文件快照

@@ -1,6 +1,6 @@
 # LiteExcel
 
-A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files. AOT-friendly. **Version 2.2.2**
+A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus reading legacy xls/xlsb files. AOT-friendly. **Version 2.2.3**
 
 > [中文 README](README.zh-CN.md)
 
@@ -10,7 +10,7 @@ A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/cs
 - **AOT friendly**: object-model and DataTable APIs use no reflection; List\<T\> mapping APIs are marked `[RequiresUnreferencedCode]`
 - **Dual target**: net48 + net8.0 (works with legacy WinForms projects and new projects)
 - **Intuitive object-model API**: natural hierarchy `Excel -> Workbook -> Worksheet -> Cell/Range/Cells`, one-liner read/write
-- **Extensible formats**: xlsx/xlsm/csv supported; xlsb/xls backends reserved
+- **Extensible formats**: xlsx/xlsm/csv read+write; xls/xlsb read only
 - **Full featured**: read/write, styles, merged cells, auto filter, row height/column width, comments, data validation, append, Stream, List\<T\>/DataTable convenience APIs, streaming read/write for large files
 - **Real file compatibility**: correctly reads xlsx created by Excel/WPS (including Table/theme extension parts)
 
@@ -23,7 +23,7 @@ dotnet add package LiteExcel
 Or reference a local .nupkg:
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.2.2" />
+<PackageReference Include="LiteExcel" Version="2.2.3" />
 ```
 
 ## Quick Start (recommended: object-model API)

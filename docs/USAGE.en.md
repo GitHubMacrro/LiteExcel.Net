@@ -1,6 +1,6 @@
 # LiteExcel Usage Guide
 
-**Version**: 2.2.2  
+**Version**: 2.2.3  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.2" />
+  <PackageReference Include="LiteExcel" Version="2.2.3" />
 </ItemGroup>
 ```
 
@@ -267,9 +267,11 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 | `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part preserved on save |
 | `csv` | ✅ | ✅ | tabular data only, no styles/merge |
 | `xls` | ✅ | ❌ | read only (BIFF8, Excel 97+); write not supported yet |
-| `xlsb` | ⚠️ placeholder | ❌ | enum defined, not implemented |
+| `xlsb` | ✅ | ❌ | read only (BIFF12 binary OOXML); write not supported yet |
 
 > **xls read scope**: `Excel.Open("file.xls")` reads BIFF8 workbooks: data cells (text/number/date/boolean), shared strings (including cross-CONTINUE continuation), merged cells, column widths, row heights, frozen header. Formula cells return the cached result value; formula text is not parsed yet. Writing `xls` throws `NotSupportedException`.
+
+> **xlsb read scope**: `Excel.Open("file.xlsb")` reads the binary OOXML variant: data cells (text/number/date/boolean/error), shared strings, merged cells, column widths, row heights, frozen header, 1904 date system. Formula cells return the cached result value. Writing `xlsb` throws `NotSupportedException`.
 
 > **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros.
 >

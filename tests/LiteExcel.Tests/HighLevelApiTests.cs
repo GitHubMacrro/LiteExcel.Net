@@ -100,13 +100,13 @@ public class HighLevelApiTests
     }
 
     [Fact]
-    public void Open_UnsupportedFormat_Throws()
+    public void Open_InvalidXlsb_Throws()
     {
         var file = GetTempFile(".xlsb");
         try
         {
             File.WriteAllBytes(file, new byte[] { 0xD0, 0xCF, 0x11, 0xE0 });
-            Assert.Throws<NotSupportedException>(() => Excel.Open(file));
+            Assert.ThrowsAny<Exception>(() => Excel.Open(file));
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }

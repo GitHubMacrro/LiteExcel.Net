@@ -16,14 +16,6 @@ internal static class XlsBackend
     /// <summary>net48 无 Encoding.Latin1，用 ISO-8859-1 代码页等价 </summary>
     private static readonly Encoding Latin1 = Encoding.GetEncoding(28591);
 
-    private static readonly HashSet<int> BuiltInDateFmtIds = new()
-    {
-        14, 15, 16, 17, 18, 19, 20, 21, 22,
-        27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
-        45, 46, 47,
-        50, 51, 52, 53, 54, 55, 56, 57, 58,
-    };
-
     public static List<SheetData> ReadAll(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -188,7 +180,7 @@ internal static class XlsBackend
                         CellFromNumber(BitConverter.ToDouble(d, 6), ReadU16At(d, 4), xfIfmt, formats, date1904), ref maxRow, ref maxCol);
                     break;
                 case BiffRecords.OpRk:
-                    PutCell(cells, rec.Data, 0, 2, -1, (row, col, d) => Cell.FromNumber(DecodeRk(ReadS32At(d, 4))), ref maxRow, ref maxCol);
+                    PutCell(cells, rec.Data, 0, 2, -1, (row, col, d) => Cell.FromNumber(BiffShared.DecodeRk(ReadS32At(d, 4))), ref maxRow, ref maxCol);
                     break;
                 case BiffRecords.OpMulRk:
                     ParseMulRk(cells, rec.Data, xfIfmt, formats, date1904, ref maxRow, ref maxCol);
@@ -207,7 +199,7 @@ internal static class XlsBackend
                     PutCell(cells, rec.Data, 0, 2, 4, (row, col, d) =>
                     {
                         bool isError = d.Length > 7 && d[7] != 0;
-                        if (isError) return Cell.FromText(ErrorCode(d.Length > 6 ? d[6] : (byte)0));
+                        if (isError) return Cell.FromText(BiffShared.ErrorCode(d.Length > 6 ? d[6] : (byte)0));
                         bool v = d.Length > 6 && d[6] != 0;
                         return Cell.FromBoolean(v);
                     }, ref maxRow, ref maxCol);
@@ -292,7 +284,7 @@ internal static class XlsBackend
             int ixfe = BiffRecords.ReadU16(d, 4 + k * 6);
             int rk = ReadS32At(d, 6 + k * 6);
             int col = colFirst + k;
-            double val = DecodeRk(rk);
+            double val = BiffShared.DecodeRk(rk);
             var cell = CellFromNumber(val, ixfe, xfIfmt, formats, date1904);
             if (!cells.TryGetValue(row, out var rowCells))
             {
@@ -328,7 +320,7 @@ internal static class XlsBackend
                     cell = Cell.FromBoolean(d[9] != 0);
                     break;
                 case 0x02: // 错误
-                    cell = Cell.FromText(ErrorCode(d[9]));
+                    cell = Cell.FromText(BiffShared.ErrorCode(d[9]));
                     break;
                 default: // 0x03 空
                     cell = Cell.Empty;
@@ -349,95 +341,7 @@ internal static class XlsBackend
 
     private static Cell CellFromNumber(double val, int ixfe, List<int> xfIfmt,
         Dictionary<int, string> formats, bool date1904)
-    {
-        int ifmt = ixfe >= 0 && ixfe < xfIfmt.Count ? xfIfmt[ixfe] : 0;
-        string? fmtCode = GetFormatCode(ifmt, formats);
-        if (IsDateFormat(ifmt, fmtCode))
-        {
-            var date = date1904 ? new DateTime(1904, 1, 1).AddDays(val) : DateTime.FromOADate(val);
-            return Cell.FromDate(date, fmtCode);
-        }
-        return Cell.FromNumber(val, fmtCode);
-    }
-
-    private static string? GetFormatCode(int ifmt, Dictionary<int, string> formats)
-    {
-        if (ifmt < 164) return GetBuiltInFormatCode(ifmt);
-        return formats.TryGetValue(ifmt, out var code) ? code : null;
-    }
-
-    private static bool IsDateFormat(int ifmt, string? formatCode)
-    {
-        if (!string.IsNullOrEmpty(formatCode))
-        {
-            var lower = StripBrackets(formatCode!).ToLowerInvariant();
-            return lower.Contains('y') || lower.Contains('d') || lower.Contains('h') || lower.Contains('s');
-        }
-        return BuiltInDateFmtIds.Contains(ifmt);
-    }
-
-    private static string StripBrackets(string fmt)
-    {
-        var sb = new StringBuilder(fmt.Length);
-        bool inBracket = false;
-        foreach (var ch in fmt)
-        {
-            if (ch == '[') { inBracket = true; continue; }
-            if (ch == ']') { inBracket = false; continue; }
-            if (!inBracket) sb.Append(ch);
-        }
-        return sb.ToString();
-    }
-
-    private static string? GetBuiltInFormatCode(int ifmt) => ifmt switch
-    {
-        1 => "0",
-        2 => "0.00",
-        3 => "#,##0",
-        4 => "#,##0.00",
-        9 => "0%",
-        10 => "0.00%",
-        11 => "0.00E+00",
-        12 => "# ?/?",
-        13 => "# ??/??",
-        14 => "yyyy-MM-dd",
-        15 => "dd-mmm-yy",
-        16 => "d-mmm",
-        17 => "mmm-yy",
-        18 => "h:mm AM/PM",
-        19 => "h:mm:ss AM/PM",
-        20 => "h:mm",
-        21 => "h:mm:ss",
-        22 => "yyyy-MM-dd h:mm",
-        37 => "#,##0 ;(#,##0)",
-        38 => "#,##0 ;[Red](#,##0)",
-        39 => "#,##0.00;(#,##0.00)",
-        40 => "#,##0.00;[Red](#,##0.00)",
-        45 => "mm:ss",
-        46 => "[h]:mm:ss",
-        47 => "mmss.0",
-        48 => "##0.0E+0",
-        49 => "@",
-        _ => null,
-    };
-
-    private static double DecodeRk(int rk)
-    {
-        bool fInt = (rk & 0x02) != 0;
-        bool fX100 = (rk & 0x01) != 0;
-        double val;
-        if (fInt)
-        {
-            val = rk >> 2;
-        }
-        else
-        {
-            long bits = ((long)(rk & 0xFFFFFFFC)) << 32;
-            val = BitConverter.Int64BitsToDouble(bits);
-        }
-        if (fX100) val /= 100.0;
-        return val;
-    }
+        => FormatDetector.CellFromNumber(val, ixfe, xfIfmt, formats, date1904);
 
     private static string ParseLabelString(byte[] d)
     {
@@ -453,19 +357,6 @@ internal static class XlsBackend
         int latinBytes = Math.Min(cch, d.Length - 9);
         return Latin1.GetString(d, 9, latinBytes);
     }
-
-    private static string ErrorCode(byte code) => code switch
-    {
-        0x00 => "#NULL!",
-        0x07 => "#DIV/0!",
-        0x0F => "#VALUE!",
-        0x17 => "#REF!",
-        0x1D => "#NAME?",
-        0x24 => "#NUM!",
-        0x2A => "#N/A",
-        0x2B => "#GETTING_DATA",
-        _ => "#ERR",
-    };
 
     private static void ParseMergedCells(SheetData sheet, byte[] d)
     {

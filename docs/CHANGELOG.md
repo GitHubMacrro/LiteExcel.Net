@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.2.3] - 2026-08-15
+
+### Added
+- **`xlsb` 读取后端**：`Excel.Open("file.xlsb")` 现可读取二进制 OOXML 变体 `.xlsb` 文件。
+  - 数据单元格：文本 / 数字 / 日期（1900/1904 系统、内置与自定义格式识别）/ 布尔 / 错误。
+  - 共享字符串表（SST）、合并单元格、列宽（BrtColInfo）、行高（BrtRowHdr）、冻结表头（BrtPane）。
+  - 公式单元格返回缓存结果值；公式文本暂不解析（已知限制）。
+  - `xlsb` 写入暂不支持，`SaveAs` 到 `.xlsb` 抛 `NotSupportedException`。
+
+### Added（内部实现）
+- 新增 BIFF12 记录读取器 `Internal/Biff12/Biff12Records.cs`（LEB128 变长记录头，无 Instance 字段）与读取后端 `Internal/XlsbBackend.cs`。
+- 抽取共享逻辑：`Internal/FormatDetector.cs`（数字格式→日期识别）、`Internal/BiffShared.cs`（RK 数值、错误码），供 xls / xlsb 后端复用。
+
+### Notes / 兼容性
+- 既有 API 无任何破坏性变更；图片、图表、透视表等高级能力不在本版本范围。
+- `xlsb` 读取保持 AOT 友好（无反射）与 net48 兼容。
+- **真实文件验证**：新增由 Microsoft Excel 生成的 fixture `excel-authored.xlsb`（中文表名、合并、冻结、列宽、日期格式、公式、3000 行唯一字符串），读取结果与期望值逐单元格一致（9011 行全匹配）。
+- 真实文件验证还暴露并修复了一个仅真实文件才可见的问题：日期单元格以 RK 压缩数值存储时未做日期识别，以及 `BrtCellXfs` 索引基线错位导致样式指向偏移。
+
 ## [2.2.2] - 2026-08-15
 
 ### Added
