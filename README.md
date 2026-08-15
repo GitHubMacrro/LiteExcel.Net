@@ -21,7 +21,7 @@ dotnet add package LiteExcel
 ```csharp
 using LiteExcel;
 
-// High-level API / 高层 API
+// Public API / 公开 API
 var wb = Excel.Create();
 wb.Worksheets["Sheet1"].SetValue("A1", "Name");
 wb.Worksheets["Sheet1"].SetValue("A2", "Zhang San");
@@ -30,7 +30,7 @@ wb.SaveAs("output.xlsx");
 var opened = Excel.Open("output.xlsx");
 var name = opened.Worksheets[0].Cell("A2").GetString();
 
-// Low-level API / 低层 API（兼容保留）
+// Classic API / 经典 API（XlsxWriter / XlsxReader）
 var sheet = new SheetData
 {
     SheetName = "Sheet1",
@@ -49,7 +49,7 @@ var read = XlsxReader.Read("output2.xlsx", 0);
 - Zero dependencies / 零依赖
 - AOT friendly / AOT 友好
 - net48 + net8.0
-- High-level API `Excel -> Workbook -> Worksheet -> Cell/Range/Cells` / 直觉化高层 API
+- Public API `Excel -> Workbook -> Worksheet -> Cell/Range/Cells` / 直觉化公开 API
 - xlsx / xlsm / csv formats / 多格式支持
 - Streaming read/write for large files / 大文件流式读写
 - Read/Write, styles, merged cells, auto filter, row height, comments, data validation, append, Stream, List\<T\>/DataTable

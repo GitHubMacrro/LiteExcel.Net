@@ -27,7 +27,7 @@ public static class Program
         Demo14_AppendData(outDir);
         Demo15_DataValidation(outDir);
         Demo16_ProgressCallback(outDir);
-        Demo17_HighLevelApi(outDir);
+        Demo17_PublicApi(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -658,16 +658,16 @@ public static class Program
         Console.WriteLine();
     }
 
-    // 17. 高层 API（Excel 门面 + Workbook/Worksheet/Cell/Range/Cells）
-    private static void Demo17_HighLevelApi(string dir)
+    // 17. 公开 API（Excel 门面 + Workbook/Worksheet/Cell/Range/Cells）
+    private static void Demo17_PublicApi(string dir)
     {
-        Console.WriteLine("[17] High-Level API (Excel facade)");
+        Console.WriteLine("[17] Public API (Excel facade)");
 
         // 新建工作簿，用自然层级写数据
         var wb = Excel.Create();
         var ws = wb.Worksheets["Sheet1"];
         wb.Properties.Created = DateTime.Now;
-        wb.Properties.Title = nameof(Demo17_HighLevelApi);
+        wb.Properties.Title = nameof(Demo17_PublicApi);
         wb.Properties.Application = "自定义";
         wb.Properties.LastModifiedBy = "DemoAdmin";
         wb.Properties.Creator = "JackZ";

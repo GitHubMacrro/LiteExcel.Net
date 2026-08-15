@@ -7,9 +7,9 @@ A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/cs
 ## Features
 
 - **Zero dependencies**: .NET BCL only (ZipArchive + XmlReader/XDocument), no third-party packages
-- **AOT friendly**: low-level APIs have no reflection; high-level reflection APIs are marked `[RequiresUnreferencedCode]`
+- **AOT friendly**: object-model and DataTable APIs use no reflection; List\<T\> mapping APIs are marked `[RequiresUnreferencedCode]`
 - **Dual target**: net48 + net8.0 (works with legacy WinForms projects and new projects)
-- **Intuitive high-level API**: natural hierarchy `Excel -> Workbook -> Worksheet -> Cell/Range/Cells`, one-liner read/write
+- **Intuitive public API**: natural hierarchy `Excel -> Workbook -> Worksheet -> Cell/Range/Cells`, one-liner read/write
 - **Extensible formats**: xlsx/xlsm/csv supported; xlsb/xls backends reserved
 - **Full featured**: read/write, styles, merged cells, auto filter, row height/column width, comments, data validation, append, Stream, List\<T\>/DataTable convenience APIs, streaming read/write for large files
 - **Real file compatibility**: correctly reads xlsx created by Excel/WPS (including Table/theme extension parts)
@@ -26,7 +26,7 @@ Or reference a local .nupkg:
 <PackageReference Include="LiteExcel" Version="2.2.0" />
 ```
 
-## Quick Start (recommended: high-level API)
+## Quick Start (recommended: public API)
 
 ```csharp
 using LiteExcel;
@@ -51,7 +51,7 @@ opened.Worksheets[0].SetValue("B2", 26);
 opened.Save();
 ```
 
-## Low-Level API (kept for compatibility)
+## XlsxWriter / XlsxReader (classic API)
 
 ```csharp
 // Write
@@ -90,7 +90,7 @@ foreach (var row in read.Rows)
 
 ## API Reference
 
-### High-Level API (recommended)
+### Public API (recommended)
 
 | Type / Method | Description |
 |---|---|
@@ -112,7 +112,7 @@ foreach (var row in read.Rows)
 | `Cells[row, col] / Cells["A1"] / Cells.Range(...)` | collection access |
 | `ExcelRange.Fill / Clear / Style / Merge / ToValues` | range operations |
 
-### XlsxWriter (low-level, kept for compatibility)
+### XlsxWriter
 
 | Method | Description |
 |---|---|
@@ -124,7 +124,7 @@ foreach (var row in read.Rows)
 | `Append(path, SheetData, WorkbookProperties?)` | append data and optionally update document properties |
 | `AutoColumnWidths(sheet)` | auto estimate column widths |
 
-### XlsxReader (low-level, kept for compatibility)
+### XlsxReader
 
 | Method | Description |
 |---|---|
@@ -142,9 +142,9 @@ foreach (var row in read.Rows)
 
 | Class | Description |
 |---|---|
-| `Workbook` / `Worksheet` / `Cells` / `ExcelRange` | high-level models |
+| `Workbook` / `Worksheet` / `Cells` / `ExcelRange` | object models |
 | `ExcelFormat` / `ExcelReadOptions` / `ExcelWriteOptions` | formats and options |
-| `SheetData` | low-level worksheet data (headers/rows/styles/merge/filter/height/comments/validation) |
+| `SheetData` | worksheet data (headers/rows/styles/merge/filter/height/comments/validation) |
 | `Cell` | cell |
 | `CellStyle` / `BorderStyle` / `BorderEdge` | styles |
 | `CellRange` | range (merged cells) |
@@ -166,11 +166,11 @@ foreach (var row in read.Rows)
 |---|---|
 | `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | ✅ Safe (no reflection) |
 | `Excel.ReadAsDataTable` / `DataTable` read/write | ✅ Safe (no reflection) |
-| `SheetData` / low-level read/write | ✅ Safe (no reflection) |
+| `SheetData` / `XlsxWriter` / `XlsxReader` read/write | ✅ Safe (no reflection) |
 | `Excel.Read<T>` / `Excel.Write<T>` / `List<T>` read/write | ⚠️ Marked `[RequiresUnreferencedCode]`, warns on AOT compile |
 
 ## Detailed Docs
 
-- 📖 [Usage Guide](docs/USAGE.en.md) — full API reference and feature examples (high-level API/styles/merge/filter/comments/data validation/Stream, etc.)
+- 📖 [Usage Guide](docs/USAGE.en.md) — full API reference and feature examples (public API/styles/merge/filter/comments/data validation/Stream, etc.)
 - 📝 [Changelog](docs/CHANGELOG.md) — version history
 - 🌐 [中文 README](README.zh-CN.md)

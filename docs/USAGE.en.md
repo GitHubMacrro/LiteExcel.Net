@@ -9,7 +9,7 @@
 ## Table of Contents
 
 1. [Installation & Reference](#1-installation--reference)
-2. [High-Level API (Recommended)](#2-high-level-api-recommended)
+2. [Public API (Recommended)](#2-public-api-recommended)
 3. [Quick Start](#3-quick-start)
 4. [Cells & Data Types](#4-cells--data-types)
 5. [Reading](#5-reading)
@@ -64,7 +64,7 @@ using LiteExcel;
 
 ---
 
-## 2. High-Level API (Recommended)
+## 2. Public API (Recommended)
 
 Since `2.2.0`, an intuitive object-model API is provided with a natural hierarchy:
 
@@ -75,7 +75,7 @@ Excel             unified facade (open / create / convenience IO / streaming)
           -> Cells / Cell / ExcelRange
 ```
 
-The high-level API is built on the same underlying read/write engine but wraps coordinates, typed access, and save semantics into familiar Excel-style usage. The low-level `XlsxReader / XlsxWriter / SheetData / Cell` remain fully supported; old and new APIs can be mixed, and files written by either are readable by the other.
+The public API is built on the same read/write engine but wraps coordinates, typed access, and save semantics into familiar Excel-style usage. `XlsxReader / XlsxWriter / SheetData / Cell` remain fully supported; old and new APIs can be mixed, and files written by either are readable by the other.
 
 ### 2.1 Create a Workbook
 
@@ -257,7 +257,7 @@ ws.FreezeHeader = true;               // freeze header
 ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 ```
 
-Styles, merge, comments, data validation, auto filter, row height and column width are all available at the `Worksheet` level, mirroring the low-level `SheetData` capabilities.
+Styles, merge, comments, data validation, auto filter, row height and column width are all available at the `Worksheet` level, mirroring the `SheetData` capabilities.
 
 ### 2.12 Format Support Matrix
 
@@ -271,7 +271,7 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 
 ### 2.13 Old vs New API
 
-| Scenario | High-Level API | Low-Level Compat API |
+| Scenario | Public API | XlsxWriter / XlsxReader |
 |---|---|---|
 | Open a file | `Excel.Open(path)` | `XlsxReader.Read(path, 0)` |
 | Create / write | `Excel.Create()` + `SaveAs` | `XlsxWriter.Write(path, sheet)` |
@@ -1038,7 +1038,7 @@ catch (InvalidSheetNameException ex)
 
 | API | Description |
 |---|---|
-| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | high-level object model |
+| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | object model |
 | `Excel.CreateWriter` / `Excel.StreamRows` | streaming read/write |
 | `Read(path/stream, ...)` | returns `SheetData` |
 | `Write(path/stream, SheetData)` | accepts `SheetData` |

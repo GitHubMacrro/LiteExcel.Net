@@ -9,7 +9,7 @@
 ## 目录
 
 1. [安装与引用](#1-安装与引用)
-2. [高层 API（推荐）](#2-高层-api推荐)
+2. [公开 API（推荐）](#2-公开-api推荐)
 3. [快速上手](#3-快速上手)
 4. [单元格与数据类型](#4-单元格与数据类型)
 5. [读取](#5-读取)
@@ -64,7 +64,7 @@ using LiteExcel;
 
 ---
 
-## 2. 高层 API（推荐）
+## 2. 公开 API（推荐）
 
 从 `2.2.0` 起提供直觉化的对象模型 API，自然层级：
 
@@ -75,7 +75,7 @@ Excel             统一门面（打开 / 新建 / 便利读写 / 流式）
           -> Cells / Cell / ExcelRange
 ```
 
-高层 API 基于同一套底层读写引擎，但把坐标、取值、保存等细节封装成更接近 Excel 的习惯用法。底层 `XlsxReader / XlsxWriter / SheetData / Cell` 继续保留，新旧 API 可以混用，写出的文件互相兼容。
+公开 API 基于同一套读写引擎，但把坐标、取值、保存等细节封装成更接近 Excel 的习惯用法。`XlsxReader / XlsxWriter / SheetData / Cell` 继续保留，新旧 API 可以混用，写出的文件互相兼容。
 
 ### 2.1 新建工作簿
 
@@ -257,7 +257,7 @@ ws.FreezeHeader = true;               // 冻结表头
 ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 ```
 
-样式、合并、批注、数据验证、自动筛选、行高列宽等高级能力均可在 `Worksheet` 层直接使用，与低层 `SheetData` 能力一一对应。
+样式、合并、批注、数据验证、自动筛选、行高列宽等高级能力均可在 `Worksheet` 层直接使用，与 `SheetData` 能力一一对应。
 
 ### 2.12 格式支持矩阵
 
@@ -271,7 +271,7 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 
 ### 2.13 新旧 API 对照
 
-| 场景 | 高层 API | 低层兼容 API |
+| 场景 | 公开 API | XlsxWriter / XlsxReader |
 |---|---|---|
 | 打开文件 | `Excel.Open(path)` | `XlsxReader.Read(path, 0)` |
 | 新建/写出 | `Excel.Create()` + `SaveAs` | `XlsxWriter.Write(path, sheet)` |
@@ -1402,7 +1402,7 @@ catch (InvalidSheetNameException ex)
 
 | API | 说明 |
 |---|---|
-| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | 高层对象模型 |
+| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | 对象模型 |
 | `Excel.CreateWriter` / `Excel.StreamRows` | 流式读写 |
 | `Read(path/stream, ...)` | 返回 `SheetData` |
 | `Write(path/stream, SheetData)` | 接收 `SheetData` |

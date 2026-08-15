@@ -7,9 +7,9 @@
 ## 特性
 
 - **零依赖**：仅用 .NET BCL（ZipArchive + XmlReader/XDocument），无任何第三方包
-- **AOT 友好**：低层 API 无反射；高层反射 API 标注 `[RequiresUnreferencedCode]`
+- **AOT 友好**：对象模型与 DataTable 等 API 无反射；List\<T\> 反射映射 API 标注 `[RequiresUnreferencedCode]`
 - **双目标**：net48 + net8.0（老 WinForms 项目与新项目都能用）
-- **直觉化高层 API**：`Excel -> Workbook -> Worksheet -> Cell/Range/Cells` 自然层级，一行式读写
+- **直觉化公开 API**：`Excel -> Workbook -> Worksheet -> Cell/Range/Cells` 自然层级，一行式读写
 - **格式可扩展**：xlsx/xlsm/csv 已支持；xlsb/xls 预留后端
 - **全功能**：读/写、样式、合并单元格、自动筛选、行高/列宽、批注、数据验证、追加、Stream、List\<T\>/DataTable 便利 API、流式读写大文件
 - **真实文件兼容**：可正确读取 Excel/WPS 创建的 xlsx（含 Table/theme 等扩展部件）
@@ -26,7 +26,7 @@ dotnet add package LiteExcel
 <PackageReference Include="LiteExcel" Version="2.2.0" />
 ```
 
-## 快速上手（推荐：高层 API）
+## 快速上手（推荐：公开 API）
 
 ```csharp
 using LiteExcel;
@@ -51,7 +51,7 @@ opened.Worksheets[0].SetValue("B2", 26);
 opened.Save();
 ```
 
-## 低层 API（兼容保留）
+## XlsxWriter / XlsxReader（经典 API）
 
 ```csharp
 // 写出
@@ -90,7 +90,7 @@ foreach (var row in read.Rows)
 
 ## API 速查
 
-### 高层 API（推荐）
+### 公开 API（推荐）
 
 | 类型 / 方法 | 说明 |
 |---|---|
@@ -112,7 +112,7 @@ foreach (var row in read.Rows)
 | `Cells[row, col] / Cells["A1"] / Cells.Range(...)` | 集合式访问 |
 | `ExcelRange.Fill / Clear / Style / Merge / ToValues` | 区域操作 |
 
-### XlsxWriter（低层兼容）
+### XlsxWriter
 
 | 方法 | 说明 |
 |---|---|
@@ -124,7 +124,7 @@ foreach (var row in read.Rows)
 | `Append(path, SheetData, WorkbookProperties?)` | 追加数据并可更新文档属性 |
 | `AutoColumnWidths(sheet)` | 自动估算列宽 |
 
-### XlsxReader（低层兼容）
+### XlsxReader
 
 | 方法 | 说明 |
 |---|---|
@@ -142,9 +142,9 @@ foreach (var row in read.Rows)
 
 | 类 | 说明 |
 |---|---|
-| `Workbook` / `Worksheet` / `Cells` / `ExcelRange` | 高层模型 |
+| `Workbook` / `Worksheet` / `Cells` / `ExcelRange` | 对象模型 |
 | `ExcelFormat` / `ExcelReadOptions` / `ExcelWriteOptions` | 格式与选项 |
-| `SheetData` | 低层工作表数据（表头/行/样式/合并/筛选/行高/批注/验证） |
+| `SheetData` | 工作表数据（表头/行/样式/合并/筛选/行高/批注/验证） |
 | `Cell` | 单元格 |
 | `CellStyle` / `BorderStyle` / `BorderEdge` | 样式 |
 | `CellRange` | 区域（合并单元格） |
@@ -166,7 +166,7 @@ foreach (var row in read.Rows)
 |---|---|
 | `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | ✅ 安全（无反射） |
 | `Excel.ReadAsDataTable` / `DataTable` 读写 | ✅ 安全（无反射） |
-| `SheetData` / 低层读写 | ✅ 安全（无反射） |
+| `SheetData` / `XlsxWriter` / `XlsxReader` 读写 | ✅ 安全（无反射） |
 | `Excel.Read<T>` / `Excel.Write<T>` / `List<T>` 读写 | ⚠️ 标注 `[RequiresUnreferencedCode]`，AOT 编译时提示警告 |
 
 ## 详细文档
