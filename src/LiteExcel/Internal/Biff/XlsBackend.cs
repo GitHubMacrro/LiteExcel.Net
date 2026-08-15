@@ -315,7 +315,7 @@ internal static class XlsBackend
             switch (resultType)
             {
                 case 0x00: // 字符串结果
-                    cell = Cell.FromText(""); // 公式文本暂不解析（后续可扩展）
+                    cell = Cell.FromText("");
                     break;
                 case 0x01: // 布尔
                     cell = Cell.FromBoolean(d[9] != 0);
@@ -333,6 +333,23 @@ internal static class XlsBackend
             var bits = BitConverter.ToInt64(d, 6);
             double val = BitConverter.Int64BitsToDouble(bits);
             cell = CellFromNumber(val, ixfe, xfIfmt, formats, date1904);
+        }
+
+        // 公式 RPN → 文本（FORMULA = 头部 22 字节 + cce(2) + RPN）
+        if (d.Length >= 24)
+        {
+            int cce = BiffRecords.ReadU16(d, 20);
+            if (cce > 0 && 22 + cce <= d.Length)
+            {
+                var rpn = new byte[cce];
+                Array.Copy(d, 22, rpn, 0, cce);
+                var text = FormulaParser.Parse(rpn, biff12: false);
+                if (!string.IsNullOrEmpty(text))
+                {
+                    cell.IsFormula = true;
+                    cell.Text = text;
+                }
+            }
         }
 
         PutCell(cells, d, 0, 2, -1, (r, c, dd) => cell, ref maxRow, ref maxCol);

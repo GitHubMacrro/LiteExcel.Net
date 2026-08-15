@@ -313,20 +313,39 @@ internal static class XlsbBackend
                     break;
                 case BrtFmlaString:
                     PutCell(cells, d, false, ref prevCol, currentRow,
-                        (valOff) => Cell.FromText(ReadStringAt(d, valOff)), ref maxRow, ref maxCol);
+                        (valOff) =>
+                        {
+                            var cell = Cell.FromText(ReadStringAt(d, valOff));
+                            ApplyFormula(d, valOff + 4 + ReadWideLen(d, valOff), cell);
+                            return cell;
+                        }, ref maxRow, ref maxCol);
                     break;
                 case BrtFmlaNum:
                     PutCell(cells, d, false, ref prevCol, currentRow,
-                        (valOff) => FormatDetector.CellFromNumber(BitConverter.ToDouble(d, valOff), StyleRef(d, 4), cellXfs, formats, date1904),
-                        ref maxRow, ref maxCol);
+                        (valOff) =>
+                        {
+                            var cell = FormatDetector.CellFromNumber(BitConverter.ToDouble(d, valOff), StyleRef(d, 4), cellXfs, formats, date1904);
+                            ApplyFormula(d, valOff + 8, cell);
+                            return cell;
+                        }, ref maxRow, ref maxCol);
                     break;
                 case BrtFmlaBool:
                     PutCell(cells, d, false, ref prevCol, currentRow,
-                        (valOff) => Cell.FromBoolean(d[valOff] != 0), ref maxRow, ref maxCol);
+                        (valOff) =>
+                        {
+                            var cell = Cell.FromBoolean(d[valOff] != 0);
+                            ApplyFormula(d, valOff + 1, cell);
+                            return cell;
+                        }, ref maxRow, ref maxCol);
                     break;
                 case BrtFmlaError:
                     PutCell(cells, d, false, ref prevCol, currentRow,
-                        (valOff) => Cell.FromText(BiffShared.ErrorCode(d[valOff])), ref maxRow, ref maxCol);
+                        (valOff) =>
+                        {
+                            var cell = Cell.FromText(BiffShared.ErrorCode(d[valOff]));
+                            ApplyFormula(d, valOff + 1, cell);
+                            return cell;
+                        }, ref maxRow, ref maxCol);
                     break;
                 case BrtColInfo:
                     ParseColInfo(d, colWidths);
@@ -423,6 +442,31 @@ internal static class XlsbBackend
     {
         int o = off;
         return Biff12Records.ReadWideString(d, ref o);
+    }
+
+    /// <summary>XLWideString 的字节长度（cch(4) + 字符数据）</summary>
+    private static int ReadWideLen(byte[] d, int off)
+    {
+        if (off + 4 > d.Length) return 0;
+        uint cch = Biff12Records.ReadU32(d, off);
+        return 4 + (int)cch * 2;
+    }
+
+    /// <summary>xlsb 公式记录尾部解析：value 之后 2 字节跳过 + cce(4) + RPN。</summary>
+    private static void ApplyFormula(byte[] d, int valueEnd, Cell cell)
+    {
+        int fOff = valueEnd + 2;
+        if (fOff + 4 > d.Length) return;
+        int cce = ReadS32(d, fOff);
+        if (cce <= 0 || fOff + 4 + cce > d.Length) return;
+        var rpn = new byte[cce];
+        Array.Copy(d, fOff + 4, rpn, 0, cce);
+        var text = Biff.FormulaParser.Parse(rpn, biff12: true);
+        if (!string.IsNullOrEmpty(text))
+        {
+            cell.IsFormula = true;
+            cell.Text = text;
+        }
     }
 
     private static void ParseColInfo(byte[] d, Dictionary<int, double> colWidths)

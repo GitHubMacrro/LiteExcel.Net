@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.2.5] - 2026-08-15
+
+### Added
+- **公式文本解析**：`xls`（BIFF8）与 `xlsb`（BIFF12）读取时，公式单元格的 RPN 现可解析为 A1 文本。
+  - 支持单元格引用（A1/$A$1）、区域（A1:B2）、数字/字符串/布尔/错误常量、算术与比较运算符、括号、常见内置函数（`SUM`/`IF`/`ROUND`/`MAX` 等，含 `PtgAttrSum` 快捷写法）。
+  - 公式通过 `Cell.IsFormula` 与 `Cell.Text` 暴露（缓存结果值仍保留在数值字段）。
+  - 不支持的公式（数组公式、3D 引用、命名区域等）安全降级为仅缓存结果值。
+- 新增 `Internal/Biff/FormulaParser.cs`（RPN→A1 解析器）与 `Internal/Biff/FormulaFtab.cs`（BIFF8 内置函数表）。
+- 新增 `Fixtures/excel-formulas.xls`（Excel 生成，含 10 条常见公式）与 `FormulaTests`（3 个）。
+
+### Notes / 兼容性
+- 既有 API 无破坏性变更；xls 写入仍按计划将公式降级为静态缓存值。
+- 真实文件验证：Excel 生成的 10 条公式（含 `=IF(A1>5,1,0)`、`=CONCATENATE(A1,B1)` 等）全部正确解析；真实 xls/xlsb fixture 的 `=B2*2` 均正确返回。
+- 全量 230 测试通过，net48+net8.0 干净。
+
 ## [2.2.4] - 2026-08-15
 
 ### Added
