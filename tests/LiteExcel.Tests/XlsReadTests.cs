@@ -148,16 +148,31 @@ public class XlsReadTests
     }
 
     [Fact]
-    public void SaveAs_Xls_ThrowsNotSupported()
+    public void SaveAs_Xls_RoundTrips()
     {
-        // xls 写入暂不支持
-        var file = WriteTemp(XlsTestFile.Build(new XlsTestFile.SheetSpec()));
+        // 2.2.4 起 xls 写入已支持：写入后可重开并验证内容
+        var sheet = new XlsTestFile.SheetSpec { Name = "数据" };
+        sheet.Cells.Add(new XlsTestFile.CellSpec { Row = 0, Col = 0, Kind = CellType.Text, Text = "姓名" });
+        sheet.Cells.Add(new XlsTestFile.CellSpec { Row = 1, Col = 0, Kind = CellType.Text, Text = "张三" });
+        sheet.Cells.Add(new XlsTestFile.CellSpec { Row = 1, Col = 1, Kind = CellType.Number, Number = 25 });
+        sheet.Cells.Add(new XlsTestFile.CellSpec { Row = 1, Col = 2, Kind = CellType.Boolean, Bool = true });
+        var file = WriteTemp(XlsTestFile.Build(sheet));
+        var outPath = GetTempFile();
         try
         {
             var wb = Excel.Open(file);
-            Assert.Throws<NotSupportedException>(() => wb.SaveAs(GetTempFile()));
+            wb.SaveAs(outPath, ExcelFormat.Xls);
+
+            var rb = Excel.Open(outPath);
+            Assert.Equal(ExcelFormat.Xls, rb.Format);
+            var s = rb.Worksheets[0];
+            Assert.Equal("数据", s.Name);
+            Assert.Equal("姓名", s.Cell("A1").GetString());
+            Assert.Equal("张三", s.Cell("A2").GetString());
+            Assert.Equal(25.0, s.Cell("B2").GetDouble());
+            Assert.True(s.Cell("C2").GetBoolean());
         }
-        finally { File.Delete(file); }
+        finally { if (File.Exists(file)) File.Delete(file); if (File.Exists(outPath)) File.Delete(outPath); }
     }
 
     // ── 真实文件测试：由 Microsoft Excel 生成（Excel COM SaveAs xlExcel8） ──

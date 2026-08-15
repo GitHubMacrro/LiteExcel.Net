@@ -180,7 +180,8 @@ internal static class XlsBackend
                         CellFromNumber(BitConverter.ToDouble(d, 6), ReadU16At(d, 4), xfIfmt, formats, date1904), ref maxRow, ref maxCol);
                     break;
                 case BiffRecords.OpRk:
-                    PutCell(cells, rec.Data, 0, 2, -1, (row, col, d) => Cell.FromNumber(BiffShared.DecodeRk(ReadS32At(d, 4))), ref maxRow, ref maxCol);
+                    // RK = rw(2) col(2) ixfe(2) rk(4)
+                    PutCell(cells, rec.Data, 0, 2, 6, (row, col, d) => Cell.FromNumber(BiffShared.DecodeRk(ReadS32At(d, 6))), ref maxRow, ref maxCol);
                     break;
                 case BiffRecords.OpMulRk:
                     ParseMulRk(cells, rec.Data, xfIfmt, formats, date1904, ref maxRow, ref maxCol);

@@ -1,4 +1,5 @@
 using LiteExcel.Internal;
+using LiteExcel.Internal.Biff;
 using System.IO;
 using System.Linq;
 
@@ -132,9 +133,12 @@ public sealed class Workbook
                     throw new NotSupportedException("CSV 仅支持单工作表工作簿");
                 CsvBackend.Write(stream, Worksheets[0].ToSheetData());
                 break;
-            case ExcelFormat.Xlsb:
             case ExcelFormat.Xls:
-                throw new NotSupportedException($"{format} 写入后端尚未实现，当前仅支持 xlsx/xlsm/csv");
+                var xlsSheets = BuildSheetDataList();
+                XlsWriter.Write(stream, xlsSheets);
+                break;
+            case ExcelFormat.Xlsb:
+                throw new NotSupportedException($"{format} 写入后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls");
             default:
                 throw new NotSupportedException($"未知格式：{format}");
         }

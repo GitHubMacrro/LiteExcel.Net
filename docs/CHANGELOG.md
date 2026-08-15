@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.2.4] - 2026-08-15
+
+### Added
+- **`xls` 写入后端**：`wb.SaveAs("file.xls", ExcelFormat.Xls)` 现可写出 BIFF8 工作簿。
+  - 多工作表（中文名）、文本/数字/日期/布尔单元格、合并单元格、列宽、行高、冻结表头、自定义数字格式。
+  - 公式单元格按缓存结果值静态写出（公式文本不保留，已知限制）。
+  - 输出为 OLE2/CFB 容器（`Internal/Cfb/CfbWriter.cs`）+ BIFF8 记录（`Internal/Biff/XlsWriter.cs`），零依赖、net48 兼容。
+
+### Notes / 兼容性
+- 既有 API 无任何破坏性变更；`xlsb` 写入仍未实现，图片、图表、透视表等高级能力不在本版本范围。
+- **真实文件验证**：用 Excel COM 打开 LiteExcel 写出的 .xls（含 3000 行×3 列中文数据、日期、布尔、合并、冻结、列宽、公式结果），值全部正确。
+- 修复过程中以 SheetJS/真实文件为基准实证了多项 BIFF8 关键细节：BOF 最低兼容版本字段、BIFF8 DIMENSIONS 行宽为 4 字节、必须写出 FORMAT 记录与 16 个内置样式 XF、COLINFO 为 12 字节、SST 续接段不得切裂 UTF-16 字符、WINDOW2 标志等。
+
 ## [2.2.3] - 2026-08-15
 
 ### Added

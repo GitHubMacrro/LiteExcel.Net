@@ -1,6 +1,6 @@
 # LiteExcel
 
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls/xlsb 读取），零第三方依赖，AOT 友好。**版本 2.2.3**
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读取），零第三方依赖，AOT 友好。**版本 2.2.4**
 
 > [English README](README.en.md)
 
@@ -10,7 +10,7 @@
 - **AOT 友好**：对象模型与 DataTable 等 API 无反射；List\<T\> 反射映射 API 标注 `[RequiresUnreferencedCode]`
 - **双目标**：net48 + net8.0（老 WinForms 项目与新项目都能用）
 - **直觉化对象模型 API**：`Excel -> Workbook -> Worksheet -> Cell/Range/Cells` 自然层级，一行式读写
-- **格式可扩展**：xlsx/xlsm/csv 读写；xls/xlsb 读取（写入暂不支持）
+- **格式可扩展**：xlsx/xlsm/csv 读写；xls 读写（公式降级为静态值）；xlsb 读取（写入暂不支持）
 - **全功能**：读/写、样式、合并单元格、自动筛选、行高/列宽、批注、数据验证、追加、Stream、List\<T\>/DataTable 便利 API、流式读写大文件
 - **真实文件兼容**：可正确读取 Excel/WPS 创建的 xlsx（含 Table/theme 等扩展部件）
 
@@ -23,7 +23,7 @@ dotnet add package LiteExcel
 或本地 .nupkg 引用：
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.2.3" />
+<PackageReference Include="LiteExcel" Version="2.2.4" />
 ```
 
 ## 快速上手（推荐：对象模型 API）
