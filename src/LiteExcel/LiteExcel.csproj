@@ -8,13 +8,16 @@
     <AssemblyName>LiteExcel</AssemblyName>
     <RootNamespace>LiteExcel</RootNamespace>
     <PackageId>LiteExcel</PackageId>
-    <Version>2.1.3</Version>
-    <Authors>CustomWin</Authors>
+    <Version>2.1.4</Version>
+    <Authors>JackZ</Authors>	  
     <Description>轻量级 xlsx 读写库，零第三方依赖，AOT 友好，支持 net48 和 net8.0。</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>xlsx;excel;spreadsheet;aot;net48;net8</PackageTags>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+	  <RepositoryUrl>https://github.com/GitHubMacrro/LiteExcel.Net.git</RepositoryUrl>
+	  <PackageProjectUrl>https://github.com/GitHubMacrro/LiteExcel.Net</PackageProjectUrl>
+	  <Copyright>Copyright (c) $([System.DateTime]::Now.Year) GitHubMacrro</Copyright>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == 'net48'">
