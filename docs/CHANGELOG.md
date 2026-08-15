@@ -3,7 +3,7 @@
 ## [2.2.0] - 2026-08-15
 
 ### Added
-- **公开 API（Excel 门面）**：新增统一入口 `Excel`，提供 `Excel.Open(path)`、`Excel.Create(format)`、`Excel.Read<T>(path)`、`Excel.Write<T>(path, data)`、`Excel.ReadAsDataTable(path)`、`Excel.Write(path, DataTable)`、`Excel.GetSheetNames(path)`、`Excel.StreamRows(path, name, onRow)`、`Excel.CreateWriter(path/stream)` 等。
+- **对象模型 API（Excel 门面）**：新增统一入口 `Excel`，提供 `Excel.Open(path)`、`Excel.Create(format)`、`Excel.Read<T>(path)`、`Excel.Write<T>(path, data)`、`Excel.ReadAsDataTable(path)`、`Excel.Write(path, DataTable)`、`Excel.GetSheetNames(path)`、`Excel.StreamRows(path, name, onRow)`、`Excel.CreateWriter(path/stream)` 等。
 - **对象模型层级**：`Workbook -> Worksheet -> Cells/Cell/ExcelRange`，坐标统一为 1-based，支持 A1 地址。
   - `Workbook`：`Worksheets` 集合（新增/删除/移动/按名访问）、`Properties` 文档属性、`Save()` / `SaveAs(path[, format])` / `Save(stream, format)`。
   - `Worksheet`：`Cell("A1")` / `Cell(row, col)` / `Range("A1:D10")` / `Cells`、`SetValue`、`Merge` / `Unmerge`、冻结表头、样式、批注、验证、筛选。
@@ -18,15 +18,15 @@
 
 ### Changed
 - **`Range` 更名 `ExcelRange`**：为避免与 BCL `System.Range` 的命名冲突，区域类型命名为 `ExcelRange`。
-- **公开 API 读取首行语义**：`Worksheet` 采用原始网格模型，首行不强制拆分表头，表头识别归属映射层（`Excel.Read<T>` / `ReadAsDataTable` 仍按原语义处理）。
+- **对象模型 API 读取首行语义**：`Worksheet` 采用原始网格模型，首行不强制拆分表头，表头识别归属映射层（`Excel.Read<T>` / `ReadAsDataTable` 仍按原语义处理）。
 
 ### Fixed
 - **`Cell.SetValue` 写回遗漏**：`SetValue` 的 `CopyFrom` 分支未触发单元格变更通知，导致新值/公式/样式不落入网格，已修复。
 - **`SheetToDataTable` 输入副作用**：无表头时不再修改传入 `SheetData` 的 `Headers`（在副本上补齐列名）。
 
 ### Notes / 兼容性
-- `XlsxReader` / `XlsxWriter` / `SheetData` / `Cell` / `DataTable` / `List<T>` 等既有公开 API 全部保留，未做任何破坏性变更；新旧 API 混用，写出的文件互相兼容。
-- 公开 API 中仅 `List<T>` 反射入口（`Excel.Read<T>` / `Excel.Write<T>`）不兼容 AOT，其余对象模型与便利 API 均为 AOT 安全。
+- `XlsxReader` / `XlsxWriter` / `SheetData` / `Cell` / `DataTable` / `List<T>` 等既有 API 全部保留，未做任何破坏性变更；新旧 API 混用，写出的文件互相兼容。
+- 对象模型 API 中仅 `List<T>` 反射入口（`Excel.Read<T>` / `Excel.Write<T>`）不兼容 AOT，其余均为 AOT 安全。
 - 已知限制：`xlsb` / `xls` 未实现；图片、图表、透视表、条件格式不在本版本范围。
 
 ## [2.1.4] - 2026-08-14

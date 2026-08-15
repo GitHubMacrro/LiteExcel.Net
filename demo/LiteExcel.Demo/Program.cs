@@ -658,10 +658,10 @@ public static class Program
         Console.WriteLine();
     }
 
-    // 17. 公开 API（Excel 门面 + Workbook/Worksheet/Cell/Range/Cells）
+    // 17. 对象模型 API（Excel 门面 + Workbook/Worksheet/Cell/Range/Cells）
     private static void Demo17_PublicApi(string dir)
     {
-        Console.WriteLine("[17] Public API (Excel facade)");
+        Console.WriteLine("[17] Object-Model API (Excel facade)");
 
         // 新建工作簿，用自然层级写数据
         var wb = Excel.Create();

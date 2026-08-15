@@ -9,7 +9,7 @@
 ## 目录
 
 1. [安装与引用](#1-安装与引用)
-2. [公开 API（推荐）](#2-公开-api推荐)
+2. [对象模型 API（推荐）](#2-对象模型-api推荐)
 3. [快速上手](#3-快速上手)
 4. [单元格与数据类型](#4-单元格与数据类型)
 5. [读取](#5-读取)
@@ -64,7 +64,7 @@ using LiteExcel;
 
 ---
 
-## 2. 公开 API（推荐）
+## 2. 对象模型 API（推荐）
 
 从 `2.2.0` 起提供直觉化的对象模型 API，自然层级：
 
@@ -75,7 +75,7 @@ Excel             统一门面（打开 / 新建 / 便利读写 / 流式）
           -> Cells / Cell / ExcelRange
 ```
 
-公开 API 基于同一套读写引擎，但把坐标、取值、保存等细节封装成更接近 Excel 的习惯用法。`XlsxReader / XlsxWriter / SheetData / Cell` 继续保留，新旧 API 可以混用，写出的文件互相兼容。
+对象模型 API 基于同一套读写引擎，但把坐标、取值、保存等细节封装成更接近 Excel 的习惯用法。`XlsxReader / XlsxWriter / SheetData / Cell` 继续保留，新旧 API 可以混用，写出的文件互相兼容。
 
 ### 2.1 新建工作簿
 
@@ -271,7 +271,7 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 
 ### 2.13 新旧 API 对照
 
-| 场景 | 公开 API | XlsxWriter / XlsxReader |
+| 场景 | 对象模型 API | XlsxWriter / XlsxReader |
 |---|---|---|
 | 打开文件 | `Excel.Open(path)` | `XlsxReader.Read(path, 0)` |
 | 新建/写出 | `Excel.Create()` + `SaveAs` | `XlsxWriter.Write(path, sheet)` |

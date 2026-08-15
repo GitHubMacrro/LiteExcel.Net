@@ -9,7 +9,7 @@
 - **零依赖**：仅用 .NET BCL（ZipArchive + XmlReader/XDocument），无任何第三方包
 - **AOT 友好**：对象模型与 DataTable 等 API 无反射；List\<T\> 反射映射 API 标注 `[RequiresUnreferencedCode]`
 - **双目标**：net48 + net8.0（老 WinForms 项目与新项目都能用）
-- **直觉化公开 API**：`Excel -> Workbook -> Worksheet -> Cell/Range/Cells` 自然层级，一行式读写
+- **直觉化对象模型 API**：`Excel -> Workbook -> Worksheet -> Cell/Range/Cells` 自然层级，一行式读写
 - **格式可扩展**：xlsx/xlsm/csv 已支持；xlsb/xls 预留后端
 - **全功能**：读/写、样式、合并单元格、自动筛选、行高/列宽、批注、数据验证、追加、Stream、List\<T\>/DataTable 便利 API、流式读写大文件
 - **真实文件兼容**：可正确读取 Excel/WPS 创建的 xlsx（含 Table/theme 等扩展部件）
@@ -26,7 +26,7 @@ dotnet add package LiteExcel
 <PackageReference Include="LiteExcel" Version="2.2.0" />
 ```
 
-## 快速上手（推荐：公开 API）
+## 快速上手（推荐：对象模型 API）
 
 ```csharp
 using LiteExcel;
@@ -90,7 +90,7 @@ foreach (var row in read.Rows)
 
 ## API 速查
 
-### 公开 API（推荐）
+### 对象模型 API（推荐）
 
 | 类型 / 方法 | 说明 |
 |---|---|

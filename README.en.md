@@ -9,7 +9,7 @@ A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/cs
 - **Zero dependencies**: .NET BCL only (ZipArchive + XmlReader/XDocument), no third-party packages
 - **AOT friendly**: object-model and DataTable APIs use no reflection; List\<T\> mapping APIs are marked `[RequiresUnreferencedCode]`
 - **Dual target**: net48 + net8.0 (works with legacy WinForms projects and new projects)
-- **Intuitive public API**: natural hierarchy `Excel -> Workbook -> Worksheet -> Cell/Range/Cells`, one-liner read/write
+- **Intuitive object-model API**: natural hierarchy `Excel -> Workbook -> Worksheet -> Cell/Range/Cells`, one-liner read/write
 - **Extensible formats**: xlsx/xlsm/csv supported; xlsb/xls backends reserved
 - **Full featured**: read/write, styles, merged cells, auto filter, row height/column width, comments, data validation, append, Stream, List\<T\>/DataTable convenience APIs, streaming read/write for large files
 - **Real file compatibility**: correctly reads xlsx created by Excel/WPS (including Table/theme extension parts)
@@ -26,7 +26,7 @@ Or reference a local .nupkg:
 <PackageReference Include="LiteExcel" Version="2.2.0" />
 ```
 
-## Quick Start (recommended: public API)
+## Quick Start (recommended: object-model API)
 
 ```csharp
 using LiteExcel;
@@ -90,7 +90,7 @@ foreach (var row in read.Rows)
 
 ## API Reference
 
-### Public API (recommended)
+### Object-Model API (recommended)
 
 | Type / Method | Description |
 |---|---|
@@ -171,6 +171,6 @@ foreach (var row in read.Rows)
 
 ## Detailed Docs
 
-- 📖 [Usage Guide](docs/USAGE.en.md) — full API reference and feature examples (public API/styles/merge/filter/comments/data validation/Stream, etc.)
+- 📖 [Usage Guide](docs/USAGE.en.md) — full API reference and feature examples (object-model API/styles/merge/filter/comments/data validation/Stream, etc.)
 - 📝 [Changelog](docs/CHANGELOG.md) — version history
 - 🌐 [中文 README](README.zh-CN.md)
