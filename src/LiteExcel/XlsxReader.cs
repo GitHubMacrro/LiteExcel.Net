@@ -454,6 +454,15 @@ public static partial class XlsxReader
             {
                 sheet.Filter = ParseAutoFilter(reader);
             }
+            else if (reader.LocalName == "pane")
+            {
+                // 冻结窗格：ySplit 或 xSplit 存在且 state="frozen" 视为冻结首行/首列
+                var state = reader.GetAttribute("state");
+                var ySplit = reader.GetAttribute("ySplit");
+                var xSplit = reader.GetAttribute("xSplit");
+                if (state == "frozen" && (ySplit == "1" || xSplit == "1"))
+                    sheet.FreezeHeader = true;
+            }
         }
 
         // Convert hidden XML row numbers to 0-based data row indices
@@ -674,6 +683,8 @@ public static partial class XlsxReader
 
             string raw = "";
             bool hasValue = false;
+            string formula = "";
+            bool hasFormula = false;
 
             if (!rowReader.IsEmptyElement)
             {
@@ -683,7 +694,12 @@ public static partial class XlsxReader
                     if (rowReader.NodeType == XmlNodeType.EndElement && rowReader.Depth == cDepth) break;
                     if (rowReader.NodeType != XmlNodeType.Element) continue;
 
-                    if (rowReader.LocalName == "v" && !rowReader.IsEmptyElement)
+                    if (rowReader.LocalName == "f" && !rowReader.IsEmptyElement)
+                    {
+                        formula = ReadElementText(rowReader);
+                        hasFormula = true;
+                    }
+                    else if (rowReader.LocalName == "v" && !rowReader.IsEmptyElement)
                     {
                         raw = ReadElementText(rowReader);
                         hasValue = true;
@@ -694,19 +710,29 @@ public static partial class XlsxReader
                         raw = ReadRichText(sub);
                         hasValue = true;
                     }
-                    // 忽略 <f> 公式标签
                 }
             }
 
             if (!hasValue)
             {
                 var cell = Cell.Empty;
+                if (hasFormula)
+                {
+                    cell.Type = CellType.Text;
+                    cell.Text = formula;
+                    cell.IsFormula = true;
+                }
                 ApplyStyle(cell, sAttr, styles);
                 cells.Add((col, cell));
             }
             else
             {
                 var cell = ConvertCellValue(raw, t, sAttr, shared, styles);
+                if (hasFormula)
+                {
+                    cell.IsFormula = true;
+                    cell.Text = formula;
+                }
                 cells.Add((col, cell));
             }
 

@@ -1,6 +1,6 @@
 # LiteExcel Usage Guide
 
-**Version**: 2.1.3  
+**Version**: 2.2.0  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -9,25 +9,26 @@
 ## Table of Contents
 
 1. [Installation & Reference](#1-installation--reference)
-2. [Quick Start](#2-quick-start)
-3. [Cells & Data Types](#3-cells--data-types)
-4. [Reading](#4-reading)
-5. [Writing](#5-writing)
-6. [Styling](#6-styling)
-7. [Merged Cells](#7-merged-cells)
-8. [Auto Filter](#8-auto-filter)
-9. [Row Height & Column Width](#9-row-height--column-width)
-10. [Cell Comments](#10-cell-comments)
-11. [Data Validation (Dropdown List)](#11-data-validation-dropdown-list)
-12. [Appending Data](#12-appending-data)
-13. [List<T> Mapping (reflection, not AOT compatible)](#13-listt-mapping-reflection-not-aot-compatible)
-14. [DataTable Convenience API (AOT safe)](#14-datatable-convenience-api-aot-safe)
-15. [Stream Read/Write](#15-stream-readwrite)
-16. [Streaming Read & Progress Callback](#16-streaming-read--progress-callback)
-17. [Document Properties (Author/Time/Title)](#17-document-properties-authortimetitle)
-18. [Error Handling](#18-error-handling)
-19. [AOT Compatibility](#19-aot-compatibility)
-20. [Full API Reference](#20-full-api-reference)
+2. [High-Level API (Recommended)](#2-high-level-api-recommended)
+3. [Quick Start](#3-quick-start)
+4. [Cells & Data Types](#4-cells--data-types)
+5. [Reading](#5-reading)
+6. [Writing](#6-writing)
+7. [Styling](#7-styling)
+8. [Merged Cells](#8-merged-cells)
+9. [Auto Filter](#9-auto-filter)
+10. [Row Height & Column Width](#10-row-height--column-width)
+11. [Cell Comments](#11-cell-comments)
+12. [Data Validation (Dropdown List)](#12-data-validation-dropdown-list)
+13. [Appending Data](#13-appending-data)
+14. [List<T> Mapping (reflection, not AOT compatible)](#14-listt-mapping-reflection-not-aot-compatible)
+15. [DataTable Convenience API (AOT safe)](#15-datatable-convenience-api-aot-safe)
+16. [Stream Read/Write](#16-stream-readwrite)
+17. [Streaming Read & Progress Callback](#17-streaming-read--progress-callback)
+18. [Document Properties (Author/Time/Title)](#18-document-properties-authortimetitle)
+19. [Error Handling](#19-error-handling)
+20. [AOT Compatibility](#20-aot-compatibility)
+21. [Full API Reference](#21-full-api-reference)
 
 ---
 
@@ -43,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.1.3" />
+  <PackageReference Include="LiteExcel" Version="2.2.0" />
 </ItemGroup>
 ```
 
@@ -63,7 +64,226 @@ using LiteExcel;
 
 ---
 
-## 2. Quick Start
+## 2. High-Level API (Recommended)
+
+Since `2.2.0`, an intuitive object-model API is provided with a natural hierarchy:
+
+```text
+Excel             unified facade (open / create / convenience IO / streaming)
+  -> Workbook     workbook (worksheet collection / document properties / save)
+      -> Worksheet sheet (cells / ranges / merge / styles)
+          -> Cells / Cell / ExcelRange
+```
+
+The high-level API is built on the same underlying read/write engine but wraps coordinates, typed access, and save semantics into familiar Excel-style usage. The low-level `XlsxReader / XlsxWriter / SheetData / Cell` remain fully supported; old and new APIs can be mixed, and files written by either are readable by the other.
+
+### 2.1 Create a Workbook
+
+```csharp
+using LiteExcel;
+
+// Default xlsx, contains one worksheet named "Sheet1"
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+```
+
+Specify the format and initial sheet name:
+
+```csharp
+var wbCsv = Excel.Create(ExcelFormat.Csv);              // create a csv workbook
+var wb2   = Excel.Create("Employees", ExcelFormat.Xlsx); // create and name the first sheet
+```
+
+Supported formats: `Xlsx`, `Xlsm`, `Csv`. `Xlsb` and `Xls` enum values exist but are not implemented yet; read/write throws `NotSupportedException`.
+
+### 2.2 Open an Existing File
+
+```csharp
+// Auto-detect the format from the extension (.xlsx / .xlsm / .csv)
+var opened = Excel.Open("data.xlsx");
+
+// Or force a specific format
+var forced = Excel.Open("data.csv", ExcelFormat.Csv);
+```
+
+`Excel.DetectFormat(path)` returns the detected format.
+
+### 2.3 Read and Write Cells
+
+Coordinates are **1-based**, so `Cell(1, 1)` is `A1`; A1 addresses are also accepted.
+
+```csharp
+var ws = wb.Worksheets["Sheet1"];
+
+// Write
+ws.SetValue("A1", "Name");
+ws.SetValue("B1", "Age");
+ws.SetValue(2, 1, "Zhang San");  // A2
+ws.SetValue(2, 2, 25);           // B2
+
+// Read
+string name = ws.Cell("A2").GetString();   // "Zhang San"
+double age = ws.Cell(2, 2).GetDouble();    // 25
+```
+
+Accessor methods:
+
+| Method | Description |
+|---|---|
+| `GetString()` / `TryGetString(out var v)` | get text |
+| `GetDouble()` / `TryGetDouble(out var v)` | get number |
+| `GetDateTime()` / `TryGetDateTime(out var v)` | get date |
+| `GetBoolean()` / `TryGetBoolean(out var v)` | get boolean |
+| `GetValue()` | get as `object?` by type |
+| `SetValue(object? value)` | write (string/number/date/boolean/formula) |
+
+`Cell.Style`, `Cell.NumberFormat` read/write cell style and number format; `Cell.IsFormula` tells whether the cell holds a formula.
+
+### 2.4 Collection Access via `Cells`
+
+```csharp
+var cells = ws.Cells;
+
+var a1 = cells[1, 1];            // 1-based coordinate
+var b2 = cells["B2"];            // A1 address
+var r  = cells.Range("A1:C10");  // range
+
+foreach (var cell in cells)      // enumerate all stored cells
+{
+    Console.WriteLine($"{cell.Text} / {cell.Number}");
+}
+
+cells.SetValue("D2", "note");
+cells.Clear();                   // clear everything
+```
+
+### 2.5 Range Operations via `ExcelRange`
+
+`Worksheet.Range(...)` returns an `ExcelRange` (note: the class is `ExcelRange`, not `Range`, to avoid clashing with BCL `System.Range`):
+
+```csharp
+var range = ws.Range("A1:C3");            // or ws.Range(1, 1, 3, 3)
+range.Fill(0);                            // fill the whole range
+range.Fill(new object?[,] { { 1, 2, 3 }, { 4, 5, 6 } });  // fill from a matrix
+var values = range.ToValues();            // object?[,]
+var cells = range.ToCells();              // Cell[,]
+range.Clear();
+range.Merge();                            // merge the range
+range.Unmerge();
+range.Style = new CellStyle { Bold = true };  // range style
+
+foreach (var cell in range) { /* enumerate cells in the range */ }
+```
+
+### 2.6 Save and Save As
+
+```csharp
+wb.Save();                        // save to the current path (throws LiteExcelException if none)
+wb.SaveAs("output.xlsx");         // save as, updates the current path
+wb.SaveAs("output.csv", ExcelFormat.Csv);  // cross-format save (depends on backend)
+wb.Save(stream, ExcelFormat.Xlsx);         // write to a stream
+```
+
+Rules:
+
+- After a successful `SaveAs`, subsequent `Save()` writes to the new path.
+- Cross-format save succeeds only if the target backend supports it; `csv` holds tabular data only.
+- `Excel.Write(path, workbook)` is equivalent to "save as the given path".
+
+### 2.7 Worksheet Management
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets.Add("Sheet2");              // add
+wb.Worksheets.Add("Sheet3");
+wb.Worksheets.Move(0, 1);                 // move
+wb.Worksheets.Remove("Sheet2");           // remove by name
+wb.Worksheets.RemoveAt(0);
+bool has = wb.Worksheets.Contains("Sheet3");
+var names = wb.Worksheets.Names;          // ["Sheet3", ...]
+```
+
+### 2.8 Document Properties
+
+```csharp
+var props = wb.Properties;
+props.Creator = "LiteExcel";
+props.Title = "Sample Report";
+wb.Save();
+```
+
+### 2.9 List\<T\> / DataTable Convenience API
+
+```csharp
+// List<T> mapping (reflection, not AOT compatible)
+Excel.Write("out.xlsx", new[] { new Person { Name = "Zhang San", Age = 25 } });
+var list = Excel.Read<Person>("out.xlsx");
+
+// DataTable (AOT safe)
+var dt = Excel.ReadAsDataTable("out.xlsx");
+Excel.Write("out2.xlsx", dt);
+```
+
+`Excel.GetSheetNames(path)` lists all worksheet names.
+
+### 2.10 Streaming Large Files
+
+```csharp
+// Streaming write: row by row, no memory residency
+using (var writer = Excel.CreateWriter("large.xlsx"))
+{
+    writer.WriteRow(new object?[] { "Name", "Age" });
+    for (int i = 0; i < 100000; i++)
+        writer.WriteRow(new object?[] { $"User{i}", i });
+}
+
+// Streaming read
+Excel.StreamRows("large.xlsx", "Sheet1", row =>
+{
+    Console.WriteLine(row[0]?.Text);
+});
+```
+
+### 2.11 Formulas and Advanced Capabilities
+
+```csharp
+ws.SetValue("A1", 1);
+ws.SetValue("A2", 2);
+ws.Cell("A3").SetValue(Cell.FromFormula("SUM(A1:A2)"));  // write a formula string
+bool isFormula = ws.Cell("A3").IsFormula;
+
+ws.Merge("A1:B1");                    // merge
+ws.FreezeHeader = true;               // freeze header
+ws.Range("A1:B1").Style = new CellStyle { Bold = true };
+```
+
+Styles, merge, comments, data validation, auto filter, row height and column width are all available at the `Worksheet` level, mirroring the low-level `SheetData` capabilities.
+
+### 2.12 Format Support Matrix
+
+| Format | Read | Write | Notes |
+|---|---|---|---|
+| `xlsx` | ✅ | ✅ | full read/write |
+| `xlsm` | ✅ | ✅ | read/write/save |
+| `csv` | ✅ | ✅ | tabular data only, no styles/merge |
+| `xlsb` | ⚠️ placeholder | ❌ | enum defined, not implemented |
+| `xls` | ⚠️ placeholder | ❌ | enum defined, not implemented |
+
+### 2.13 Old vs New API
+
+| Scenario | High-Level API | Low-Level Compat API |
+|---|---|---|
+| Open a file | `Excel.Open(path)` | `XlsxReader.Read(path, 0)` |
+| Create / write | `Excel.Create()` + `SaveAs` | `XlsxWriter.Write(path, sheet)` |
+| Read one sheet | `Workbook.Worksheets[i]` | `XlsxReader.Read(path, i)` |
+| Read as List\<T\> | `Excel.Read<T>(path)` | `XlsxReader.Read<T>(path)` |
+| Read as DataTable | `Excel.ReadAsDataTable(path)` | `XlsxReader.ReadAsDataTable(path)` |
+| Streaming read | `Excel.StreamRows(path, name, cb)` | `XlsxReader.StreamRows(path, name, cb)` |
+| Streaming write | `Excel.CreateWriter(path)` | `XlsxStreamWriter` |
+
+---
+
+## 3. Quick Start
 
 ### Minimal Write
 
@@ -126,7 +346,7 @@ foreach (var row in sheet.Rows)
 
 ---
 
-## 3. Cells & Data Types
+## 4. Cells & Data Types
 
 ### Cell Class
 
@@ -199,7 +419,7 @@ When reading, the library queries the numFmtId in `styles.xml` and automatically
 
 ---
 
-## 4. Reading
+## 5. Reading
 
 ### List All Sheet Names
 
@@ -282,7 +502,7 @@ public sealed class SheetData
 
 ---
 
-## 5. Writing
+## 6. Writing
 
 ### Write Single Sheet
 
@@ -357,7 +577,7 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 6. Styling
+## 7. Styling
 
 ### Style Priority (Override)
 
@@ -435,7 +655,7 @@ var sheet = new SheetData
 
 ---
 
-## 7. Merged Cells
+## 8. Merged Cells
 
 ```csharp
 var sheet = new SheetData
@@ -452,7 +672,7 @@ var sheet = new SheetData
 
 ---
 
-## 8. Auto Filter
+## 9. Auto Filter
 
 ```csharp
 // Method 1: pass filter conditions, library computes hidden rows
@@ -509,7 +729,7 @@ new FilterColumn
 
 ---
 
-## 9. Row Height & Column Width
+## 10. Row Height & Column Width
 
 ```csharp
 var sheet = new SheetData
@@ -529,7 +749,7 @@ XlsxWriter.Write("output.xlsx", sheet);
 
 ---
 
-## 10. Cell Comments
+## 11. Cell Comments
 
 ```csharp
 var sheet = new SheetData
@@ -550,7 +770,7 @@ Console.WriteLine(read.Comments?["A1"]);
 
 ---
 
-## 11. Data Validation (Dropdown List)
+## 12. Data Validation (Dropdown List)
 
 ```csharp
 var sheet = new SheetData
@@ -593,7 +813,7 @@ XlsxWriter.Write("validation.xlsx", sheet);
 
 ---
 
-## 12. Appending Data
+## 13. Appending Data
 
 ```csharp
 // Append 2 rows to existing sheet with same name; if name doesn't exist, add new sheet
@@ -621,7 +841,7 @@ XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
 
 ---
 
-## 13. List&lt;T&gt; Mapping (reflection, not AOT compatible)
+## 14. List&lt;T&gt; Mapping (reflection, not AOT compatible)
 
 > For AOT projects, use the SheetData or DataTable overloads.
 
@@ -658,7 +878,7 @@ XlsxWriter.Write("people.xlsx", list, opt => opt
 
 ---
 
-## 14. DataTable Convenience API (AOT safe)
+## 15. DataTable Convenience API (AOT safe)
 
 ```csharp
 var dt = new DataTable();
@@ -672,7 +892,7 @@ var read = XlsxReader.ReadAsDataTable("data.xlsx");
 
 ---
 
-## 15. Stream Read/Write
+## 16. Stream Read/Write
 
 All read/write APIs have Stream overloads:
 
@@ -690,7 +910,7 @@ var all = XlsxReader.ReadAll(fs);
 
 ---
 
-## 16. Streaming Read & Progress Callback
+## 17. Streaming Read & Progress Callback
 
 ```csharp
 // Stream rows, no memory residency
@@ -708,7 +928,7 @@ XlsxReader.ReadWithProgress("big.xlsx", 0, (current, total) =>
 
 ---
 
-## 17. Document Properties (Author/Time/Title)
+## 18. Document Properties (Author/Time/Title)
 
 ### Write with Properties
 
@@ -765,7 +985,7 @@ XlsxWriter.Write("output.xlsx", sheet);
 
 ---
 
-## 18. Error Handling
+## 19. Error Handling
 
 ### LiteExcelException
 
@@ -812,17 +1032,18 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 19. AOT Compatibility
+## 20. AOT Compatibility
 
 ### AOT-safe APIs (no reflection)
 
 | API | Description |
 |---|---|
+| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | high-level object model |
+| `Excel.CreateWriter` / `Excel.StreamRows` | streaming read/write |
 | `Read(path/stream, ...)` | returns `SheetData` |
 | `Write(path/stream, SheetData)` | accepts `SheetData` |
 | `ReadAsDataTable(...)` | DataTable has its own schema |
 | `Write(path, DataTable)` | DataTable write |
-| `StreamRows(...)` | streaming read |
 | `GetSheetNames(...)` | list sheet names |
 | `Append(...)` | append |
 | `AutoColumnWidths(...)` | auto column widths |
@@ -831,14 +1052,14 @@ catch (InvalidSheetNameException ex)
 
 | API | Description |
 |---|---|
-| `Read<T>(...)` | List<T> read |
-| `Write<T>(...)` | List<T> write |
+| `Excel.Read<T>(...)` / `Read<T>(...)` | List<T> read |
+| `Excel.Write<T>(...)` / `Write<T>(...)` | List<T> write |
 
 > AOT projects will get `IL3050`/`IL2026` warnings when calling these. Non-AOT projects (net48, net8 normal publish) are unaffected.
 
 ---
 
-## 20. Full API Reference
+## 21. Full API Reference
 
 ### XlsxReader
 

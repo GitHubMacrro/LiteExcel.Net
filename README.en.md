@@ -1,6 +1,6 @@
 # LiteExcel
 
-A lightweight, zero-dependency .NET library for reading and writing Excel xlsx files. AOT-friendly. **Version 2.1.3**
+A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files. AOT-friendly. **Version 2.2.0**
 
 > [中文 README](README.zh-CN.md)
 
@@ -9,7 +9,9 @@ A lightweight, zero-dependency .NET library for reading and writing Excel xlsx f
 - **Zero dependencies**: .NET BCL only (ZipArchive + XmlReader/XDocument), no third-party packages
 - **AOT friendly**: low-level APIs have no reflection; high-level reflection APIs are marked `[RequiresUnreferencedCode]`
 - **Dual target**: net48 + net8.0 (works with legacy WinForms projects and new projects)
-- **Full featured**: read/write, styles (4-level priority), merged cells, auto filter, row height/column width, comments, data validation, append, Stream, List\<T\>/DataTable convenience APIs
+- **Intuitive high-level API**: natural hierarchy `Excel -> Workbook -> Worksheet -> Cell/Range/Cells`, one-liner read/write
+- **Extensible formats**: xlsx/xlsm/csv supported; xlsb/xls backends reserved
+- **Full featured**: read/write, styles, merged cells, auto filter, row height/column width, comments, data validation, append, Stream, List\<T\>/DataTable convenience APIs, streaming read/write for large files
 - **Real file compatibility**: correctly reads xlsx created by Excel/WPS (including Table/theme extension parts)
 
 ## Installation
@@ -21,14 +23,37 @@ dotnet add package LiteExcel
 Or reference a local .nupkg:
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.1.3" />
+<PackageReference Include="LiteExcel" Version="2.2.0" />
 ```
 
-## Quick Start
+## Quick Start (recommended: high-level API)
 
 ```csharp
 using LiteExcel;
 
+// Create a workbook, write through a natural hierarchy
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "Name");
+ws.SetValue("B1", "Age");
+ws.SetValue("A2", "Zhang San");
+ws.SetValue("B2", 25);
+ws.Range("A1:B1").Style = new CellStyle { Bold = true };
+wb.SaveAs("output.xlsx");
+
+// Open and read
+var opened = Excel.Open("output.xlsx");
+var name = opened.Worksheets[0].Cell("A2").GetString();   // "Zhang San"
+var age = opened.Worksheets[0].Cells[2, 2].GetDouble();   // 25
+
+// Modify and save
+opened.Worksheets[0].SetValue("B2", 26);
+opened.Save();
+```
+
+## Low-Level API (kept for compatibility)
+
+```csharp
 // Write
 var sheet = new SheetData
 {
@@ -57,15 +82,37 @@ foreach (var row in read.Rows)
 | Type | Description |
 |---|---|
 | `Text` | Text (shared/inline strings) |
-| `Number` | Number (exact long up to 12 digits) |
+| `Number` | Number (exact up to 12 digits) |
 | `Date` | Date (auto-detects Excel date formats, supports 1900/1904 systems) |
 | `Boolean` | Boolean |
 | `Empty` | Empty cell |
-| Formula result | Reads cached `<v>` value, not the formula expression |
+| Formula | Reads the `<f>` formula string + cached `<v>` value; writes formula strings without calculating |
 
 ## API Reference
 
-### XlsxWriter
+### High-Level API (recommended)
+
+| Type / Method | Description |
+|---|---|
+| `Excel.Open(path)` | open a workbook, format auto-detected from extension |
+| `Excel.Create(format)` / `Excel.Create(sheetName, format)` | create a workbook (xlsx/xlsm/csv) |
+| `Excel.Read<T>(path, sheetName?)` | read as List\<T\> (reflection, not AOT compatible) |
+| `Excel.ReadAsDataTable(path, sheetName?)` | read as DataTable (AOT safe) |
+| `Excel.Write(path, Workbook)` | write a workbook |
+| `Excel.Write(path, DataTable)` | write from DataTable (AOT safe) |
+| `Excel.Write<T>(path, IEnumerable<T>)` | write from List\<T\> (reflection, not AOT compatible) |
+| `Excel.CreateWriter(path/stream)` | streaming write for large files (row by row) |
+| `Excel.StreamRows(path, sheetName, onRow)` | streaming read for large files |
+| `Excel.GetSheetNames(path)` | list all sheet names |
+| `Workbook.Worksheets / Properties / Save() / SaveAs(path, format)` | file-level operations |
+| `Worksheet.Cell("A1") / Cell(row, col) / Range("A1:D10") / Cells` | sheet-level access |
+| `Worksheet.SetValue / Merge / Unmerge` | sheet-level write and merge |
+| `Cell.GetString/GetDouble/GetDateTime/GetBoolean/TryGet*` | typed cell accessors |
+| `Cell.SetValue / IsFormula / FromFormula` | cell write and formula |
+| `Cells[row, col] / Cells["A1"] / Cells.Range(...)` | collection access |
+| `ExcelRange.Fill / Clear / Style / Merge / ToValues` | range operations |
+
+### XlsxWriter (low-level, kept for compatibility)
 
 | Method | Description |
 |---|---|
@@ -77,7 +124,7 @@ foreach (var row in read.Rows)
 | `Append(path, SheetData, WorkbookProperties?)` | append data and optionally update document properties |
 | `AutoColumnWidths(sheet)` | auto estimate column widths |
 
-### XlsxReader
+### XlsxReader (low-level, kept for compatibility)
 
 | Method | Description |
 |---|---|
@@ -95,7 +142,9 @@ foreach (var row in read.Rows)
 
 | Class | Description |
 |---|---|
-| `SheetData` | worksheet data (headers/rows/styles/merge/filter/height/comments/validation) |
+| `Workbook` / `Worksheet` / `Cells` / `ExcelRange` | high-level models |
+| `ExcelFormat` / `ExcelReadOptions` / `ExcelWriteOptions` | formats and options |
+| `SheetData` | low-level worksheet data (headers/rows/styles/merge/filter/height/comments/validation) |
 | `Cell` | cell |
 | `CellStyle` / `BorderStyle` / `BorderEdge` | styles |
 | `CellRange` | range (merged cells) |
@@ -115,11 +164,13 @@ foreach (var row in read.Rows)
 
 | API | AOT |
 |---|---|
-| `SheetData` / `DataTable` read/write | ✅ Safe (no reflection) |
-| `List<T>` read/write (`Read<T>` / `Write<T>`) | ⚠️ Marked `[RequiresUnreferencedCode]`, warns on AOT compile |
+| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | ✅ Safe (no reflection) |
+| `Excel.ReadAsDataTable` / `DataTable` read/write | ✅ Safe (no reflection) |
+| `SheetData` / low-level read/write | ✅ Safe (no reflection) |
+| `Excel.Read<T>` / `Excel.Write<T>` / `List<T>` read/write | ⚠️ Marked `[RequiresUnreferencedCode]`, warns on AOT compile |
 
 ## Detailed Docs
 
-- 📖 [Usage Guide](docs/USAGE.en.md) — full API reference and feature examples (styles/merge/filter/comments/data validation/Stream, etc.)
+- 📖 [Usage Guide](docs/USAGE.en.md) — full API reference and feature examples (high-level API/styles/merge/filter/comments/data validation/Stream, etc.)
 - 📝 [Changelog](docs/CHANGELOG.md) — version history
 - 🌐 [中文 README](README.zh-CN.md)

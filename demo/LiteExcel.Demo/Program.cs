@@ -27,6 +27,7 @@ public static class Program
         Demo14_AppendData(outDir);
         Demo15_DataValidation(outDir);
         Demo16_ProgressCallback(outDir);
+        Demo17_HighLevelApi(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -654,6 +655,75 @@ public static class Program
             }
         });
         Console.WriteLine($"  Done! Total rows read: {lastReported}");
+        Console.WriteLine();
+    }
+
+    // 17. 高层 API（Excel 门面 + Workbook/Worksheet/Cell/Range/Cells）
+    private static void Demo17_HighLevelApi(string dir)
+    {
+        Console.WriteLine("[17] High-Level API (Excel facade)");
+
+        // 新建工作簿，用自然层级写数据
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        wb.Properties.Created = DateTime.Now;
+        wb.Properties.Title = nameof(Demo17_HighLevelApi);
+        wb.Properties.Application = "自定义";
+        wb.Properties.LastModifiedBy = "DemoAdmin";
+        wb.Properties.Creator = "JackZ";
+
+        ws.Name = "员工";
+        ws.SetValue("A1", "姓名");
+        ws.SetValue("B1", "年龄");
+        ws.SetValue("C1", "工资");
+        ws.SetValue("A2", "张三");
+        ws.SetValue("B2", 25);
+        ws.SetValue("C2", 8500.50);
+        ws.SetValue("A3", "李四");
+        ws.SetValue("B3", 30);
+        ws.SetValue("C3", 12000.00);
+
+        // Range 批量样式 + 合并
+        ws.Range("A1:C1").Style = new CellStyle { Bold = true, FillColor = "#D9E1F2" };
+        ws.Merge("A5:C5");
+        ws.SetValue("A5", "合计区域示例");
+        
+
+        var file = Path.Combine(dir, "17_highlevel.xlsx");
+        wb.SaveAs(file);
+        Console.WriteLine($"  Written: {file}");
+
+        // 打开并读取
+        var opened = Excel.Open(file);
+        var sheet = opened.Worksheets["员工"];
+        Console.WriteLine($"  Sheet: {sheet.Name}, rows={sheet.RowCount}, cols={sheet.MaxColumn}");
+        Console.WriteLine($"  A2 = {sheet.Cell("A2").GetString()}");
+        Console.WriteLine($"  B2 = {sheet.Cell(2, 2).GetDouble()}");
+        Console.WriteLine($"  C2 = {sheet.Cells["C2"].GetDouble()}");
+
+        // 修改并保存
+        sheet.SetValue("B2", 26);
+        opened.Save();
+        Console.WriteLine($"  Updated B2=26 and saved");
+
+        // 流式写入大文件
+        var streamFile = Path.Combine(dir, "17_stream.xlsx");
+        using (var writer = Excel.CreateWriter(streamFile))
+        {
+            writer.WriteRow(new object?[] { "ID", "Name" });
+            for (int i = 1; i <= 100; i++)
+                writer.WriteRow(new object?[] { i, $"Row{i}" });
+        }
+        Console.WriteLine($"  StreamWriter: {streamFile}");
+
+        // CSV
+        var csvFile = Path.Combine(dir, "17_highlevel.csv");
+        var csvWb = Excel.Create(ExcelFormat.Csv);
+        csvWb.Worksheets["Sheet1"].SetValue("A1", "名称");
+        csvWb.Worksheets["Sheet1"].SetValue("A2", "苹果");
+        csvWb.SaveAs(csvFile);
+        Console.WriteLine($"  CSV: {csvFile}");
+
         Console.WriteLine();
     }
 }

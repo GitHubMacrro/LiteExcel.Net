@@ -1,6 +1,6 @@
 # LiteExcel 使用手册
 
-**版本**：2.1.3  
+**版本**：2.2.0  
 **目标框架**：net48 + net8.0  
 **依赖**：零第三方依赖，仅用 .NET BCL
 
@@ -9,25 +9,26 @@
 ## 目录
 
 1. [安装与引用](#1-安装与引用)
-2. [快速上手](#2-快速上手)
-3. [单元格与数据类型](#3-单元格与数据类型)
-4. [读取](#4-读取)
-5. [写出](#5-写出)
-6. [样式](#6-样式)
-7. [合并单元格](#7-合并单元格)
-8. [自动筛选](#8-自动筛选)
-9. [行高与列宽](#9-行高与列宽)
-10. [单元格批注](#10-单元格批注)
-11. [数据验证（下拉列表）](#11-数据验证下拉列表)
-12. [追加数据](#12-追加数据)
-13. [List&lt;T&gt; 映射](#13-listt-映射反射不兼容-aot)
-14. [DataTable 便利 API](#14-datatable-便利-apiaot-安全)
-15. [Stream 读写](#15-stream-读写)
-16. [流式读取与进度回调](#16-流式读取与进度回调)
-17. [文档属性（作者/时间/标题）](#17-文档属性作者时间标题)
-18. [错误处理](#18-错误处理)
-19. [AOT 兼容性](#19-aot-兼容性)
-20. [完整 API 索引](#20-完整-api-索引)
+2. [高层 API（推荐）](#2-高层-api推荐)
+3. [快速上手](#3-快速上手)
+4. [单元格与数据类型](#4-单元格与数据类型)
+5. [读取](#5-读取)
+6. [写出](#6-写出)
+7. [样式](#7-样式)
+8. [合并单元格](#8-合并单元格)
+9. [自动筛选](#9-自动筛选)
+10. [行高与列宽](#10-行高与列宽)
+11. [单元格批注](#11-单元格批注)
+12. [数据验证（下拉列表）](#12-数据验证下拉列表)
+13. [追加数据](#13-追加数据)
+14. [List&lt;T&gt; 映射](#14-listt-映射反射不兼容-aot)
+15. [DataTable 便利 API](#15-datatable-便利-apiaot-安全)
+16. [Stream 读写](#16-stream-读写)
+17. [流式读取与进度回调](#17-流式读取与进度回调)
+18. [文档属性（作者/时间/标题）](#18-文档属性作者时间标题)
+19. [错误处理](#19-错误处理)
+20. [AOT 兼容性](#20-aot-兼容性)
+21. [完整 API 索引](#21-完整-api-索引)
 
 ---
 
@@ -43,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.1.3" />
+  <PackageReference Include="LiteExcel" Version="2.2.0" />
 </ItemGroup>
 ```
 
@@ -63,7 +64,226 @@ using LiteExcel;
 
 ---
 
-## 2. 快速上手
+## 2. 高层 API（推荐）
+
+从 `2.2.0` 起提供直觉化的对象模型 API，自然层级：
+
+```text
+Excel             统一门面（打开 / 新建 / 便利读写 / 流式）
+  -> Workbook     工作簿（工作表集合 / 文档属性 / 保存）
+      -> Worksheet 工作表（单元格 / 区域 / 合并 / 样式）
+          -> Cells / Cell / ExcelRange
+```
+
+高层 API 基于同一套底层读写引擎，但把坐标、取值、保存等细节封装成更接近 Excel 的习惯用法。底层 `XlsxReader / XlsxWriter / SheetData / Cell` 继续保留，新旧 API 可以混用，写出的文件互相兼容。
+
+### 2.1 新建工作簿
+
+```csharp
+using LiteExcel;
+
+// 默认 xlsx，自带一张名为 "Sheet1" 的工作表
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+```
+
+指定格式与初始表名：
+
+```csharp
+var wbCsv = Excel.Create(ExcelFormat.Csv);              // 新建 csv 工作簿
+var wb2   = Excel.Create("员工表", ExcelFormat.Xlsx);   // 新建并命名首表
+```
+
+支持格式：`Xlsx`、`Xlsm`、`Csv`。`Xlsb`、`Xls` 已定义枚举但暂不支持，读写会抛出 `NotSupportedException`。
+
+### 2.2 打开已有文件
+
+```csharp
+// 按扩展名自动识别格式（.xlsx / .xlsm / .csv）
+var opened = Excel.Open("data.xlsx");
+
+// 或显式指定格式
+var forced = Excel.Open("data.csv", ExcelFormat.Csv);
+```
+
+`Excel.DetectFormat(path)` 可单独判断文件格式。
+
+### 2.3 读写单元格
+
+坐标为 **1-based**，即 `Cell(1, 1)` 对应 `A1`；也可以直接使用 A1 地址。
+
+```csharp
+var ws = wb.Worksheets["Sheet1"];
+
+// 写入
+ws.SetValue("A1", "姓名");
+ws.SetValue("B1", "年龄");
+ws.SetValue(2, 1, "张三");   // A2
+ws.SetValue(2, 2, 25);       // B2
+
+// 读取
+string name = ws.Cell("A2").GetString();   // "张三"
+double age = ws.Cell(2, 2).GetDouble();    // 25
+```
+
+取值方法：
+
+| 方法 | 说明 |
+|---|---|
+| `GetString()` / `TryGetString(out var v)` | 文本取值 |
+| `GetDouble()` / `TryGetDouble(out var v)` | 数值取值 |
+| `GetDateTime()` / `TryGetDateTime(out var v)` | 日期取值 |
+| `GetBoolean()` / `TryGetBoolean(out var v)` | 布尔取值 |
+| `GetValue()` | 按类型返回 `object?` |
+| `SetValue(object? value)` | 写值（字符串/数值/日期/布尔/公式） |
+
+`Cell.Style`、`Cell.NumberFormat` 可读写单元格样式与数字格式；`Cell.IsFormula` 判断是否为公式。
+
+### 2.4 集合式访问 `Cells`
+
+```csharp
+var cells = ws.Cells;
+
+var a1 = cells[1, 1];            // 1-based 坐标
+var b2 = cells["B2"];            // A1 地址
+var r  = cells.Range("A1:C10");  // 区域
+
+foreach (var cell in cells)      // 枚举所有已存储单元格
+{
+    Console.WriteLine($"{cell.Text} / {cell.Number}");
+}
+
+cells.SetValue("D2", "备注");
+cells.Clear();                   // 清空全部
+```
+
+### 2.5 区域操作 `ExcelRange`
+
+`Worksheet.Range(...)` 返回 `ExcelRange`（注意：类名为 `ExcelRange`，不是 `Range`，避免与 BCL 的 `System.Range` 冲突）：
+
+```csharp
+var range = ws.Range("A1:C3");            // 或 ws.Range(1, 1, 3, 3)
+range.Fill(0);                            // 整片填充
+range.Fill(new object?[,] { { 1, 2, 3 }, { 4, 5, 6 } });  // 填充矩阵
+var values = range.ToValues();            // object?[,]
+var cells = range.ToCells();              // Cell[,]
+range.Clear();
+range.Merge();                            // 合并该区域
+range.Unmerge();
+range.Style = new CellStyle { Bold = true };  // 区域样式
+
+foreach (var cell in range) { /* 枚举区域内单元格 */ }
+```
+
+### 2.6 保存与另存
+
+```csharp
+wb.Save();                        // 保存到打开/新建时的路径；无路径则抛 LiteExcelException
+wb.SaveAs("output.xlsx");         // 另存为，更新当前路径
+wb.SaveAs("output.csv", ExcelFormat.Csv);  // 跨格式另存（取决于后端能力）
+wb.Save(stream, ExcelFormat.Xlsx);         // 写 Stream
+```
+
+规则：
+
+- `SaveAs` 成功后，后续 `Save()` 保存到新路径。
+- 跨格式保存是否成功取决于目标格式后端；`csv` 仅支持单表数据。
+- `Excel.Write(path, workbook)` 相当于“另存到指定路径”。
+
+### 2.7 工作表管理
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets.Add("Sheet2");              // 新增
+wb.Worksheets.Add("Sheet3");
+wb.Worksheets.Move(0, 1);                 // 移动
+wb.Worksheets.Remove("Sheet2");           // 删除
+wb.Worksheets.RemoveAt(0);
+bool has = wb.Worksheets.Contains("Sheet3");
+var names = wb.Worksheets.Names;          // ["Sheet3", ...]
+```
+
+### 2.8 文档属性
+
+```csharp
+var props = wb.Properties;
+props.Creator = "LiteExcel";
+props.Title = "示例报表";
+wb.Save();
+```
+
+### 2.9 List\<T\> / DataTable 便利 API
+
+```csharp
+// List<T> 映射（反射，不兼容 AOT）
+Excel.Write("out.xlsx", new[] { new Person { Name = "张三", Age = 25 } });
+var list = Excel.Read<Person>("out.xlsx");
+
+// DataTable（AOT 安全）
+var dt = Excel.ReadAsDataTable("out.xlsx");
+Excel.Write("out2.xlsx", dt);
+```
+
+`Excel.GetSheetNames(path)` 可列出所有工作表名。
+
+### 2.10 流式读写大文件
+
+```csharp
+// 流式写出：逐行写入，不驻留内存
+using (var writer = Excel.CreateWriter("large.xlsx"))
+{
+    writer.WriteRow(new object?[] { "姓名", "年龄" });
+    for (int i = 0; i < 100000; i++)
+        writer.WriteRow(new object?[] { $"用户{i}", i });
+}
+
+// 流式读取
+Excel.StreamRows("large.xlsx", "Sheet1", row =>
+{
+    Console.WriteLine(row[0]?.Text);
+});
+```
+
+### 2.11 公式与高级能力桥接
+
+```csharp
+ws.SetValue("A1", 1);
+ws.SetValue("A2", 2);
+ws.Cell("A3").SetValue(Cell.FromFormula("SUM(A1:A2)"));  // 写入公式字符串
+bool isFormula = ws.Cell("A3").IsFormula;
+
+ws.Merge("A1:B1");                    // 合并
+ws.FreezeHeader = true;               // 冻结表头
+ws.Range("A1:B1").Style = new CellStyle { Bold = true };
+```
+
+样式、合并、批注、数据验证、自动筛选、行高列宽等高级能力均可在 `Worksheet` 层直接使用，与低层 `SheetData` 能力一一对应。
+
+### 2.12 格式支持矩阵
+
+| 格式 | 读 | 写 | 说明 |
+|---|---|---|---|
+| `xlsx` | ✅ | ✅ | 完整读写 |
+| `xlsm` | ✅ | ✅ | 读写保存 |
+| `csv` | ✅ | ✅ | 仅表格数据，无样式/合并等 |
+| `xlsb` | ⚠️ 占位 | ❌ | 枚举已定义，未实现 |
+| `xls` | ⚠️ 占位 | ❌ | 枚举已定义，未实现 |
+
+### 2.13 新旧 API 对照
+
+| 场景 | 高层 API | 低层兼容 API |
+|---|---|---|
+| 打开文件 | `Excel.Open(path)` | `XlsxReader.Read(path, 0)` |
+| 新建/写出 | `Excel.Create()` + `SaveAs` | `XlsxWriter.Write(path, sheet)` |
+| 读单表 | `Workbook.Worksheets[i]` | `XlsxReader.Read(path, i)` |
+| 读为 List\<T\> | `Excel.Read<T>(path)` | `XlsxReader.Read<T>(path)` |
+| 读为 DataTable | `Excel.ReadAsDataTable(path)` | `XlsxReader.ReadAsDataTable(path)` |
+| 流式读 | `Excel.StreamRows(path, name, cb)` | `XlsxReader.StreamRows(path, name, cb)` |
+| 流式写 | `Excel.CreateWriter(path)` | `XlsxStreamWriter` |
+
+---
+
+## 3. 快速上手
 
 ### 最简写出
 
@@ -126,7 +346,7 @@ foreach (var row in sheet.Rows)
 
 ---
 
-## 3. 单元格与数据类型
+## 4. 单元格与数据类型
 
 ### Cell 类
 
@@ -201,7 +421,7 @@ var emptyCell = Cell.Empty;
 
 ---
 
-## 4. 读取
+## 5. 读取
 
 ### 列出所有工作表名
 
@@ -284,7 +504,7 @@ public sealed class SheetData
 
 ---
 
-## 5. 写出
+## 6. 写出
 
 ### 写单表
 
@@ -359,7 +579,7 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 6. 样式
+## 7. 样式
 
 ### 样式优先级（覆盖式）
 
@@ -488,7 +708,7 @@ var sheet = new SheetData
 
 ---
 
-## 7. 合并单元格
+## 8. 合并单元格
 
 ### 写出合并
 
@@ -533,7 +753,7 @@ foreach (var range in sheet.MergedRanges)
 
 ---
 
-## 8. 自动筛选
+## 9. 自动筛选
 
 ### 写出筛选（方式 1：传筛选条件）
 
@@ -638,7 +858,7 @@ if (sheet.Filter is not null)
 
 ---
 
-## 9. 行高与列宽
+## 10. 行高与列宽
 
 ### 设置行高
 
@@ -677,7 +897,7 @@ XlsxWriter.Write("output.xlsx", sheet);
 
 ---
 
-## 10. 单元格批注
+## 11. 单元格批注
 
 ### 写出批注
 
@@ -716,7 +936,7 @@ if (sheet.Comments is not null)
 
 ---
 
-## 11. 数据验证（下拉列表）
+## 12. 数据验证（下拉列表）
 
 ### 写出数据验证
 
@@ -779,7 +999,7 @@ if (sheet.Validations is not null)
 
 ---
 
-## 12. 追加数据
+## 13. 追加数据
 
 ### 追加到已有文件
 
@@ -844,7 +1064,7 @@ XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
 
 ---
 
-## 13. List&lt;T&gt; 映射（反射，不兼容 AOT）
+## 14. List&lt;T&gt; 映射（反射，不兼容 AOT）
 
 > **注意**：List&lt;T&gt; API 使用反射，不兼容 AOT/裁剪。AOT 项目请用 SheetData 或 DataTable。
 
@@ -949,7 +1169,7 @@ var list = XlsxReader.Read<Person>("people.xlsx", 0, opt => opt.Map(mapping));
 
 ---
 
-## 14. DataTable 便利 API（AOT 安全）
+## 15. DataTable 便利 API（AOT 安全）
 
 > DataTable 自带 schema，无需反射，AOT 安全。
 
@@ -983,7 +1203,7 @@ foreach (DataRow row in dt.Rows)
 
 ---
 
-## 15. Stream 读写
+## 16. Stream 读写
 
 所有读写 API 都有 Stream 重载，适合内存流/网络流场景。
 
@@ -1035,7 +1255,7 @@ var dt = XlsxReader.ReadAsDataTable(fs, 0);
 
 ---
 
-## 16. 流式读取与进度回调
+## 17. 流式读取与进度回调
 
 ### StreamRows（逐行回调）
 
@@ -1070,7 +1290,7 @@ var sheet = XlsxReader.ReadWithProgress("bigfile.xlsx", 0, (current, total) =>
 
 ---
 
-## 17. 文档属性（作者/时间/标题）
+## 18. 文档属性（作者/时间/标题）
 
 文件属性对话框里显示的信息（作者、最后保存者、创建时间、标题等）。
 
@@ -1129,7 +1349,7 @@ XlsxWriter.Write("output.xlsx", sheet);
 
 ---
 
-## 18. 错误处理
+## 19. 错误处理
 
 ### LiteExcelException
 
@@ -1176,17 +1396,18 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 19. AOT 兼容性
+## 20. AOT 兼容性
 
 ### AOT 安全的 API（无反射）
 
 | API | 说明 |
 |---|---|
+| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | 高层对象模型 |
+| `Excel.CreateWriter` / `Excel.StreamRows` | 流式读写 |
 | `Read(path/stream, ...)` | 返回 `SheetData` |
 | `Write(path/stream, SheetData)` | 接收 `SheetData` |
 | `ReadAsDataTable(...)` | DataTable 自带 schema |
 | `Write(path, DataTable)` | DataTable 写出 |
-| `StreamRows(...)` | 流式读 |
 | `GetSheetNames(...)` | 列出表名 |
 | `Append(...)` | 追加 |
 | `AutoColumnWidths(...)` | 列宽自适应 |
@@ -1195,14 +1416,14 @@ catch (InvalidSheetNameException ex)
 
 | API | 说明 |
 |---|---|
-| `Read<T>(...)` | List&lt;T&gt; 读取 |
-| `Write<T>(...)` | List&lt;T&gt; 写出 |
+| `Excel.Read<T>(...)` / `Read<T>(...)` | List&lt;T&gt; 读取 |
+| `Excel.Write<T>(...)` / `Write<T>(...)` | List&lt;T&gt; 写出 |
 
 > AOT 项目编译时，调用这些 API 会收到 `IL3050`/`IL2026` 警告。非 AOT 项目（net48、net8 普通发布）无影响。
 
 ---
 
-## 20. 完整 API 索引
+## 21. 完整 API 索引
 
 ### XlsxReader
 

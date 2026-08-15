@@ -1,6 +1,38 @@
 # Changelog
 
-## [2.1.3] - 2026-08-14
+## [2.2.0] - 2026-08-15
+
+### Added
+- **高层 API（Excel 门面）**：新增统一入口 `Excel`，提供 `Excel.Open(path)`、`Excel.Create(format)`、`Excel.Read<T>(path)`、`Excel.Write<T>(path, data)`、`Excel.ReadAsDataTable(path)`、`Excel.Write(path, DataTable)`、`Excel.GetSheetNames(path)`、`Excel.StreamRows(path, name, onRow)`、`Excel.CreateWriter(path/stream)` 等。
+- **对象模型层级**：`Workbook -> Worksheet -> Cells/Cell/ExcelRange`，坐标统一为 1-based，支持 A1 地址。
+  - `Workbook`：`Worksheets` 集合（新增/删除/移动/按名访问）、`Properties` 文档属性、`Save()` / `SaveAs(path[, format])` / `Save(stream, format)`。
+  - `Worksheet`：`Cell("A1")` / `Cell(row, col)` / `Range("A1:D10")` / `Cells`、`SetValue`、`Merge` / `Unmerge`、冻结表头、样式、批注、验证、筛选。
+  - `Cells`：索引器（1-based 坐标 / A1 地址）、`Range(...)`、枚举、批量清空。
+  - `ExcelRange`：`Fill` / `Clear` / `Style` / `Merge` / `Unmerge` / `ToValues` / `ToCells` / 枚举。类名为 `ExcelRange`（非 `Range`），避免与 BCL `System.Range` 冲突。
+- **`Cell` 便利方法**：`GetString` / `GetDouble` / `GetDateTime` / `GetBoolean` / `TryGet*` / `GetValue` / `SetValue`、`Style` / `NumberFormat`。
+- **公式字符串支持**：读取解析 `<f>` 公式文本，写入输出 `<f>` + 缓存 `<v>`，不做公式计算引擎。`Cell.FromFormula` / `Cell.IsFormula`。
+- **CSV 格式后端**：`ExcelFormat.Csv` 读写，RFC4180 子集（含分隔符/换行的字段用引号包裹，UTF-8 BOM）。CSV 仅覆盖表格数据，不支持样式/合并等 Excel 专有能力。
+- **流式写入**：`XlsxStreamWriter`（`Excel.CreateWriter` 创建），逐行写入大文件不驻留内存，使用内联字符串；与流式读取 `StreamRows` 对应。
+- **冻结表头读取**：`XlsxReader` 新增解析 `<pane state="frozen">`，`FreezeHeader` 可正确读回。
+- **格式枚举占位**：`ExcelFormat.Xlsb` / `Xls` 已定义，读写抛 `NotSupportedException`。
+
+### Changed
+- **`Range` 更名 `ExcelRange`**：为避免与 BCL `System.Range` 的命名冲突，高层区域类型命名为 `ExcelRange`。
+- **高层 API 读取首行语义**：高层 `Worksheet` 采用原始网格模型，首行不强制拆分表头，表头识别归属映射层（`Excel.Read<T>` / `ReadAsDataTable` 仍按原语义处理）。
+
+### Fixed
+- **`Cell.SetValue` 写回遗漏**：`SetValue` 的 `CopyFrom` 分支未触发单元格变更通知，导致新值/公式/样式不落入网格，已修复。
+- **`SheetToDataTable` 输入副作用**：无表头时不再修改传入 `SheetData` 的 `Headers`（在副本上补齐列名）。
+
+### Notes / 兼容性
+- 低层 API（`XlsxReader` / `XlsxWriter` / `SheetData` / `Cell` / `DataTable` / `List<T>`）全部保留，未做任何破坏性变更；新旧 API 混用，写出的文件互相兼容。
+- 高层 API 中仅 `List<T>` 反射入口（`Excel.Read<T>` / `Excel.Write<T>`）不兼容 AOT，其余对象模型与便利 API 均为 AOT 安全。
+- 已知限制：`xlsb` / `xls` 未实现；图片、图表、透视表、条件格式不在本版本范围。
+
+## [2.1.4] - 2026-08-14
+
+### Changed
+- **发布元数据**：补充 `RepositoryUrl`、`PackageProjectUrl`，更新包描述与版权信息；无 API 变更。
 
 ### Fixed
 - **Append 文档属性保留**：Append 现保留已有工作簿的作者、标题、主题和创建时间，并自动更新最后修改时间。

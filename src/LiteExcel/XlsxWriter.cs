@@ -82,7 +82,7 @@ public static partial class XlsxWriter
             {
                 foreach (var cell in row)
                 {
-                    if (cell.Type == CellType.Text && cell.Text is not null)
+                    if (cell.Type == CellType.Text && !cell.IsFormula && cell.Text is not null)
                         RegisterSharedString(cell.Text, sharedStrings, sharedIndex);
                 }
             }
@@ -529,6 +529,28 @@ public static partial class XlsxWriter
         // 使用解析后的样式（优先级已在外部处理），或 cell 自带的样式
         int styleId = stylesheet.GetOrCreateXfId(resolvedStyle ?? cell.Style, cell.NumberFormat);
         var styleAttr = styleId > 0 ? $" s=\"{styleId}\"" : "";
+
+        // 公式单元格：写 <f> 公式文本 + <v> 缓存值（不做公式计算）
+        if (cell.IsFormula && !string.IsNullOrEmpty(cell.Text))
+        {
+            var fEsc = XmlEscape(cell.Text);
+            switch (cell.Type)
+            {
+                case CellType.Number:
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr}><f>{fEsc}</f><v>{FormatDouble(cell.Number)}</v></c>");
+                    break;
+                case CellType.Date:
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr}><f>{fEsc}</f><v>{FormatDouble(cell.Date.ToOADate())}</v></c>");
+                    break;
+                case CellType.Boolean:
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr} t=\"b\"><f>{fEsc}</f><v>{(cell.Boolean ? 1 : 0)}</v></c>");
+                    break;
+                default:
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr}><f>{fEsc}</f></c>");
+                    break;
+            }
+            return;
+        }
 
         switch (cell.Type)
         {

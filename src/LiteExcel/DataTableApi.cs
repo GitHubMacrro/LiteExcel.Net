@@ -48,15 +48,17 @@ public static partial class XlsxReader
     {
         var dt = new DataTable(sheet.SheetName);
 
-        int colCount = sheet.Headers.Count;
+        var headers = sheet.Headers;
+        int colCount = headers.Count;
         if (colCount == 0 && sheet.Rows.Count > 0)
         {
             colCount = sheet.Rows[0].Count;
+            headers = new List<string>(colCount);
             for (int i = 0; i < colCount; i++)
-                sheet.Headers.Add($"Column{i + 1}");
+                headers.Add($"Column{i + 1}");
         }
 
-        foreach (var header in sheet.Headers)
+        foreach (var header in headers)
         {
             dt.Columns.Add(header, typeof(object));
         }
