@@ -3,7 +3,7 @@
 A lightweight, zero-dependency .NET library for reading and writing Excel xlsx/xlsm/csv files.
 轻量级 xlsx/xlsm/csv 读写库，零第三方依赖，AOT 友好。
 
-**Version / 版本**: 2.2.0
+**Version / 版本**: 2.2.1
 
 ## Language / 语言
 

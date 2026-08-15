@@ -1,5 +1,7 @@
+using LiteExcel.Internal;
 using System.Data;
 using System.IO;
+using System.IO.Compression;
 
 namespace LiteExcel;
 
@@ -51,9 +53,18 @@ public static class Excel
                 throw new NotSupportedException($"{format} 读取后端尚未实现，当前仅支持 xlsx/xlsm/csv");
         }
 
-        var sheets = XlsxReader.ReadAllRaw(path);
-        var props = XlsxReader.ReadProperties(path);
-        var wb = Workbook.FromSheetData(sheets, props, format, path);
+        // 单次解压内完成读表/读属性/捕获保留部件，保证三者来自同一文件快照
+        Workbook wb;
+        OoxmlPreservedParts? preserved;
+        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true))
+        {
+            var sheets = XlsxReader.ReadAllRaw(zip);
+            var props = XlsxReader.ReadProperties(zip);
+            preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
+            wb = Workbook.FromSheetData(sheets, props, format, path);
+        }
+        wb.PreservedParts = preserved;
 
         if (options.FillMergedCells)
         {

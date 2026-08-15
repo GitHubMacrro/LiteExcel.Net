@@ -1,7 +1,9 @@
 using LiteExcel.Internal;
 using System.Globalization;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 
 namespace LiteExcel;
 public static partial class XlsxWriter
@@ -56,6 +58,17 @@ public static partial class XlsxWriter
     /// <summary>写出多表到流，并携带文档属性 </summary>
     public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties)
     {
+        Write(stream, sheets, properties, null, true);
+    }
+
+    /// <summary>
+    /// 写出多表到流，并携带文档属性与打开时捕获的保留部件。
+    /// <paramref name="preserved"/> 为打开工作簿时捕获的未重建 OOXML 部件（宏/主题/绘图等）；
+    /// <paramref name="mergeSheetRels"/> 为 false 时丢弃工作表级保留 rels（工作表结构已变化）。
+    /// </summary>
+    internal static void Write(Stream stream, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties,
+        OoxmlPreservedParts? preserved, bool mergeSheetRels)
+    {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
 
@@ -99,10 +112,17 @@ public static partial class XlsxWriter
                 sheetsWithComments.Add(i);
         }
 
-        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null));
-        WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null));
+        // 先写保留部件（blob），再写重建部件，避免重名时重建优先
+        if (preserved is not null)
+        {
+            foreach (var kv in preserved.Parts)
+                WriteEntry(zip, kv.Key, kv.Value);
+        }
+
+        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved));
+        WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
         WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets));
-        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count));
+        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count, preserved));
 
         // 文档属性（文件属性对话框信息）
         if (properties is not null)
@@ -117,10 +137,17 @@ public static partial class XlsxWriter
             WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
 
             // 批注：每张有批注的 sheet 对应一个 comments 文件
-            if (sheets[i].Comments is { Count: > 0 })
+            bool hasComments = sheets[i].Comments is { Count: > 0 };
+            if (hasComments)
             {
-                WriteXmlEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.xml.rels", SheetRelsXml(i + 1));
                 WriteXmlEntry(zip, $"xl/comments{i + 1}.xml", CommentsXml(sheets[i].Comments!));
+            }
+
+            // 工作表 rels：合并保留的绘图/超链接等 rel（工作表结构未变时）
+            var sheetRels = MergeSheetRels(i + 1, hasComments, preserved, mergeSheetRels);
+            if (sheetRels is not null)
+            {
+                WriteXmlEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.xml.rels", sheetRels);
             }
         }
 
@@ -590,30 +617,62 @@ public static partial class XlsxWriter
 
     // ── OOXML 部件构建 ──
 
-    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps)
+    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved)
     {
+        var defaults = new List<(string Ext, string Ct)>();
+        var overrides = new List<(string Part, string Ct)>();
+
+        // 写入器固有声明
+        defaults.Add(("rels", "application/vnd.openxmlformats-package.relationships+xml"));
+        defaults.Add(("xml", "application/xml"));
+        overrides.Add(("/xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"));
+        for (int i = 1; i <= sheetCount; i++)
+        {
+            overrides.Add(($"/xl/worksheets/sheet{i}.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"));
+        }
+        overrides.Add(("/xl/sharedStrings.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"));
+        overrides.Add(("/xl/styles.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"));
+        foreach (var sheetIdx in sheetsWithComments)
+        {
+            overrides.Add(($"/xl/comments{sheetIdx + 1}.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"));
+        }
+        if (hasProps)
+        {
+            overrides.Add(("/docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml"));
+            overrides.Add(("/docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml"));
+        }
+
+        // 保留的声明（排除与重建部件冲突的）
+        if (preserved is not null)
+        {
+            foreach (var d in preserved.DefaultTypes)
+            {
+                if (d.Extension == "rels" || d.Extension == "xml") continue;
+                defaults.Add(d);
+            }
+            var rebuiltEntries = OoxmlPreservedParts.BuildRebuiltEntries(sheetCount);
+            foreach (var o in preserved.OverrideTypes)
+            {
+                if (rebuiltEntries.Contains(o.PartName.TrimStart('/'))) continue;
+                overrides.Add(o);
+            }
+        }
+
+        // 去重后输出
+        var seenExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenPart = new HashSet<string>(StringComparer.Ordinal);
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
-        sb.Append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
-        sb.Append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
-        sb.Append("<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>");
-        for (int i = 1; i <= sheetCount; i++)
+        foreach (var d in defaults)
         {
-            sb.Append($"<Override PartName=\"/xl/worksheets/sheet{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>");
+            if (seenExt.Add(d.Ext))
+                sb.Append($"<Default Extension=\"{d.Ext}\" ContentType=\"{d.Ct}\"/>");
         }
-        sb.Append("<Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>");
-        sb.Append("<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>");
-        // 批注部件 Override
-        foreach (var sheetIdx in sheetsWithComments)
+        foreach (var o in overrides)
         {
-            sb.Append($"<Override PartName=\"/xl/comments{sheetIdx + 1}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml\"/>");
-        }
-        // 文档属性 Override
-        if (hasProps)
-        {
-            sb.Append("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
-            sb.Append("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
+            if (seenPart.Add(o.Part))
+                sb.Append($"<Override PartName=\"{o.Part}\" ContentType=\"{o.Ct}\"/>");
         }
         sb.Append("</Types>");
         return sb.ToString();
@@ -627,6 +686,122 @@ public static partial class XlsxWriter
         sb.Append($"<Relationship Id=\"rId1\" Type=\"{OfficeRelNs}/comments\" Target=\"../comments{sheetNumber}.xml\"/>");
         sb.Append("</Relationships>");
         return sb.ToString();
+    }
+
+    // ── rels 合并（保留部件） ──
+
+    private sealed class RelInfo
+    {
+        public string Id = "";
+        public string Type = "";
+        public string Target = "";
+        public string TargetMode = "";
+    }
+
+    /// <summary>合并工作表级 rels：保留未重建目标（绘图/超链接等），追加重建的批注 rel。返回 null 表示无需写出 </summary>
+    private static string? MergeSheetRels(int sheetNumber, bool hasComments, OoxmlPreservedParts? preserved, bool mergeSheetRels)
+    {
+        string original = "";
+        if (mergeSheetRels && preserved is not null
+            && preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetNumber}.xml.rels", out var r))
+        {
+            original = r;
+        }
+
+        string rebuilt = hasComments ? SheetRelsXml(sheetNumber) : "";
+        var rebuiltTargets = new HashSet<string> { $"xl/comments{sheetNumber}.xml" };
+        return MergeRelsXml(original, "xl/worksheets", rebuiltTargets, rebuilt);
+    }
+
+    /// <summary>
+    /// 合并 rels：保留原始 rels 中不指向重建部件的条目（外部链接始终保留），
+    /// 追加写入器生成的重建 rels。保留条目的 rId 重新编号以避免冲突。
+    /// 全部为空时返回 null。
+    /// </summary>
+    private static string? MergeRelsXml(string originalRelsXml, string baseDir, HashSet<string> rebuiltTargets, string rebuiltRelsXml)
+    {
+        var kept = new List<RelInfo>();
+        if (!string.IsNullOrEmpty(originalRelsXml))
+        {
+            foreach (var rel in ParseRels(originalRelsXml))
+            {
+                if (rel.TargetMode == "External")
+                {
+                    kept.Add(rel);
+                    continue;
+                }
+                var abs = ResolveRelsTarget(baseDir, rel.Target);
+                if (rebuiltTargets.Contains(abs)) continue;
+                kept.Add(rel);
+            }
+        }
+
+        var rebuilt = ParseRels(rebuiltRelsXml);
+        if (kept.Count == 0 && rebuilt.Count == 0) return null;
+
+        var usedIds = new HashSet<string>(rebuilt.Select(x => x.Id), StringComparer.Ordinal);
+        int next = 1;
+        foreach (var rel in kept)
+        {
+            string id;
+            do { id = "rId" + next++; } while (usedIds.Contains(id));
+            rel.Id = id;
+            usedIds.Add(id);
+        }
+
+        var sb = new StringBuilder(256);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<Relationships xmlns=\"{RelNs}\">");
+        foreach (var rel in kept.Concat(rebuilt))
+        {
+            sb.Append($"<Relationship Id=\"{rel.Id}\" Type=\"{XmlEscape(rel.Type)}\" Target=\"{XmlEscape(rel.Target)}\"");
+            if (rel.TargetMode.Length > 0)
+                sb.Append($" TargetMode=\"{XmlEscape(rel.TargetMode)}\"");
+            sb.Append("/>");
+        }
+        sb.Append("</Relationships>");
+        return sb.ToString();
+    }
+
+    private static List<RelInfo> ParseRels(string xml)
+    {
+        var list = new List<RelInfo>();
+        if (string.IsNullOrEmpty(xml)) return list;
+        var doc = XDocument.Parse(xml);
+        if (doc.Root is null) return list;
+        var ns = doc.Root.GetDefaultNamespace();
+        foreach (var el in doc.Root.Elements(ns + "Relationship"))
+        {
+            list.Add(new RelInfo
+            {
+                Id = (string?)el.Attribute("Id") ?? "",
+                Type = (string?)el.Attribute("Type") ?? "",
+                Target = (string?)el.Attribute("Target") ?? "",
+                TargetMode = (string?)el.Attribute("TargetMode") ?? "",
+            });
+        }
+        return list;
+    }
+
+    private static string ResolveRelsTarget(string baseDir, string target)
+    {
+        target = target.Replace('\\', '/');
+        if (target.StartsWith("/")) return target.TrimStart('/');
+
+        var combined = (string.IsNullOrEmpty(baseDir) ? "" : baseDir + "/") + target;
+        var parts = combined.Split('/');
+        var stack = new List<string>();
+        foreach (var p in parts)
+        {
+            if (string.IsNullOrEmpty(p) || p == ".") continue;
+            if (p == "..")
+            {
+                if (stack.Count > 0) stack.RemoveAt(stack.Count - 1);
+                continue;
+            }
+            stack.Add(p);
+        }
+        return string.Join("/", stack);
     }
 
     private static string CommentsXml(IReadOnlyDictionary<string, string> comments)
@@ -653,7 +828,23 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string RootRelsXml(bool hasProps)
+    private static string RootRelsXml(bool hasProps, OoxmlPreservedParts? preserved)
+    {
+        var rebuiltTargets = new HashSet<string> { "xl/workbook.xml" };
+        if (hasProps)
+        {
+            rebuiltTargets.Add("docProps/core.xml");
+            rebuiltTargets.Add("docProps/app.xml");
+        }
+
+        string original = "";
+        if (preserved is not null && preserved.Rels.TryGetValue("_rels/.rels", out var r))
+            original = r;
+
+        return MergeRelsXml(original, "", rebuiltTargets, WriterRootRels(hasProps)) ?? WriterRootRels(hasProps);
+    }
+
+    private static string WriterRootRels(bool hasProps)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -739,7 +930,24 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string WorkbookRelsXml(int sheetCount)
+    private static string WorkbookRelsXml(int sheetCount, OoxmlPreservedParts? preserved)
+    {
+        var rebuiltTargets = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 1; i <= sheetCount; i++)
+        {
+            rebuiltTargets.Add($"xl/worksheets/sheet{i}.xml");
+        }
+        rebuiltTargets.Add("xl/sharedStrings.xml");
+        rebuiltTargets.Add("xl/styles.xml");
+
+        string original = "";
+        if (preserved is not null && preserved.Rels.TryGetValue("xl/_rels/workbook.xml.rels", out var r))
+            original = r;
+
+        return MergeRelsXml(original, "xl", rebuiltTargets, WriterWorkbookRels(sheetCount)) ?? WriterWorkbookRels(sheetCount);
+    }
+
+    private static string WriterWorkbookRels(int sheetCount)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -779,6 +987,13 @@ public static partial class XlsxWriter
         var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
         using var stream = entry.Open();
         var bytes = new UTF8Encoding(false).GetBytes(xml);
+        stream.Write(bytes, 0, bytes.Length);
+    }
+
+    private static void WriteEntry(ZipArchive zip, string entryName, byte[] bytes)
+    {
+        var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
+        using var stream = entry.Open();
         stream.Write(bytes, 0, bytes.Length);
     }
 

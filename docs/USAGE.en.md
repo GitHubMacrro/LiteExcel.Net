@@ -1,6 +1,6 @@
 # LiteExcel Usage Guide
 
-**Version**: 2.2.0  
+**Version**: 2.2.1  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.0" />
+  <PackageReference Include="LiteExcel" Version="2.2.1" />
 </ItemGroup>
 ```
 
@@ -264,10 +264,14 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 | Format | Read | Write | Notes |
 |---|---|---|---|
 | `xlsx` | ✅ | ✅ | full read/write |
-| `xlsm` | ✅ | ✅ | read/write/save |
+| `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part preserved on save |
 | `csv` | ✅ | ✅ | tabular data only, no styles/merge |
 | `xlsb` | ⚠️ placeholder | ❌ | enum defined, not implemented |
 | `xls` | ⚠️ placeholder | ❌ | enum defined, not implemented |
+
+> **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros.
+>
+> **Degradation rule**: if the workbook structure changed after open (sheets added/removed/renamed/moved), sheet-level unmapped relationships (drawings, hyperlinks) are not re-attached to the new file, though the raw part bytes are still kept as harmless unreferenced entries. Workbook-level parts (macros, theme) are unaffected by structure changes.
 
 ### 2.13 Old vs New API
 

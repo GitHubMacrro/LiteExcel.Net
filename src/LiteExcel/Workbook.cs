@@ -1,4 +1,6 @@
+using LiteExcel.Internal;
 using System.IO;
+using System.Linq;
 
 namespace LiteExcel;
 
@@ -10,6 +12,7 @@ namespace LiteExcel;
 public sealed class Workbook
 {
     private string? _currentPath;
+    private List<string>? _openedSheetNames;
 
     /// <summary>工作表集合 </summary>
     public WorksheetCollection Worksheets { get; }
@@ -19,6 +22,12 @@ public sealed class Workbook
 
     /// <summary>当前工作簿格式 </summary>
     public ExcelFormat Format { get; private set; }
+
+    /// <summary>
+    /// 打开时捕获的、写入器不重建的 OOXML 部件（宏/主题/绘图/图表等）。
+    /// 保存时按二进制透传，避免未映射部件被静默删除。新建工作簿为 null。
+    /// </summary>
+    internal OoxmlPreservedParts? PreservedParts { get; set; }
 
     /// <summary>
     /// 当前目标路径。
@@ -45,6 +54,7 @@ public sealed class Workbook
         {
             Format = format,
             _currentPath = path,
+            _openedSheetNames = sheets.Select(s => s.SheetName).ToList(),
         };
         if (properties is not null)
         {
@@ -114,7 +124,8 @@ public sealed class Workbook
             case ExcelFormat.Xlsx:
             case ExcelFormat.Xlsm:
                 var sheets = BuildSheetDataList();
-                XlsxWriter.Write(stream, sheets, Properties);
+                bool structureUnchanged = StructureUnchanged(sheets);
+                XlsxWriter.Write(stream, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged);
                 break;
             case ExcelFormat.Csv:
                 if (Worksheets.Count != 1)
@@ -135,6 +146,19 @@ public sealed class Workbook
         foreach (var ws in Worksheets)
             list.Add(ws.ToSheetData());
         return list;
+    }
+
+    /// <summary>工作表数量与顺序相对打开时是否未变（决定能否复用工作表级保留 rels） </summary>
+    private bool StructureUnchanged(List<SheetData> sheets)
+    {
+        if (_openedSheetNames is null || sheets.Count != _openedSheetNames.Count)
+            return false;
+        for (int i = 0; i < sheets.Count; i++)
+        {
+            if (sheets[i].SheetName != _openedSheetNames[i])
+                return false;
+        }
+        return true;
     }
 
     // ── 集合回调 ──

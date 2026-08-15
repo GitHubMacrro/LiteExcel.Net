@@ -221,9 +221,14 @@ public static partial class XlsxReader
     /// <summary>从流读取工作簿文档属性 无属性时返回空对象 </summary>
     public static WorkbookProperties ReadProperties(Stream stream)
     {
-        var props = new WorkbookProperties();
-
         using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        return ReadProperties(zip);
+    }
+
+    /// <summary>从 ZipArchive 读取工作簿文档属性（供单次解压复用） </summary>
+    internal static WorkbookProperties ReadProperties(ZipArchive zip)
+    {
+        var props = new WorkbookProperties();
 
         var coreEntry = zip.GetEntry("docProps/core.xml");
         if (coreEntry is not null)

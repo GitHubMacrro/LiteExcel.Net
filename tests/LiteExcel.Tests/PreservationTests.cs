@@ -1,0 +1,230 @@
+using LiteExcel;
+using System.IO.Compression;
+using System.Text;
+using System.Xml.Linq;
+using Xunit;
+
+namespace LiteExcel.Tests;
+
+/// <summary>
+/// 打开-修改-保存 时未映射 OOXML 部件（宏/主题/绘图/自定义 rels）的保留行为。
+/// </summary>
+public class PreservationTests
+{
+    private static readonly byte[] FakeVba = { 0xCC, 0xFE, 0xED, 0x01, 0x02, 0x03, 0x00, 0xFF };
+
+    private static string GetTempFile(string ext) =>
+        Path.Combine(Path.GetTempPath(), $"litexlsx_pres_{Guid.NewGuid():N}{ext}");
+
+    /// <summary>向已生成的 xlsx/xlsm 注入 vbaProject.bin、theme、drawing 部件及其 rels / content types 声明 </summary>
+    private static void InjectExtraParts(string file)
+    {
+        using var zip = new ZipArchive(File.Open(file, FileMode.Open, FileAccess.ReadWrite), ZipArchiveMode.Update);
+
+        var vba = zip.CreateEntry("xl/vbaProject.bin");
+        using (var s = vba.Open()) s.Write(FakeVba, 0, FakeVba.Length);
+
+        var theme = zip.CreateEntry("xl/theme/theme1.xml");
+        using (var s = theme.Open())
+        {
+            var bytes = Encoding.UTF8.GetBytes("<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office Theme\"/>");
+            s.Write(bytes, 0, bytes.Length);
+        }
+
+        var drawing = zip.CreateEntry("xl/drawings/drawing1.xml");
+        using (var s = drawing.Open())
+        {
+            var bytes = Encoding.UTF8.GetBytes("<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"/>");
+            s.Write(bytes, 0, bytes.Length);
+        }
+
+        var wbRels = zip.GetEntry("xl/_rels/workbook.xml.rels")!;
+        using (var s = wbRels.Open())
+        {
+            var doc = XDocument.Load(s);
+            var ns = doc.Root!.GetDefaultNamespace();
+            doc.Root.Add(new XElement(ns + "Relationship",
+                new XAttribute("Id", "rId901"),
+                new XAttribute("Type", "http://schemas.microsoft.com/office/2006/relationships/vbaProject"),
+                new XAttribute("Target", "vbaProject.bin")));
+            doc.Root.Add(new XElement(ns + "Relationship",
+                new XAttribute("Id", "rId902"),
+                new XAttribute("Type", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"),
+                new XAttribute("Target", "theme/theme1.xml")));
+            s.Position = 0;
+            s.SetLength(0);
+            doc.Save(s);
+        }
+
+        var sheetRels = zip.CreateEntry("xl/worksheets/_rels/sheet1.xml.rels");
+        using (var s = sheetRels.Open())
+        {
+            var rels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing\" Target=\"../drawings/drawing1.xml\"/>" +
+                "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"https://example.com\" TargetMode=\"External\"/>" +
+                "</Relationships>";
+            var bytes = Encoding.UTF8.GetBytes(rels);
+            s.Write(bytes, 0, bytes.Length);
+        }
+
+        var ct = zip.GetEntry("[Content_Types].xml")!;
+        using (var s = ct.Open())
+        {
+            var doc = XDocument.Load(s);
+            var ns = doc.Root!.GetDefaultNamespace();
+            doc.Root.Add(new XElement(ns + "Default",
+                new XAttribute("Extension", "bin"),
+                new XAttribute("ContentType", "application/vnd.ms-office.vbaProject")));
+            doc.Root.Add(new XElement(ns + "Override",
+                new XAttribute("PartName", "/xl/theme/theme1.xml"),
+                new XAttribute("ContentType", "application/vnd.openxmlformats-officedocument.theme+xml")));
+            doc.Root.Add(new XElement(ns + "Override",
+                new XAttribute("PartName", "/xl/drawings/drawing1.xml"),
+                new XAttribute("ContentType", "application/vnd.openxmlformats-officedocument.drawing+xml")));
+            s.Position = 0;
+            s.SetLength(0);
+            doc.Save(s);
+        }
+    }
+
+    private static string ReadText(ZipArchiveEntry entry)
+    {
+        using var s = entry.Open();
+        using var r = new StreamReader(s, Encoding.UTF8);
+        return r.ReadToEnd();
+    }
+
+    private static byte[] ReadBytes(ZipArchiveEntry entry)
+    {
+        using var s = entry.Open();
+        using var ms = new MemoryStream();
+        s.CopyTo(ms);
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void Open_Modify_Save_PreservesUnknownParts_And_Data()
+    {
+        var file = GetTempFile(".xlsx");
+        try
+        {
+            var wb = Excel.Create();
+            wb.Worksheets["Sheet1"].SetValue("A1", "数据");
+            wb.SaveAs(file);
+            InjectExtraParts(file);
+
+            var opened = Excel.Open(file);
+            opened.Worksheets[0].SetValue("B1", "新增");
+            opened.Save();
+
+            // 值往返
+            var reopened = Excel.Open(file);
+            Assert.Equal("数据", reopened.Worksheets[0].Cell("A1").GetString());
+            Assert.Equal("新增", reopened.Worksheets[0].Cell("B1").GetString());
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            // 未映射部件按 blob 保留
+            var vba = zip.GetEntry("xl/vbaProject.bin");
+            Assert.NotNull(vba);
+            Assert.Equal(FakeVba, ReadBytes(vba!));
+            Assert.NotNull(zip.GetEntry("xl/theme/theme1.xml"));
+            Assert.NotNull(zip.GetEntry("xl/drawings/drawing1.xml"));
+
+            // 工作簿 rels 合并：vbaProject + theme 关系保留
+            var wbRels = ReadText(zip.GetEntry("xl/_rels/workbook.xml.rels")!);
+            Assert.Contains("/vbaProject", wbRels);
+            Assert.Contains("theme/theme1.xml", wbRels);
+
+            // 工作表 rels 合并：drawing + 外部超链接保留
+            var sheetRels = ReadText(zip.GetEntry("xl/worksheets/_rels/sheet1.xml.rels")!);
+            Assert.Contains("drawings/drawing1.xml", sheetRels);
+            Assert.Contains("TargetMode=\"External\"", sheetRels);
+
+            // content types 保留 bin / theme / drawing 声明
+            var ct = ReadText(zip.GetEntry("[Content_Types].xml")!);
+            Assert.Contains("vbaProject", ct);
+            Assert.Contains("theme1.xml", ct);
+            Assert.Contains("drawing1.xml", ct);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Open_Modify_Save_PreservesMacroPart_Xlsm()
+    {
+        var file = GetTempFile(".xlsm");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsm);
+            wb.Worksheets["Sheet1"].SetValue("A1", "宏表");
+            wb.SaveAs(file);
+            InjectExtraParts(file);
+
+            var opened = Excel.Open(file);
+            Assert.Equal(ExcelFormat.Xlsm, opened.Format);
+            opened.Worksheets[0].SetValue("A2", "x");
+            opened.Save();
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            var vba = zip.GetEntry("xl/vbaProject.bin");
+            Assert.NotNull(vba);
+            Assert.Equal(FakeVba, ReadBytes(vba!));
+
+            var wbRels = ReadText(zip.GetEntry("xl/_rels/workbook.xml.rels")!);
+            Assert.Contains("/vbaProject", wbRels);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void StructureChanged_DropsSheetRels_ButKeepsBlobs()
+    {
+        var file = GetTempFile(".xlsx");
+        try
+        {
+            var wb = Excel.Create();
+            wb.Worksheets["Sheet1"].SetValue("A1", "v");
+            wb.SaveAs(file);
+            InjectExtraParts(file);
+
+            var opened = Excel.Open(file);
+            opened.Worksheets[0].Name = "改名"; // 结构变化
+            opened.Save();
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            // 结构变化时不再合并工作表级保留 rels
+            var sheetRels = zip.GetEntry("xl/worksheets/_rels/sheet1.xml.rels");
+            if (sheetRels is not null)
+            {
+                var text = ReadText(sheetRels);
+                Assert.DoesNotContain("drawings/drawing1.xml", text);
+            }
+            // 但 blob 部件仍保留（无害孤儿）
+            Assert.NotNull(zip.GetEntry("xl/drawings/drawing1.xml"));
+            Assert.NotNull(zip.GetEntry("xl/vbaProject.bin"));
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void NewWorkbook_Save_HasNoPreservedParts()
+    {
+        var file = GetTempFile(".xlsx");
+        try
+        {
+            var wb = Excel.Create();
+            wb.Worksheets["Sheet1"].SetValue("A1", "1");
+            wb.SaveAs(file);
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            Assert.Null(zip.GetEntry("xl/vbaProject.bin"));
+            Assert.Null(zip.GetEntry("xl/worksheets/_rels/sheet1.xml.rels"));
+
+            // rels 仅含写入器固有条目
+            var wbRels = ReadText(zip.GetEntry("xl/_rels/workbook.xml.rels")!);
+            Assert.DoesNotContain("vbaProject", wbRels);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+}

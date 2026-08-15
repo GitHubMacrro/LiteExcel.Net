@@ -19,6 +19,12 @@ public static partial class XlsxReader
     internal static List<SheetData> ReadAllRaw(Stream stream)
     {
         using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        return ReadAllRaw(zip);
+    }
+
+    /// <summary>原始模式读取所有工作表（ZipArchive 重载，供单次解压复用） </summary>
+    internal static List<SheetData> ReadAllRaw(ZipArchive zip)
+    {
         var shared = ReadSharedStrings(zip);
         var styles = ReadStyles(zip);
         var sheets = ReadWorkbook(zip);
