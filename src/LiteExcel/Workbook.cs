@@ -126,7 +126,8 @@ public sealed class Workbook
             case ExcelFormat.Xlsm:
                 var sheets = BuildSheetDataList();
                 bool structureUnchanged = StructureUnchanged(sheets);
-                XlsxWriter.Write(stream, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged);
+                XlsxWriter.Write(stream, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
+                    macroEnabled: format == ExcelFormat.Xlsm);
                 break;
             case ExcelFormat.Csv:
                 if (Worksheets.Count != 1)
