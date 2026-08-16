@@ -95,7 +95,7 @@ foreach (var row in read.Rows)
 | 类型 / 方法 | 说明 |
 |---|---|
 | `Excel.Open(path)` | 按扩展名自动识别格式打开工作簿 |
-| `Excel.Create(format)` / `Excel.Create(sheetName, format)` | 新建工作簿（xlsx/xlsm/csv） |
+| `Excel.Create(format)` / `Excel.Create(sheetName, format)` / `Excel.Create(sheetNames[], format)` | 新建工作簿（xlsx/xlsm/csv），支持批量添加工作表 |
 | `Excel.Read<T>(path, sheetName?)` | 读为 List\<T\>（反射，不兼容 AOT） |
 | `Excel.ReadAsDataTable(path, sheetName?)` | 读为 DataTable（AOT 安全） |
 | `Excel.Write(path, Workbook)` | 写出工作簿 |

@@ -95,7 +95,7 @@ foreach (var row in read.Rows)
 | Type / Method | Description |
 |---|---|
 | `Excel.Open(path)` | open a workbook, format auto-detected from extension |
-| `Excel.Create(format)` / `Excel.Create(sheetName, format)` | create a workbook (xlsx/xlsm/csv) |
+| `Excel.Create(format)` / `Excel.Create(sheetName, format)` / `Excel.Create(sheetNames[], format)` | create a workbook (xlsx/xlsm/csv), batch sheet creation supported |
 | `Excel.Read<T>(path, sheetName?)` | read as List\<T\> (reflection, not AOT compatible) |
 | `Excel.ReadAsDataTable(path, sheetName?)` | read as DataTable (AOT safe) |
 | `Excel.Write(path, Workbook)` | write a workbook |
