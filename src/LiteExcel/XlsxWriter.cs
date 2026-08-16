@@ -30,12 +30,15 @@ public static partial class XlsxWriter
         Write(path, sheets, null);
     }
 
-    /// <summary>写出多表，并携带文档属性 </summary>
+    /// <summary>写出多表，并携带文档属性。目标为 .xlsm 时写出 macroEnabled 主文档类型 </summary>
     public static void Write(string path, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties)
     {
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
-        Write(fs, sheets, properties);
+        Write(fs, sheets, properties, null, true, macroEnabled: IsXlsmPath(path));
     }
+
+    private static bool IsXlsmPath(string path) =>
+        string.Equals(Path.GetExtension(path), ".xlsm", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>写出单表到流 </summary>
     public static void Write(Stream stream, SheetData data)
@@ -67,7 +70,7 @@ public static partial class XlsxWriter
     /// <paramref name="mergeSheetRels"/> 为 false 时丢弃工作表级保留 rels（工作表结构已变化）。
     /// </summary>
     internal static void Write(Stream stream, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties,
-        OoxmlPreservedParts? preserved, bool mergeSheetRels)
+        OoxmlPreservedParts? preserved, bool mergeSheetRels, bool macroEnabled = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
@@ -119,7 +122,7 @@ public static partial class XlsxWriter
                 WriteEntry(zip, kv.Key, kv.Value);
         }
 
-        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved));
+        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled));
         WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
         WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets));
         WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count, preserved));
@@ -617,15 +620,17 @@ public static partial class XlsxWriter
 
     // ── OOXML 部件构建 ──
 
-    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved)
+    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved, bool macroEnabled = false)
     {
         var defaults = new List<(string Ext, string Ct)>();
         var overrides = new List<(string Part, string Ct)>();
 
-        // 写入器固有声明
+        // 写入器固有声明；xlsm 的主文档类型必须为 macroEnabled，否则 Excel 拒绝打开
         defaults.Add(("rels", "application/vnd.openxmlformats-package.relationships+xml"));
         defaults.Add(("xml", "application/xml"));
-        overrides.Add(("/xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"));
+        overrides.Add(("/xl/workbook.xml", macroEnabled
+            ? "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
+            : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"));
         for (int i = 1; i <= sheetCount; i++)
         {
             overrides.Add(($"/xl/worksheets/sheet{i}.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"));

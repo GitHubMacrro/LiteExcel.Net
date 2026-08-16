@@ -23,12 +23,14 @@ public sealed class XlsxStreamWriter : IDisposable
     private readonly bool _ownsStream;
     private readonly Stream _sheetStream;
     private readonly XmlWriter _sheetWriter;
+    private readonly bool _macroEnabled;
     private bool _closed;
 
-    private XlsxStreamWriter(Stream stream, bool ownsStream)
+    private XlsxStreamWriter(Stream stream, bool ownsStream, bool macroEnabled = false)
     {
         _underlying = stream;
         _ownsStream = ownsStream;
+        _macroEnabled = macroEnabled;
         _zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
         WritePackageHead();
         _sheetStream = _zip.CreateEntry("xl/worksheets/sheet1.xml", CompressionLevel.Optimal).Open();
@@ -50,7 +52,8 @@ public sealed class XlsxStreamWriter : IDisposable
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
         var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-        return new XlsxStreamWriter(fs, ownsStream: true);
+        return new XlsxStreamWriter(fs, ownsStream: true,
+            macroEnabled: string.Equals(Path.GetExtension(path), ".xlsm", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>创建流式写入器（写入流，LeaveOpen 由调用方管理） </summary>
@@ -152,7 +155,11 @@ public sealed class XlsxStreamWriter : IDisposable
             "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
             "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>" +
             "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
-            "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>" +
+            "<Override PartName=\"/xl/workbook.xml\" ContentType=\"" +
+            (_macroEnabled
+                ? "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
+                : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml") +
+            "\"/>" +
             "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>" +
             "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>" +
             "</Types>");
