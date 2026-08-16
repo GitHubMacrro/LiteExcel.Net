@@ -106,6 +106,17 @@ public static class Excel
         return wb;
     }
 
+    /// <summary>新建工作簿并批量添加工作表。传 null 或空数组时保留默认 Sheet1 </summary>
+    public static Workbook Create(string[] sheetNames, ExcelFormat format = ExcelFormat.Xlsx)
+    {
+        var wb = Create(format);
+        if (sheetNames is null || sheetNames.Length == 0) return wb;
+        wb.Worksheets.Remove("Sheet1");
+        foreach (var name in sheetNames)
+            wb.Worksheets.Add(name);
+        return wb;
+    }
+
     /// <summary>根据扩展名识别格式 </summary>
     public static ExcelFormat DetectFormat(string path)
     {
