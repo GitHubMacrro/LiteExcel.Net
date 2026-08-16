@@ -332,10 +332,11 @@ public static partial class XlsxReader
         var workbook = XElement.Load(wbEntry.Open());
         var ns = workbook.GetDefaultNamespace();
 
-        // 检测 1904 日期系统
+        // 检测 1904 日期系统；同时捕获工作簿宿主 VBA 代码名（保存时写回 workbookPr@codeName）
         var wbPr = workbook.Element(ns + "workbookPr");
         var date1904Attr = wbPr?.Attribute("date1904")?.Value;
         var date1904 = date1904Attr == "1" || string.Equals(date1904Attr, "true", StringComparison.OrdinalIgnoreCase);
+        s_workbookCodeName = wbPr?.Attribute("codeName")?.Value;
 
         // 读取 sheet 列表
         var sheetsEl = workbook.Element(ns + "sheets");
@@ -386,6 +387,12 @@ public static partial class XlsxReader
     [ThreadStatic]
     private static bool s_globalDate1904;
 
+    [ThreadStatic]
+    private static string? s_workbookCodeName;
+
+    /// <summary>最近一次 ReadWorkbook 捕获的工作簿 codeName（同线程、单次打开内有效，供 OpenCore 取用） </summary>
+    internal static string? WorkbookCodeNameSnapshot => s_workbookCodeName;
+
     private static SheetData ReadWorksheet(ZipArchive zip, string sheetPath, string sheetName,
         List<string> shared, StylesheetInfo styles, bool firstRowIsHeader)
     {
@@ -400,7 +407,14 @@ public static partial class XlsxReader
         {
             if (reader.NodeType != XmlNodeType.Element) continue;
 
-            if (reader.LocalName == "row")
+            // 工作表宿主 VBA 代码名（带宏工作簿保存后与 vbaProject 保持绑定）
+            if (reader.LocalName == "sheetPr")
+            {
+                var codeNameAttr = reader.GetAttribute("codeName");
+                if (!string.IsNullOrEmpty(codeNameAttr))
+                    sheet.CodeName = codeNameAttr;
+            }
+            else if (reader.LocalName == "row")
             {
                 // Read row attributes before ReadSubtree
                 var rAttr = reader.GetAttribute("r");

@@ -31,4 +31,7 @@ public sealed class SheetData
 
     /// <summary>数据验证规则列表 </summary>
     public List<DataValidation>? Validations { get; set; }
+
+    /// <summary>工作表宿主的 VBA 代码名（sheetPr@codeName）。带宏工作簿经保存后仍与 vbaProject 绑定，避免 Excel 重排文档模块 </summary>
+    public string? CodeName { get; set; }
 }
