@@ -1,4 +1,6 @@
 using LiteExcel;
+using System.IO.Compression;
+using System.Xml.Linq;
 using Xunit;
 
 namespace LiteExcel.Tests;
@@ -463,6 +465,35 @@ public class HighLevelApiTests
             Assert.Equal(1000, opened.Worksheets[0].RowCount);
             Assert.Equal(0.0, opened.Worksheets[0].Cell("A1").GetDouble());
             Assert.Equal("row999", opened.Worksheets[0].Cell("B1000").GetString());
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void StreamWriter_WritesCorrectRowReferences()
+    {
+        var file = GetTempFile();
+        try
+        {
+            using (var writer = Excel.CreateWriter(file))
+            {
+                writer.WriteRow(new object?[] { "r1", 1 });
+                writer.WriteRow(new object?[] { "r2", 2 });
+            }
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            var entry = zip.GetEntry("xl/worksheets/sheet1.xml")!;
+            using var stream = entry.Open();
+            var doc = XDocument.Load(stream);
+            var ns = doc.Root!.GetDefaultNamespace();
+            var rows = doc.Root.Element(ns + "sheetData")!.Elements(ns + "row").ToList();
+
+            Assert.Equal(2, rows.Count);
+            Assert.Equal("1", rows[0].Attribute("r")?.Value);
+            Assert.Equal("2", rows[1].Attribute("r")?.Value);
+            var cellRefs = rows.SelectMany(r => r.Elements(ns + "c"))
+                .Select(c => c.Attribute("r")?.Value).ToList();
+            Assert.Equal(new[] { "A1", "B1", "A2", "B2" }, cellRefs);
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }

@@ -1,6 +1,6 @@
 # LiteExcel Usage Guide
 
-**Version**: 2.2.5  
+**Version**: 2.2.6  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.5" />
+  <PackageReference Include="LiteExcel" Version="2.2.6" />
 </ItemGroup>
 ```
 
@@ -264,7 +264,7 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 | Format | Read | Write | Notes |
 |---|---|---|---|
 | `xlsx` | ✅ | ✅ | full read/write |
-| `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part preserved on save |
+| `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part and host codeName bindings (`workbookPr`/`sheetPr`) preserved on save |
 | `csv` | ✅ | ✅ | tabular data only, no styles/merge |
 | `xls` | ✅ | ✅ | read/write (BIFF8, Excel 97+); formulas written as static cached values |
 | `xlsb` | ✅ | ❌ | read only (BIFF12 binary OOXML); write not supported yet |
@@ -275,7 +275,7 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 
 > **xlsb read scope**: `Excel.Open("file.xlsb")` reads the binary OOXML variant: data cells (text/number/date/boolean/error), shared strings, merged cells, column widths, row heights, frozen header, 1904 date system. Formula cells return the cached result value and the parsed formula text. Writing `xlsb` throws `NotSupportedException`.
 
-> **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros.
+> **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros. In addition, the VBA host code names (`workbookPr@codeName` / `sheetPr@codeName`) are captured on open and written back in their schema-required positions on save, so module bindings in the VBA project (`ThisWorkbook`, sheet modules, event macros) are not broken by hosts being renamed.
 >
 > **Degradation rule**: if the workbook structure changed after open (sheets added/removed/renamed/moved), sheet-level unmapped relationships (drawings, hyperlinks) are not re-attached to the new file, though the raw part bytes are still kept as harmless unreferenced entries. Workbook-level parts (macros, theme) are unaffected by structure changes.
 

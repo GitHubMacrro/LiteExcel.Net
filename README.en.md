@@ -1,6 +1,6 @@
 # LiteExcel
 
-A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read). AOT-friendly. **Version 2.2.5**
+A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read). AOT-friendly. **Version 2.2.6**
 
 > [中文 README](README.zh-CN.md)
 
@@ -23,7 +23,7 @@ dotnet add package LiteExcel
 Or reference a local .nupkg:
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.2.5" />
+<PackageReference Include="LiteExcel" Version="2.2.6" />
 ```
 
 ## Quick Start (recommended: object-model API)

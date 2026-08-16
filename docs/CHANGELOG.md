@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.2.6] - 2026-08-17
+
+### Fixed
+- **`xlsm` 保存后 Excel 打不开（issue #1）**：写 `[Content_Types].xml` 时 `/xl/workbook.xml` 的主文档类型写死为 `sheet.main+xml`，保存 `.xlsm` 未切换为 `macroEnabled.main+xml`，Excel 校验扩展名与内容类型不一致拒绝打开。现按格式/扩展名正确写出 `application/vnd.ms-excel.sheet.macroEnabled.main+xml`（`Workbook.SaveAs`、`XlsxWriter.Write(path)`、`XlsxStreamWriter.Create(path)` 三个入口均覆盖）。PR #3 贡献。
+- **带宏 `xlsm` 经保存后 VBA 模块错位失效（issue #4）**：2.2.1 的宏保留只透传 `vbaProject.bin` 字节，重建 workbook.xml/sheet XML 时丢失 `workbookPr@codeName` 与 `sheetPr@codeName`，宿主失去绑定后被 Excel 重命名（`ThisWorkbook1`、事件宏静默失效）。现于打开时捕获、保存时按 schema 位置写回这两个 codeName（`SheetData.CodeName` 新公开属性承载工作表级）。PR #5 贡献。
+- **`XlsxStreamWriter` 写出的文件 Excel 打不开**：两处问题——
+  1. styles.xml 的 fills 仅含 1 个 `none` 填充，缺少规范要求的前置 `gray125` 项（与 2.1.1 主写入器同款修复），现改为 `none` + `gray125` 两项；
+  2. 单元格引用 `r` 写死为第 1 行（`CellRef.ToString(0, ...)`），所有行都写成 A1/B1/... 且 `<row>` 缺 `r` 属性，Excel 严格校验即拒开。现按实际行号写出 `<row r="n">` 与 `r="An"`。
+- **PR #3 合并遗漏**：`XlsxStreamWriter` 构造函数引用了未声明的 `_macroEnabled` 字段，补上字段声明。
+
+### Added
+- **`Excel.Create(string[] sheetNames, format)` 批量建表重载**（PR #2 贡献）：传 null 或空数组保留默认 Sheet1，重名抛 `LiteExcelException`；README 中英 API 表同步。
+
+### Notes / 兼容性
+- 既有 API 无破坏性变更（`SheetData.CodeName` 为纯增量，普通文件为 null 不影响现有行为）。
+- **真实文件验证**：本机 Excel COM 打开修复后的 `.xlsm`（`SaveAs(ExcelFormat.Xlsm)` 输出）与流式写入器输出的 `.xlsx`，均无修复提示、单元格值正确（中文、数字、日期 OADate）。
+- 全量 249 测试通过（230 + PR #2 6 + PR #3 6 + PR #5 5 + 流式写入器行引用 1 + styles fills 1），net48+net8.0 干净。
+
 ## [2.2.5] - 2026-08-15
 
 ### Added

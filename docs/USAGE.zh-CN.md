@@ -1,6 +1,6 @@
 # LiteExcel 使用手册
 
-**版本**：2.2.5  
+**版本**：2.2.6  
 **目标框架**：net48 + net8.0  
 **依赖**：零第三方依赖，仅用 .NET BCL
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.5" />
+  <PackageReference Include="LiteExcel" Version="2.2.6" />
 </ItemGroup>
 ```
 
@@ -264,7 +264,7 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 | 格式 | 读 | 写 | 说明 |
 |---|---|---|---|
 | `xlsx` | ✅ | ✅ | 完整读写 |
-| `xlsm` | ✅ | ✅ | 读写保存；宏部件 `vbaProject.bin` 保存时保留 |
+| `xlsm` | ✅ | ✅ | 读写保存；宏部件 `vbaProject.bin` 与宿主 codeName 绑定（`workbookPr`/`sheetPr`）保存时保留 |
 | `csv` | ✅ | ✅ | 仅表格数据，无样式/合并等 |
 | `xls` | ✅ | ✅ | 读写（BIFF8，Excel 97+）；写入时公式降级为静态值 |
 | `xlsb` | ✅ | ❌ | 读取（BIFF12 二进制 OOXML）；写入暂不支持 |
@@ -275,7 +275,7 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 
 > **xlsb 读取范围**：`Excel.Open("file.xlsb")` 可读取二进制 OOXML 变体的数据单元格（文本/数字/日期/布尔/错误）、共享字符串、合并单元格、列宽、行高、冻结表头、1904 日期系统。公式单元格返回缓存结果值，并解析公式文本。写入 `xlsb` 会抛 `NotSupportedException`。
 
-> **保存保真**：通过 `Excel.Open` 打开后修改再保存时，LiteExcel 会重建已映射的部件（工作表数据、样式、合并、批注、验证、筛选、公式等），并将**未映射的 OOXML 部件按原始字节保留**（如宏 `vbaProject.bin`、主题、绘图、图表、表格、外部链接等）。因此 `xlsm` 打开→修改→保存后宏不会丢失。
+> **保存保真**：通过 `Excel.Open` 打开后修改再保存时，LiteExcel 会重建已映射的部件（工作表数据、样式、合并、批注、验证、筛选、公式等），并将**未映射的 OOXML 部件按原始字节保留**（如宏 `vbaProject.bin`、主题、绘图、图表、表格、外部链接等）。因此 `xlsm` 打开→修改→保存后宏不会丢失。此外，工作簿与工作表的 VBA 宿主代码名（`workbookPr@codeName` / `sheetPr@codeName`）也会在打开时捕获、保存时按 schema 位置写回，确保 VBA 工程中的模块绑定（`ThisWorkbook`、工作表模块、事件宏）不因宿主被重新命名而错位失效。
 >
 > **降级规则**：若打开后新增/删除/重命名/移动了工作表（结构发生变化），工作表级未映射关系（如绘图、超链接）不再复用到新文件，但这些部件的原始字节仍会保留为无害的未引用条目。工作簿级部件（宏、主题）不受结构变化影响。
 

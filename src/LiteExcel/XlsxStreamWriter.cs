@@ -24,6 +24,7 @@ public sealed class XlsxStreamWriter : IDisposable
     private readonly Stream _sheetStream;
     private readonly XmlWriter _sheetWriter;
     private readonly bool _macroEnabled;
+    private int _currentRow;
     private bool _closed;
 
     private XlsxStreamWriter(Stream stream, bool ownsStream, bool macroEnabled = false)
@@ -70,7 +71,7 @@ public sealed class XlsxStreamWriter : IDisposable
         if (values is null) throw new ArgumentNullException(nameof(values));
         if (_closed) throw new InvalidOperationException("写入器已关闭");
 
-        _sheetWriter.WriteStartElement("row");
+        WriteRowStart();
         int col = 1;
         foreach (var value in values)
         {
@@ -86,7 +87,7 @@ public sealed class XlsxStreamWriter : IDisposable
         if (cells is null) throw new ArgumentNullException(nameof(cells));
         if (_closed) throw new InvalidOperationException("写入器已关闭");
 
-        _sheetWriter.WriteStartElement("row");
+        WriteRowStart();
         int col = 1;
         foreach (var cell in cells)
         {
@@ -96,11 +97,18 @@ public sealed class XlsxStreamWriter : IDisposable
         _sheetWriter.WriteEndElement();
     }
 
+    private void WriteRowStart()
+    {
+        _currentRow++;
+        _sheetWriter.WriteStartElement("row");
+        _sheetWriter.WriteAttributeString("r", _currentRow.ToString(CultureInfo.InvariantCulture));
+    }
+
     private void WriteCell(int col, Cell cell)
     {
         if (cell is null || cell.IsEmpty) return;
 
-        var reference = CellRef.ToString(0, col - 1);
+        var reference = CellRef.ToString(_currentRow - 1, col - 1);
 
         switch (cell.Type)
         {
@@ -187,7 +195,7 @@ public sealed class XlsxStreamWriter : IDisposable
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
             $"<styleSheet xmlns=\"{MainNs}\">" +
             "<fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>" +
-            "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>" +
+            "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>" +
             "<borders count=\"1\"><border/></borders>" +
             "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>" +
             "<cellXfs count=\"1\"><xf/></cellXfs>" +

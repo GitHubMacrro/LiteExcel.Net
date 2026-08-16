@@ -110,6 +110,32 @@ public class XlsmContentTypeTests
     }
 
     [Fact]
+    public void StreamWriter_StylesXml_HasNoneAndGray125Fills()
+    {
+        var file = GetTempFile(".xlsx");
+        try
+        {
+            using (var writer = Excel.CreateWriter(file))
+            {
+                writer.WriteRow(new object?[] { "a", 1 });
+            }
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            var entry = zip.GetEntry("xl/styles.xml")!;
+            using var stream = entry.Open();
+            var doc = XDocument.Load(stream);
+            var ns = doc.Root!.GetDefaultNamespace();
+            var fills = doc.Root.Element(ns + "fills")!;
+            var patterns = fills.Elements(ns + "fill")
+                .Select(f => (string?)f.Element(ns + "patternFill")?.Attribute("patternType"))
+                .ToList();
+
+            Assert.Equal(new[] { "none", "gray125" }, patterns);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
     public void Xlsm_RoundTrip_OpenReadsBack()
     {
         var file = GetTempFile(".xlsm");
