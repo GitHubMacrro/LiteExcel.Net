@@ -124,7 +124,7 @@ public static partial class XlsxWriter
 
         WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled));
         WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
-        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets));
+        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved));
         WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count, preserved));
 
         // 文档属性（文件属性对话框信息）
@@ -291,11 +291,15 @@ public static partial class XlsxWriter
         var sb = new StringBuilder(4096);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append($"<worksheet xmlns=\"{MainNs}\"");
+        sb.Append(">");
+
+        // 工作表宿主 VBA 代码名：schema 要求 sheetPr 为 worksheet 第一个子元素，位于 sheetViews 之前
+        if (!string.IsNullOrEmpty(sheet.CodeName))
+            sb.Append($"<sheetPr codeName=\"{XmlEscape(sheet.CodeName)}\"/>");
 
         // sheetView（冻结表头）
         if (sheet.FreezeHeader)
         {
-            sb.Append(">");
             sb.Append("<sheetViews><sheetView workbookViewId=\"0\">");
             sb.Append("<pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/>");
             sb.Append("<selection pane=\"bottomLeft\"/>");
@@ -303,7 +307,7 @@ public static partial class XlsxWriter
         }
         else
         {
-            sb.Append("><sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>");
+            sb.Append("<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>");
         }
 
         // 列宽
@@ -918,11 +922,15 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string WorkbookXml(IReadOnlyList<SheetData> sheets)
+    private static string WorkbookXml(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append($"<workbook xmlns=\"{MainNs}\" xmlns:r=\"{OfficeRelNs}\">");
+        // 工作簿宿主 VBA 代码名：schema 要求位于 sheets 之前，缺失会导致 Excel 重排宏文档模块
+        var wbCodeName = preserved?.WorkbookCodeName;
+        if (!string.IsNullOrEmpty(wbCodeName))
+            sb.Append($"<workbookPr codeName=\"{XmlEscape(wbCodeName)}\"/>");
         sb.Append("<sheets>");
         for (int i = 0; i < sheets.Count; i++)
         {

@@ -46,6 +46,9 @@ public sealed class Worksheet
     /// <summary>自动筛选 </summary>
     public AutoFilter? Filter { get; set; }
 
+    /// <summary>工作表宿主的 VBA 代码名（打开时捕获，保存时随 SheetData 写回 sheetPr@codeName） </summary>
+    internal string? CodeName { get; set; }
+
     /// <summary>合并区域（CellRange 为 0-based，与低层模型一致） </summary>
     public IReadOnlyList<CellRange> MergedRanges => _mergedRanges;
 
@@ -245,6 +248,7 @@ public sealed class Worksheet
             Comments = Comments,
             Validations = Validations,
             Filter = Filter,
+            CodeName = CodeName,
         };
 
         foreach (var range in _mergedRanges)
@@ -275,6 +279,7 @@ public sealed class Worksheet
             Comments = sheet.Comments,
             Validations = sheet.Validations,
             Filter = sheet.Filter,
+            CodeName = sheet.CodeName,
         };
 
         if (sheet.ColumnWidths is not null)

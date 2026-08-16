@@ -73,6 +73,7 @@ public static class Excel
             var sheets = XlsxReader.ReadAllRaw(zip);
             var props = XlsxReader.ReadProperties(zip);
             preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
+            preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot; // ReadWorkbook 刚捕获
             wb = Workbook.FromSheetData(sheets, props, format, path);
         }
         wb.PreservedParts = preserved;

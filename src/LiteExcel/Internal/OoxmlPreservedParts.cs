@@ -26,6 +26,9 @@ internal sealed class OoxmlPreservedParts
     /// <summary>原始 [Content_Types].xml 的 Override 声明 </summary>
     public readonly List<(string PartName, string ContentType)> OverrideTypes = new();
 
+    /// <summary>工作簿宿主的 VBA 代码名（workbookPr@codeName），保存时写回重建的 workbook.xml，保持与保留的 vbaProject 绑定 </summary>
+    public string? WorkbookCodeName { get; set; }
+
     /// <summary>捕获 zip 中写入器不重建的部件与 rels。sheetCount 用于排除所有工作表/批注重建条目 </summary>
     public static OoxmlPreservedParts Capture(ZipArchive zip, int sheetCount)
     {
