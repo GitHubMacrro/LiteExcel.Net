@@ -90,8 +90,9 @@ public static class Excel
     /// <summary>新建工作簿（默认 Xlsx）。新建后需调用 SaveAs 指定路径 </summary>
     public static Workbook Create(ExcelFormat format = ExcelFormat.Xlsx)
     {
-        if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm && format != ExcelFormat.Csv)
-            throw new NotSupportedException($"{format} 写入后端尚未实现，当前仅支持 xlsx/xlsm/csv");
+        if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm && format != ExcelFormat.Csv
+            && format != ExcelFormat.Xls && format != ExcelFormat.Xlsb)
+            throw new NotSupportedException($"{format} 写入后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls/xlsb");
         var wb = Workbook.CreateEmpty(format);
         wb.Worksheets.Add("Sheet1");
         return wb;

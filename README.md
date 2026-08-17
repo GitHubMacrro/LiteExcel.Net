@@ -1,7 +1,7 @@
 # LiteExcel
 
-A lightweight, zero-dependency .NET library for reading and writing Excel xlsx/xlsm/csv files, plus reading legacy xls/xlsb files (xls read/write, xlsb read).
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读取），零第三方依赖，AOT 友好。
+A lightweight, zero-dependency .NET library for reading and writing Excel xlsx/xlsm/csv files, plus legacy xls/xlsb files (xls read/write, xlsb read/write).
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。
 
 **Version / 版本**: 2.2.6
 
@@ -50,7 +50,7 @@ var read = XlsxReader.Read("output2.xlsx", 0);
 - AOT friendly / AOT 友好
 - net48 + net8.0
 - Object-model API `Excel -> Workbook -> Worksheet -> Cell/Range/Cells` / 直觉化对象模型 API
-- xlsx / xlsm / csv read+write, xls read+write, xlsb read / 多格式支持（xlsx/xlsm/csv 读写、xls 读写、xlsb 读取）
+- xlsx / xlsm / csv read+write, xls read+write, xlsb read/write / 多格式支持（xlsx/xlsm/csv 读写、xls 读写、xlsb 读写）
 - Streaming read/write for large files / 大文件流式读写
 - Read/Write, styles, merged cells, auto filter, row height, comments, data validation, append, Stream, List\<T\>/DataTable
 - 读/写、样式、合并、自动筛选、行高、批注、数据验证、追加、Stream、List\<T\>/DataTable

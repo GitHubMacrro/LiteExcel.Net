@@ -12,7 +12,7 @@ obj/
 plan/
 *.suo
 *.userprefs
-用户信息_*.xlsx
+用户信息_*.xls*
 属性.txt
 model.json
 opencode.json

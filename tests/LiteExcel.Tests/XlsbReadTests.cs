@@ -162,15 +162,21 @@ public class XlsbReadTests
     }
 
     [Fact]
-    public void SaveAs_Xlsb_ThrowsNotSupported()
+    public void OpenXlsb_SaveAsXlsb_RoundTrips()
     {
         var file = XlsbTestFile.Build(BasicSpec());
+        var outFile = GetTempFile();
         try
         {
             var wb = Excel.Open(file);
-            Assert.Throws<NotSupportedException>(() => wb.SaveAs(GetTempFile()));
+            wb.SaveAs(outFile, ExcelFormat.Xlsb);
+            Assert.True(File.Exists(outFile));
+
+            var rb = Excel.Open(outFile);
+            Assert.Equal("姓名", rb.Worksheets[0].Cell("A1").GetString());
+            Assert.Equal(25.0, rb.Worksheets[0].Cell("B1").GetDouble());
         }
-        finally { Delete(file); }
+        finally { Delete(file, outFile); }
     }
 
     // ── 真实文件测试：由 Microsoft Excel 生成（SaveAs xlExcel12） ──

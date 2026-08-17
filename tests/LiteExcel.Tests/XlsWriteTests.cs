@@ -106,16 +106,21 @@ public class XlsWriteTests
     }
 
     [Fact]
-    public void SaveAs_Xlsb_ThrowsNotSupported()
+    public void SaveAs_Xlsb_FromXls_CrossFormat()
     {
         var file = GetTempFile();
         var file2 = GetTempFile().Replace(".xls", ".xlsb");
         try
         {
             var wb = Excel.Create();
+            wb.Worksheets[0].SetValue("A1", "cross");
             wb.SaveAs(file, ExcelFormat.Xls);
             var rb = Excel.Open(file);
-            Assert.Throws<NotSupportedException>(() => rb.SaveAs(file2, ExcelFormat.Xlsb));
+            rb.SaveAs(file2, ExcelFormat.Xlsb);
+            Assert.True(File.Exists(file2));
+
+            var rb2 = Excel.Open(file2);
+            Assert.Equal("cross", rb2.Worksheets[0].Cell("A1").GetString());
         }
         finally { Delete(file, file2); }
     }

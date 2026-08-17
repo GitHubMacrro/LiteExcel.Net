@@ -97,8 +97,7 @@ public class HighLevelApiTests
     [Fact]
     public void Create_UnsupportedFormat_Throws()
     {
-        Assert.Throws<NotSupportedException>(() => Excel.Create(ExcelFormat.Xlsb));
-        Assert.Throws<NotSupportedException>(() => Excel.Create(ExcelFormat.Xls));
+        Assert.Throws<NotSupportedException>(() => Excel.Create((ExcelFormat)999));
     }
 
     [Fact]

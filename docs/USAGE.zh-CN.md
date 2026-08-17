@@ -94,7 +94,7 @@ var wbCsv = Excel.Create(ExcelFormat.Csv);              // 新建 csv 工作簿
 var wb2   = Excel.Create("员工表", ExcelFormat.Xlsx);   // 新建并命名首表
 ```
 
-支持格式：`Xlsx`、`Xlsm`、`Csv`。`Xlsb`、`Xls` 已定义枚举但暂不支持，读写会抛出 `NotSupportedException`。
+支持格式：`Xlsx`、`Xlsm`、`Csv`、`Xls`、`Xlsb`（后两者为历史兼容格式，读取与写入均已实现）。
 
 ### 2.2 打开已有文件
 
@@ -267,13 +267,15 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 | `xlsm` | ✅ | ✅ | 读写保存；宏部件 `vbaProject.bin` 与宿主 codeName 绑定（`workbookPr`/`sheetPr`）保存时保留 |
 | `csv` | ✅ | ✅ | 仅表格数据，无样式/合并等 |
 | `xls` | ✅ | ✅ | 读写（BIFF8，Excel 97+）；写入时公式降级为静态值 |
-| `xlsb` | ✅ | ❌ | 读取（BIFF12 二进制 OOXML）；写入暂不支持 |
+| `xlsb` | ✅ | ✅ | 读写（BIFF12 二进制 OOXML）；公式写入按缓存值降级 |
 
 > **xls 读取范围**：`Excel.Open("file.xls")` 可读取 BIFF8 工作簿的数据单元格（文本/数字/日期/布尔）、共享字符串（含跨 CONTINUE 续接）、合并单元格、列宽、行高、冻结表头。公式单元格返回缓存结果值，并解析公式文本（常见单元格引用、运算符与内置函数；数组/3D 引用等不支持的公式仅返回缓存值）。
 
 > **xls 写入范围**：`wb.SaveAs("file.xls", ExcelFormat.Xls)` 可写出 BIFF8 工作簿，支持多工作表（中文名）、文本/数字/日期/布尔、合并单元格、列宽、行高、冻结表头、自定义数字格式。公式单元格按缓存结果值静态写出（公式文本不保留）。已用 Excel 打开验证。
 
-> **xlsb 读取范围**：`Excel.Open("file.xlsb")` 可读取二进制 OOXML 变体的数据单元格（文本/数字/日期/布尔/错误）、共享字符串、合并单元格、列宽、行高、冻结表头、1904 日期系统。公式单元格返回缓存结果值，并解析公式文本。写入 `xlsb` 会抛 `NotSupportedException`。
+> **xlsb 读取范围**：`Excel.Open("file.xlsb")` 可读取二进制 OOXML 变体的数据单元格（文本/数字/日期/布尔/错误）、共享字符串、合并单元格、列宽、行高、冻结表头、1904 日期系统。公式单元格返回缓存结果值，并解析公式文本。
+>
+> **xlsb 写入范围**：`wb.SaveAs("file.xlsb", ExcelFormat.Xlsb)` 可写出 BIFF12 工作簿，支持多工作表（中文名）、文本/数字/日期/布尔、共享字符串、数字格式、合并单元格、列宽、行高、冻结表头。公式单元格按缓存结果值静态写出（公式文本不保留）。已用 Excel 打开验证（无修复提示、另存后读取一致），SheetJS 交叉验证一致。
 
 > **保存保真**：通过 `Excel.Open` 打开后修改再保存时，LiteExcel 会重建已映射的部件（工作表数据、样式、合并、批注、验证、筛选、公式等），并将**未映射的 OOXML 部件按原始字节保留**（如宏 `vbaProject.bin`、主题、绘图、图表、表格、外部链接等）。因此 `xlsm` 打开→修改→保存后宏不会丢失。此外，工作簿与工作表的 VBA 宿主代码名（`workbookPr@codeName` / `sheetPr@codeName`）也会在打开时捕获、保存时按 schema 位置写回，确保 VBA 工程中的模块绑定（`ThisWorkbook`、工作表模块、事件宏）不因宿主被重新命名而错位失效。
 >

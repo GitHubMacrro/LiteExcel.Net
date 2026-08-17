@@ -139,7 +139,9 @@ public sealed class Workbook
                 XlsWriter.Write(stream, xlsSheets);
                 break;
             case ExcelFormat.Xlsb:
-                throw new NotSupportedException($"{format} 写入后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls");
+                var xlsbSheets = BuildSheetDataList();
+                XlsbWriter.Write(stream, xlsbSheets);
+                break;
             default:
                 throw new NotSupportedException($"未知格式：{format}");
         }

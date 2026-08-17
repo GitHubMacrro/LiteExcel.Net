@@ -12,11 +12,18 @@
 
 ### Added
 - **`Excel.Create(string[] sheetNames, format)` 批量建表重载**（PR #2 贡献）：传 null 或空数组保留默认 Sheet1，重名抛 `LiteExcelException`；README 中英 API 表同步。
+- **`xlsb` 写入后端**：`wb.SaveAs("file.xlsb", ExcelFormat.Xlsb)` 现可写出 BIFF12 工作簿（至此 xlsx/xlsm/csv/xls/xlsb 五格式读写闭环完成）。
+  - 多工作表（中文名）、文本/数字/日期/布尔单元格、共享字符串表、数字格式、合并单元格、列宽、行高、冻结表头。
+  - 公式单元格按缓存结果值静态写出（公式文本不保留，与 xls 写入一致）。
+  - 新增 `Internal/XlsbWriter.cs`（记录级写序列对照 Excel 原生输出实证：`BrtWbProp` 必须含 codeName 字段、`BrtWsProp` 为工作表首个必选记录、`BrtPane` 冻结 topLeftCell 行=1、Short 单元格仅在同一行连续列复用）。
+  - `Excel.Create(ExcelFormat.Xlsb)` / `Excel.Create(ExcelFormat.Xls)` 现均可用。
 
 ### Notes / 兼容性
 - 既有 API 无破坏性变更（`SheetData.CodeName` 为纯增量，普通文件为 null 不影响现有行为）。
-- **真实文件验证**：本机 Excel COM 打开修复后的 `.xlsm`（`SaveAs(ExcelFormat.Xlsm)` 输出）与流式写入器输出的 `.xlsx`，均无修复提示、单元格值正确（中文、数字、日期 OADate）。
-- 全量 249 测试通过（230 + PR #2 6 + PR #3 6 + PR #5 5 + 流式写入器行引用 1 + styles fills 1），net48+net8.0 干净。
+- **真实文件验证**：
+  - 本机 Excel COM 打开修复后的 `.xlsm`（`SaveAs(ExcelFormat.Xlsm)` 输出）与流式写入器输出的 `.xlsx`，均无修复提示、单元格值正确（中文、数字、日期 OADate）。
+  - `xlsb` 写入：Excel COM 打开含中文/数字/日期/布尔/合并/冻结/列宽/行高/多表（中文名）的 `.xlsb` 输出无修复提示且值正确；Excel 打开后另存为 `.xlsb`，LiteExcel 再读回逐值一致；SheetJS 独立交叉验证一致（表名、值、合并范围）。
+- 全量 255 测试通过（249 + `XlsbWriteTests` 6，并将 3 个"xlsb 写入不支持"旧测试改为往返/跨格式断言），net48+net8.0 干净。
 
 ## [2.2.5] - 2026-08-15
 

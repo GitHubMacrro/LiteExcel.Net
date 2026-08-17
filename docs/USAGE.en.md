@@ -94,7 +94,7 @@ var wbCsv = Excel.Create(ExcelFormat.Csv);              // create a csv workbook
 var wb2   = Excel.Create("Employees", ExcelFormat.Xlsx); // create and name the first sheet
 ```
 
-Supported formats: `Xlsx`, `Xlsm`, `Csv`. `Xlsb` and `Xls` enum values exist but are not implemented yet; read/write throws `NotSupportedException`.
+Supported formats: `Xlsx`, `Xlsm`, `Csv`, `Xls`, `Xlsb` (the latter two are legacy formats with read and write implemented).
 
 ### 2.2 Open an Existing File
 
@@ -267,13 +267,15 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 | `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part and host codeName bindings (`workbookPr`/`sheetPr`) preserved on save |
 | `csv` | ✅ | ✅ | tabular data only, no styles/merge |
 | `xls` | ✅ | ✅ | read/write (BIFF8, Excel 97+); formulas written as static cached values |
-| `xlsb` | ✅ | ❌ | read only (BIFF12 binary OOXML); write not supported yet |
+| `xlsb` | ✅ | ✅ | read/write (BIFF12 binary OOXML); formulas written as static cached values |
 
 > **xls read scope**: `Excel.Open("file.xls")` reads BIFF8 workbooks: data cells (text/number/date/boolean), shared strings (including cross-CONTINUE continuation), merged cells, column widths, row heights, frozen header. Formula cells return the cached result value and the parsed formula text (common cell references, operators and built-in functions; unsupported formulas such as array/3D references return only the cached value).
 
 > **xls write scope**: `wb.SaveAs("file.xls", ExcelFormat.Xls)` writes BIFF8 workbooks: multiple sheets (Chinese names), text/number/date/boolean cells, merged cells, column widths, row heights, frozen header, custom number formats. Formula cells are written as static cached values (formula text is not preserved). Verified by opening in Excel.
 
-> **xlsb read scope**: `Excel.Open("file.xlsb")` reads the binary OOXML variant: data cells (text/number/date/boolean/error), shared strings, merged cells, column widths, row heights, frozen header, 1904 date system. Formula cells return the cached result value and the parsed formula text. Writing `xlsb` throws `NotSupportedException`.
+> **xlsb read scope**: `Excel.Open("file.xlsb")` reads the binary OOXML variant: data cells (text/number/date/boolean/error), shared strings, merged cells, column widths, row heights, frozen header, 1904 date system. Formula cells return the cached result value and the parsed formula text.
+>
+> **xlsb write scope**: `wb.SaveAs("file.xlsb", ExcelFormat.Xlsb)` writes BIFF12 workbooks: multiple sheets (Chinese names), text/number/date/boolean cells, shared strings, number formats, merged cells, column widths, row heights, frozen header. Formula cells are written as static cached values (formula text is not preserved). Verified by opening in Excel (no repair prompt, values consistent after Excel re-save) and cross-checked with SheetJS.
 
 > **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros. In addition, the VBA host code names (`workbookPr@codeName` / `sheetPr@codeName`) are captured on open and written back in their schema-required positions on save, so module bindings in the VBA project (`ThisWorkbook`, sheet modules, event macros) are not broken by hosts being renamed.
 >
