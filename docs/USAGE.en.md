@@ -139,6 +139,39 @@ Accessor methods:
 
 `Cell.Style`, `Cell.NumberFormat` read/write cell style and number format; `Cell.IsFormula` tells whether the cell holds a formula.
 
+#### Combined scenario: change value + style + comment + save
+
+After opening an existing file you can read, restyle and comment a **specific cell** in one flow, then save:
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// Change the value of A2
+ws.Cell("A2").SetValue("Done");
+
+// Change A2's background color and font
+ws.Cell("A2").Style = new CellStyle
+{
+    FillColor = "#FFFF00",              // background
+    FontName  = "Microsoft YaHei",      // font name
+    FontSize  = 14,
+    Bold      = true,
+    FontColor = "#FF0000",              // font color
+};
+
+// Add a comment to A2
+ws.Comments ??= new();
+ws.Comments["A2"] = "Needs manual review";
+
+// Batch style for a range (applied to every cell in A2:C3)
+ws.Range("A2:C3").Style = new CellStyle { FillColor = "#D9E1F2", Italic = true };
+
+wb.Save();                              // overwrite the original file
+```
+
+> See [§7 Styling](#7-styling) and [§11 Cell Comments](#11-cell-comments) for details.
+
 ### 2.4 Collection Access via `Cells`
 
 ```csharp
@@ -625,6 +658,41 @@ var style = new CellStyle
 var cell = new Cell { Type = CellType.Text, Text = "styled", Style = style };
 ```
 
+### Restyle a specific cell / range (object-model API)
+
+After opening an existing file, assign directly to `Cell.Style` / `ExcelRange.Style` to restyle a **specific cell** or **range**. `Style` is a wholesale replacement; fields you leave unset keep Excel defaults:
+
+```csharp
+var wb = Excel.Open("styled.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// Single cell: background + font + font color
+ws.Cell("A2").Style = new CellStyle
+{
+    FillColor = "#FFFF00",          // background (#RRGGBB)
+    FontName  = "Microsoft YaHei",  // font name
+    FontSize  = 14,                 // size in points
+    Bold      = true,
+    FontColor = "#FF0000",          // font color
+};
+
+// Range: every cell inside A2:C3 gets the same style
+ws.Range("A2:C3").Style = new CellStyle
+{
+    FillColor = "#D9E1F2",
+    Italic    = true,
+    HorizontalAlignment = HorizontalAlignment.Center,
+};
+
+// Change value and style at once
+ws.Cell("B2").SetValue("new value");
+ws.Cell("B2").Style = new CellStyle { FillColor = "#92D050", Bold = true };
+
+wb.Save();   // or wb.SaveAs("styled2.xlsx")
+```
+
+> `ExcelRange.Style` walks every cell in the range. `Style` is a **replacement**, not incremental merge — if you need to keep existing style and change one property, read the current style first and copy it (`CellStyle` provides `Clone()`).
+
 ### Header / Row / Column / Default Styles
 
 ```csharp
@@ -778,6 +846,31 @@ XlsxWriter.Write("comments.xlsx", sheet);
 
 var read = XlsxReader.Read("comments.xlsx", 0);
 Console.WriteLine(read.Comments?["A1"]);
+```
+
+### Object-model API: add / read comments on a specific cell
+
+After opening an existing file, add, update, read or remove comments per cell:
+
+```csharp
+var wb = Excel.Open("comments.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// Add a comment (initialize Comments if it is null)
+ws.Comments ??= new();
+ws.Comments["A2"] = "This is a comment on A2";
+
+// Update an existing comment
+ws.Comments["A2"] = "Comment updated";
+
+// Read a comment
+if (ws.Comments is not null && ws.Comments.TryGetValue("A2", out var text))
+    Console.WriteLine($"A2 comment: {text}");
+
+// Remove a comment
+ws.Comments.Remove("A2");
+
+wb.Save();
 ```
 
 ---

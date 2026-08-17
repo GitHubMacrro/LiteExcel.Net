@@ -9,6 +9,9 @@
   1. styles.xml 的 fills 仅含 1 个 `none` 填充，缺少规范要求的前置 `gray125` 项（与 2.1.1 主写入器同款修复），现改为 `none` + `gray125` 两项；
   2. 单元格引用 `r` 写死为第 1 行（`CellRef.ToString(0, ...)`），所有行都写成 A1/B1/... 且 `<row>` 缺 `r` 属性，Excel 严格校验即拒开。现按实际行号写出 `<row r="n">` 与 `r="An"`。
 - **PR #3 合并遗漏**：`XlsxStreamWriter` 构造函数引用了未声明的 `_macroEnabled` 字段，补上字段声明。
+- **`xls`→`xlsb` 行高错误（数据"丢失"）**：`XlsBackend.ParseRowHeight` 读 BIFF8 `ROW` 记录的 `miyRw` 时偏移错误（读了 `colMac` 位置，应为 offset 6），导致源 `xls` 行高被误读为 `colMac/20`（用户文件读出 0.65pt 而非 15pt），写出 `.xlsb` 后行高塌缩、Excel 打开疑似"只剩空表"。现按 `rw(0)+colMic(2)+colMac(4)+miyRw(6)` 正确解析。Excel COM 验证 `xls`→`xlsb` 后行高 30pt 正确保留、行不隐藏。
+- **`SaveAs` 扩展名与格式不匹配时静默产出错误文件**：`Workbook.SaveAs(path, format)` 现校验扩展名与格式一致，不匹配抛 `LiteExcelException`（明确失败优于静默写错格式）。
+- **`xlsm`→`xlsb` 宏丢失**：xlsb 写入接入 `vbaProject.bin` 保留（Content_Types Override + workbook.bin.rels 关系）与 workbook/sheet codeName 写回；`Excel.Open` 的 xlsb 路径同步捕获 vbaProject 字节与 codeName。Excel COM 验证转换后 VBA 工程组件数与源一致。
 
 ### Added
 - **`Excel.Create(string[] sheetNames, format)` 批量建表重载**（PR #2 贡献）：传 null 或空数组保留默认 Sheet1，重名抛 `LiteExcelException`；README 中英 API 表同步。
@@ -23,7 +26,8 @@
 - **真实文件验证**：
   - 本机 Excel COM 打开修复后的 `.xlsm`（`SaveAs(ExcelFormat.Xlsm)` 输出）与流式写入器输出的 `.xlsx`，均无修复提示、单元格值正确（中文、数字、日期 OADate）。
   - `xlsb` 写入：Excel COM 打开含中文/数字/日期/布尔/合并/冻结/列宽/行高/多表（中文名）的 `.xlsb` 输出无修复提示且值正确；Excel 打开后另存为 `.xlsb`，LiteExcel 再读回逐值一致；SheetJS 独立交叉验证一致（表名、值、合并范围）。
-- 全量 255 测试通过（249 + `XlsbWriteTests` 6，并将 3 个"xlsb 写入不支持"旧测试改为往返/跨格式断言），net48+net8.0 干净。
+  - `xls`→`xlsb`：Excel COM 打开输出文件确认行高与行可见性正确（`ParseRowHeight` 偏移修复）、行列值与源一致；`xlsm`→`xlsb`：Excel COM 确认 VBA 工程组件数与源一致。
+- 全量 256 测试通过（249 + `XlsbWriteTests` 7，并将 3 个"xlsb 写入不支持"旧测试改为往返/跨格式断言），net48+net8.0 干净。
 
 ## [2.2.5] - 2026-08-15
 

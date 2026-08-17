@@ -109,6 +109,9 @@ foreach (var row in read.Rows)
 | `Worksheet.SetValue / Merge / Unmerge` | sheet-level write and merge |
 | `Cell.GetString/GetDouble/GetDateTime/GetBoolean/TryGet*` | typed cell accessors |
 | `Cell.SetValue / IsFormula / FromFormula` | cell write and formula |
+| `Cell.Style / Cell.NumberFormat` | style & number format of a specific cell (background/font/alignment etc.) |
+| `Worksheet.Cell("A2").Style = ...` / `Worksheet.Range("A2:C3").Style = ...` | restyle a single cell / range |
+| `Worksheet.Comments["A2"] = "note"` | add a comment to a specific cell |
 | `Cells[row, col] / Cells["A1"] / Cells.Range(...)` | collection access |
 | `ExcelRange.Fill / Clear / Style / Merge / ToValues` | range operations |
 

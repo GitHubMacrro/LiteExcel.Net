@@ -139,6 +139,39 @@ double age = ws.Cell(2, 2).GetDouble();    // 25
 
 `Cell.Style`、`Cell.NumberFormat` 可读写单元格样式与数字格式；`Cell.IsFormula` 判断是否为公式。
 
+#### 串联场景：改值 + 改样式 + 加备注 + 保存
+
+打开已有文件后，可对**指定单元格**同时做取值、改样式、加备注操作，再保存：
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// 改 A2 的值
+ws.Cell("A2").SetValue("已完成");
+
+// 改 A2 的背景色与字体
+ws.Cell("A2").Style = new CellStyle
+{
+    FillColor = "#FFFF00",              // 背景色
+    FontName  = "微软雅黑",             // 字体
+    FontSize  = 14,
+    Bold      = true,
+    FontColor = "#FF0000",              // 字体颜色
+};
+
+// 给 A2 加备注
+ws.Comments ??= new();
+ws.Comments["A2"] = "本单元格需要人工复核";
+
+// 区域批量样式（A2:C3 每个单元格都应用）
+ws.Range("A2:C3").Style = new CellStyle { FillColor = "#D9E1F2", Italic = true };
+
+wb.Save();                              // 覆盖保存原文件
+```
+
+> 说明：样式/批注的具体 API 见 [§7 样式](#7-样式) 与 [§11 单元格批注](#11-单元格批注)。
+
 ### 2.4 集合式访问 `Cells`
 
 ```csharp
@@ -629,6 +662,41 @@ var style = new CellStyle
 var cell = new Cell { Type = CellType.Text, Text = "带样式", Style = style };
 ```
 
+### 修改指定单元格 / 区域样式（对象模型 API）
+
+打开已有文件后修改**指定单元格**或**指定区域**的样式，直接对 `Cell.Style` / `ExcelRange.Style` 赋值即可（`Style` 为覆盖式替换，未设置的字段保持 Excel 默认）：
+
+```csharp
+var wb = Excel.Open("styled.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// 单个单元格：改背景色 + 字体 + 字体颜色
+ws.Cell("A2").Style = new CellStyle
+{
+    FillColor = "#FFFF00",          // 背景色（#RRGGBB）
+    FontName  = "微软雅黑",         // 字体名
+    FontSize  = 14,                 // 字号（磅）
+    Bold      = true,
+    FontColor = "#FF0000",          // 字体颜色
+};
+
+// 区域：A2:C3 内每个单元格统一应用
+ws.Range("A2:C3").Style = new CellStyle
+{
+    FillColor = "#D9E1F2",
+    Italic    = true,
+    HorizontalAlignment = HorizontalAlignment.Center,
+};
+
+// 同时改值和样式
+ws.Cell("B2").SetValue("新值");
+ws.Cell("B2").Style = new CellStyle { FillColor = "#92D050", Bold = true };
+
+wb.Save();   // 或 wb.SaveAs("styled2.xlsx")
+```
+
+> `ExcelRange.Style` 会遍历区域内所有单元格逐个应用；`Style` 是**整体替换**而非合并增量，需要"保留已有样式只改某一项"时应先读出再复制（`CellStyle` 提供 `Clone()`）。
+
 ### 表头样式
 
 ```csharp
@@ -932,6 +1000,31 @@ XlsxWriter.Write("comments.xlsx", sheet);
 ```
 
 > key 是 A1 格式的单元格引用（`列字母 + 行号`，如 `A1`、`B2`、`AA10`）。
+
+### 对象模型 API：给指定单元格加/读批注
+
+打开已有文件后，对指定单元格添加、修改、读取批注：
+
+```csharp
+var wb = Excel.Open("comments.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// 加批注（Comments 为 null 时先初始化）
+ws.Comments ??= new();
+ws.Comments["A2"] = "这是 A2 的批注";
+
+// 修改已存在的批注
+ws.Comments["A2"] = "批注已更新";
+
+// 读取批注
+if (ws.Comments is not null && ws.Comments.TryGetValue("A2", out var text))
+    Console.WriteLine($"A2 批注：{text}");
+
+// 删除批注
+ws.Comments.Remove("A2");
+
+wb.Save();
+```
 
 ### 读取批注
 

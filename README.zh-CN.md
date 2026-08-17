@@ -109,6 +109,9 @@ foreach (var row in read.Rows)
 | `Worksheet.SetValue / Merge / Unmerge` | 表级写值与合并 |
 | `Cell.GetString/GetDouble/GetDateTime/GetBoolean/TryGet*` | 单元格便利取值 |
 | `Cell.SetValue / IsFormula / FromFormula` | 单元格写值与公式 |
+| `Cell.Style / Cell.NumberFormat` | 指定单元格样式与数字格式（背景色/字体/对齐等） |
+| `Worksheet.Cell("A2").Style = ...` / `Worksheet.Range("A2:C3").Style = ...` | 改单个/区域单元格样式 |
+| `Worksheet.Comments["A2"] = "备注"` | 给指定单元格加批注 |
 | `Cells[row, col] / Cells["A1"] / Cells.Range(...)` | 集合式访问 |
 | `ExcelRange.Fill / Clear / Style / Merge / ToValues` | 区域操作 |
 
