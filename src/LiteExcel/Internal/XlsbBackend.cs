@@ -60,6 +60,34 @@ internal static class XlsbBackend
         return ReadAll(fs);
     }
 
+    /// <summary>读取 .xlsb 包中的 VBA 宏工程原始字节（xl/vbaProject.bin），无宏返回 null </summary>
+    public static byte[]? ReadVbaProject(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true);
+        return ReadEntry(zip, "xl/vbaProject.bin");
+    }
+
+    /// <summary>读取 .xlsb 工作簿宿主的 VBA 代码名（BrtWbProp 内 codeName），无则返回 null </summary>
+    public static string? ReadWorkbookCodeName(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true);
+        var wbBytes = ReadEntry(zip, "xl/workbook.bin");
+        if (wbBytes is null) return null;
+        var records = Biff12Records.ReadAll(wbBytes);
+        foreach (var rec in records)
+        {
+            if (rec.Rt != BrtWbProp || rec.Data.Length < 9) continue;
+            int off = 8;
+            uint cch = Biff12Records.ReadU32(rec.Data, off);
+            off += 4;
+            if (cch == 0 || cch == 0xFFFFFFFF || off + (int)cch * 2 > rec.Data.Length) continue;
+            return System.Text.Encoding.Unicode.GetString(rec.Data, off, (int)cch * 2);
+        }
+        return null;
+    }
+
     public static List<SheetData> ReadAll(Stream stream)
     {
         using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);

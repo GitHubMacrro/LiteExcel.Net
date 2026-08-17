@@ -31,6 +31,15 @@ public sealed class Workbook
     internal OoxmlPreservedParts? PreservedParts { get; set; }
 
     /// <summary>
+    /// 打开时捕获的 VBA 宏工程原始字节（xl/vbaProject.bin）。写入 xlsb 时透传保留。
+    /// 新建工作簿或源文件无宏时为 null。
+    /// </summary>
+    internal byte[]? VbaProjectBytes { get; set; }
+
+    /// <summary>打开时捕获的工作簿宿主 VBA 代码名（workbookPr@codeName / BrtWbProp codeName） </summary>
+    internal string? WorkbookCodeName { get; set; }
+
+    /// <summary>
     /// 当前目标路径。
     /// <see cref="Open"/> 后指向源文件；<see cref="SaveAs"/> 后更新为新路径；
     /// <see cref="Create"/> 后为 null（此时只能 SaveAs）。
@@ -92,12 +101,13 @@ public sealed class Workbook
         SaveAs(path, Format);
     }
 
-    /// <summary>另存为指定路径并指定格式（格式必须为已支持的可写格式） </summary>
+    /// <summary>另存为指定路径并指定格式（格式必须为已支持的可写格式）。路径扩展名必须与 format 匹配，否则抛 <see cref="LiteExcelException"/> </summary>
     public void SaveAs(string path, ExcelFormat format)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
 
+        ValidateExtension(path, format);
         SaveCore(path, format);
         _currentPath = path;
         Format = format;
@@ -110,6 +120,23 @@ public sealed class Workbook
         if (!stream.CanWrite) throw new ArgumentException("流不可写", nameof(stream));
 
         SaveCore(stream, format);
+    }
+
+    /// <summary>校验保存路径的扩展名与目标格式一致，避免写出内容与扩展名不匹配、Excel 无法打开的文件 </summary>
+    internal static void ValidateExtension(string path, ExcelFormat format)
+    {
+        string ext = System.IO.Path.GetExtension(path);
+        string expected = format switch
+        {
+            ExcelFormat.Xlsx => ".xlsx",
+            ExcelFormat.Xlsm => ".xlsm",
+            ExcelFormat.Csv => ".csv",
+            ExcelFormat.Xls => ".xls",
+            ExcelFormat.Xlsb => ".xlsb",
+            _ => null,
+        };
+        if (expected is not null && !string.Equals(ext, expected, System.StringComparison.OrdinalIgnoreCase))
+            throw new LiteExcelException($"保存路径扩展名 '{ext}' 与目标格式 {format}（应为 '{expected}'）不匹配，Excel 将无法按预期打开该文件。请使用匹配的扩展名，例如 SaveAs(\"out{expected}\", ExcelFormat.{format})。");
     }
 
     private void SaveCore(string path, ExcelFormat format)
@@ -140,7 +167,7 @@ public sealed class Workbook
                 break;
             case ExcelFormat.Xlsb:
                 var xlsbSheets = BuildSheetDataList();
-                XlsbWriter.Write(stream, xlsbSheets);
+                XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName);
                 break;
             default:
                 throw new NotSupportedException($"未知格式：{format}");

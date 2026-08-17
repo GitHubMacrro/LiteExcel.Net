@@ -102,8 +102,8 @@ internal static class XlsbWriter
     private const int BuiltinDateFmtId = 14;
     private const int FirstCustomFmtId = 164;
 
-    /// <summary>写出 .xlsb 工作簿到流。</summary>
-    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets)
+    /// <summary>写出 .xlsb 工作簿到流。vbaProject 为源工作簿捕获的宏工程字节（可为 null）；workbookCodeName 为宿主代码名（可为 null）</summary>
+    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
@@ -151,11 +151,13 @@ internal static class XlsbWriter
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
         // 包结构
-        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0));
+        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null));
         WriteEntry(zip, "_rels/.rels", RootRelsXml());
-        WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets));
-        WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0));
+        WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName));
+        WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null));
         WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs));
+        if (vbaProject is not null && vbaProject.Length > 0)
+            WriteEntry(zip, "xl/vbaProject.bin", vbaProject);
         if (sst.Count > 0)
             WriteEntry(zip, "xl/sharedStrings.bin", BuildSharedStringsBin(sst, sstIndex));
 
@@ -165,7 +167,7 @@ internal static class XlsbWriter
 
     // ── 包 XML 部件 ──
 
-    private static string ContentTypesXml(int sheetCount, bool hasSst)
+    private static string ContentTypesXml(int sheetCount, bool hasSst, bool hasVba)
     {
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -178,6 +180,8 @@ internal static class XlsbWriter
         sb.Append("<Override PartName=\"/xl/styles.bin\" ContentType=\"application/vnd.ms-excel.styles\"/>");
         if (hasSst)
             sb.Append("<Override PartName=\"/xl/sharedStrings.bin\" ContentType=\"application/vnd.ms-excel.sharedStrings\"/>");
+        if (hasVba)
+            sb.Append("<Override PartName=\"/xl/vbaProject.bin\" ContentType=\"application/vnd.ms-office.vbaProject\"/>");
         sb.Append("</Types>");
         return sb.ToString();
     }
@@ -190,7 +194,7 @@ internal static class XlsbWriter
             "</Relationships>";
     }
 
-    private static string WorkbookRelsXml(int sheetCount, bool hasSst)
+    private static string WorkbookRelsXml(int sheetCount, bool hasSst, bool hasVba)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -200,6 +204,8 @@ internal static class XlsbWriter
         sb.Append($"<Relationship Id=\"rId{sheetCount + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.bin\"/>");
         if (hasSst)
             sb.Append($"<Relationship Id=\"rId{sheetCount + 2}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.bin\"/>");
+        if (hasVba)
+            sb.Append($"<Relationship Id=\"rId{sheetCount + 3}\" Type=\"http://schemas.microsoft.com/office/2006/relationships/vbaProject\" Target=\"vbaProject.bin\"/>");
         sb.Append("</Relationships>");
         return sb.ToString();
     }
@@ -218,12 +224,12 @@ internal static class XlsbWriter
 
     // ── workbook.bin ──
 
-    private static byte[] BuildWorkbookBin(IReadOnlyList<SheetData> sheets)
+    private static byte[] BuildWorkbookBin(IReadOnlyList<SheetData> sheets, string? workbookCodeName)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginBook, Array.Empty<byte>());
         WriteRecord(ms, BrtFileVersion, FileVersion());
-        WriteRecord(ms, BrtWbProp, WbProp()); // 1900 日期系统
+        WriteRecord(ms, BrtWbProp, WbProp(workbookCodeName)); // 1900 日期系统
         WriteRecord(ms, BrtBeginBookViews, Array.Empty<byte>());
         WriteRecord(ms, BrtBookView, BookView());
         WriteRecord(ms, BrtEndBookViews, Array.Empty<byte>());
@@ -264,13 +270,13 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    private static byte[] WbProp()
+    private static byte[] WbProp(string? codeName)
     {
         // 对照 Excel：flags(4) + defaultThemeVersion(4) + CodeName(XLWideString，可为空 → cch=0 占 4 字节)
         var ms = new MemoryStream();
         WriteU32(ms, 0x00010020);
         WriteU32(ms, 0x0003163C);
-        WriteWideString(ms, ""); // 空 codeName → 4 字节
+        WriteWideString(ms, codeName ?? "");
         return ms.ToArray();
     }
 
@@ -640,7 +646,7 @@ internal static class XlsbWriter
         ms.WriteByte(0); // top/bot padding
         byte flags = 0;
         if (sheet.RowHeights is not null && sheet.RowHeights.TryGetValue(rowIndex, out _))
-            flags |= 0x20;
+            flags |= 0x20; // Excel 原生 BrtRowHdr：b11 & 0x20 标记显式行高（与读取端/XlsbTestFile 一致）
         ms.WriteByte(flags);
         ms.WriteByte(0); // phonetic
         WriteU32(ms, 1); // ncolspan

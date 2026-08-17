@@ -405,9 +405,9 @@ internal static class XlsBackend
 
     private static void ParseRowHeight(byte[] d, Dictionary<int, double> rowHeights)
     {
-        if (d.Length < 6) return;
+        if (d.Length < 8) return;
         int rw = BiffRecords.ReadU16(d, 0);
-        int miyRw = BiffRecords.ReadU16(d, 4);
+        int miyRw = BiffRecords.ReadU16(d, 6); // BIFF8 ROW：rw(0)+colMic(2)+colMac(4)+miyRw(6)
         if (miyRw == 0 || miyRw == 0xFF) return; // 默认行高
         rowHeights[rw] = miyRw / 20.0; // 缇 → 磅
     }

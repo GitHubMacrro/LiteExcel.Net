@@ -58,7 +58,10 @@ public static class Excel
             case ExcelFormat.Xlsb:
             {
                 var sheets = XlsbBackend.ReadAll(path);
-                return Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
+                var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
+                wbB.VbaProjectBytes = XlsbBackend.ReadVbaProject(path);
+                wbB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(path);
+                return wbB;
             }
             default:
                 throw new NotSupportedException($"{format} 读取后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls/xlsb");
@@ -75,6 +78,9 @@ public static class Excel
             preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
             preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot; // ReadWorkbook 刚捕获
             wb = Workbook.FromSheetData(sheets, props, format, path);
+            if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
+                wb.VbaProjectBytes = vbaBytes;
+            wb.WorkbookCodeName = preserved.WorkbookCodeName;
         }
         wb.PreservedParts = preserved;
 

@@ -33,6 +33,19 @@ public class XlsbWriteTests
     }
 
     [Fact]
+    public void SaveAs_ExtensionFormatMismatch_Throws()
+    {
+        var wb = Excel.Create(ExcelFormat.Xlsb);
+        var file = Path.Combine(Path.GetTempPath(), $"mismatch_{Guid.NewGuid():N}.xlsm");
+        try
+        {
+            var ex = Assert.Throws<LiteExcelException>(() => wb.SaveAs(file, ExcelFormat.Xlsb));
+            Assert.Contains("不匹配", ex.Message);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
     public void SaveAs_Xlsb_RoundTrips_Basic()
     {
         var file = GetTempFile();
