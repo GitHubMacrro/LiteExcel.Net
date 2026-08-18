@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using LiteExcel.Internal;
 using LiteExcel.Internal.Cfb;
-
 namespace LiteExcel.Internal.Biff;
 
 /// <summary>
@@ -71,14 +71,14 @@ internal static class XlsWriter
         (31, "m/d/yy h:mm"),
     };
 
-    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets)
+    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, bool date1904 = false)
     {
-        var workbook = BuildWorkbookStream(sheets);
+        var workbook = BuildWorkbookStream(sheets, date1904);
         var cfb = CfbWriter.Build("Workbook", workbook);
         stream.Write(cfb, 0, cfb.Length);
     }
 
-    private static byte[] BuildWorkbookStream(IReadOnlyList<SheetData> sheets)
+    private static byte[] BuildWorkbookStream(IReadOnlyList<SheetData> sheets, bool date1904)
     {
         // ── 预扫描：SST 唯一字符串、格式→XF 表 ──
         var sst = new List<string>();
@@ -145,7 +145,7 @@ internal static class XlsWriter
         WriteRecord(global, 0x003D, WindowPalette());                 // WindowPalette
         WriteRecord(global, 0x0040, new byte[] { 0, 0 });             // Backup
         WriteRecord(global, 0x008D, new byte[] { 0, 0 });             // HideObj
-        WriteRecord(global, 0x0022, new byte[] { 0, 0 });             // Date1904
+        WriteRecord(global, 0x0022, new byte[] { (byte)(date1904 ? 1 : 0), 0 }); // Date1904
         WriteRecord(global, 0x000E, new byte[] { 1, 0 });             // CalcPrecision
         WriteRecord(global, 0x01B7, new byte[] { 0, 0 });             // RefreshAll
         WriteRecord(global, 0x00DA, new byte[] { 0, 0 });             // BookBool
@@ -182,7 +182,7 @@ internal static class XlsWriter
         for (int i = 0; i < sheets.Count; i++)
         {
             positions[i] = sheetStart;
-            sheetBytes[i] = BuildSheet(sheets[i], sst, sstIndex, GetXf);
+            sheetBytes[i] = BuildSheet(sheets[i], sst, sstIndex, GetXf, date1904);
             sheetStart += sheetBytes[i].Length;
         }
 
@@ -198,7 +198,7 @@ internal static class XlsWriter
     }
 
     private static byte[] BuildSheet(SheetData sheet, List<string> sst, Dictionary<string, int> sstIndex,
-        Func<string?, int> getXf)
+        Func<string?, int> getXf, bool date1904)
     {
         using var ms = new MemoryStream();
         WriteRecord(ms, OpBof, Bof(0x0010)); // worksheet
@@ -279,7 +279,7 @@ internal static class XlsWriter
                 WriteRecord(ms, OpRow, Row(r, 0, rowMaxCol + 1, rh));
 
             foreach (var (col, cell) in cells)
-                WriteCell(ms, r, col, cell, sst, sstIndex, getXf);
+                WriteCell(ms, r, col, cell, sst, sstIndex, getXf, date1904);
         }
 
         // 尾部：WINDOW2 → PANE → MERGEDCELLS → CodeName → FeatHdr → Feat → EOF（对齐 Excel/SheetJS）
@@ -315,7 +315,7 @@ internal static class XlsWriter
     }
 
     private static void WriteCell(MemoryStream ms, int rw, int col, Cell cell,
-        List<string> sst, Dictionary<string, int> sstIndex, Func<string?, int> getXf)
+        List<string> sst, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904)
     {
         int ixfe = getXf(cell.Type == CellType.Date || cell.Type == CellType.Number ? cell.NumberFormat : null);
         switch (cell.Type)
@@ -354,7 +354,7 @@ internal static class XlsWriter
                 WriteU16(d, 0, (ushort)rw);
                 WriteU16(d, 2, (ushort)col);
                 WriteU16(d, 4, (ushort)ixfe);
-                Array.Copy(BitConverter.GetBytes(cell.Date.ToOADate()), 0, d, 6, 8);
+                Array.Copy(BitConverter.GetBytes(FormatDetector.DateToSerial(cell.Date, date1904)), 0, d, 6, 8);
                 WriteRecord(ms, OpNumber, d);
                 break;
             }

@@ -36,6 +36,18 @@ public static class Excel
         return OpenCore(path, format, options);
     }
 
+    /// <summary>
+    /// 从流打开工作簿，必须显式指定格式（流无扩展名，无法自动识别）。
+    /// 输入流不会被关闭（由调用方管理）；支持不可定位的流（内部复制到内存）。
+    /// 打开后 <see cref="Workbook.CurrentPath"/> 为 null，需用 <see cref="Workbook.SaveAs"/> 指定保存路径。
+    /// </summary>
+    public static Workbook Open(Stream stream, ExcelFormat format, ExcelReadOptions? options = null)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        if (!stream.CanRead) throw new ArgumentException("流不可读", nameof(stream));
+        return OpenFromStream(stream, format, options);
+    }
+
     private static Workbook OpenCore(string path, ExcelFormat format, ExcelReadOptions? options)
     {
         options ??= new ExcelReadOptions();
@@ -53,14 +65,20 @@ public static class Excel
             case ExcelFormat.Xls:
             {
                 var sheets = XlsBackend.ReadAll(path);
-                return Workbook.FromSheetData(sheets, null, ExcelFormat.Xls, path);
+                var wbX = Workbook.FromSheetData(sheets, null, ExcelFormat.Xls, path);
+                wbX.Date1904 = XlsBackend.ReadDate1904(path);
+                return wbX;
             }
             case ExcelFormat.Xlsb:
             {
+                // 加密 xlsb 同样是 CFB 容器（内含 EncryptionInfo），先识别再进 zip 读取
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    EncryptionDetector.ThrowIfEncryptedOoxml(fs, path);
                 var sheets = XlsbBackend.ReadAll(path);
                 var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
                 wbB.VbaProjectBytes = XlsbBackend.ReadVbaProject(path);
                 wbB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(path);
+                wbB.Date1904 = XlsbBackend.ReadDate1904(path);
                 return wbB;
             }
             default:
@@ -68,11 +86,13 @@ public static class Excel
         }
 
         // 单次解压内完成读表/读属性/捕获保留部件，保证三者来自同一文件快照
+        // 加密 xlsx/xlsm 实际是 CFB 容器（内含 EncryptionInfo），先识别再进 zip 读取，避免误报 zip 损坏
         Workbook wb;
         OoxmlPreservedParts? preserved;
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-        using (var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true))
         {
+            EncryptionDetector.ThrowIfEncryptedOoxml(fs, path);
+            using var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true);
             var sheets = XlsxReader.ReadAllRaw(zip);
             var props = XlsxReader.ReadProperties(zip);
             preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
@@ -81,6 +101,7 @@ public static class Excel
             if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
                 wb.VbaProjectBytes = vbaBytes;
             wb.WorkbookCodeName = preserved.WorkbookCodeName;
+            wb.Date1904 = XlsxReader.Date1904Snapshot;
         }
         wb.PreservedParts = preserved;
 
@@ -90,6 +111,97 @@ public static class Excel
                 ws.FillMergedValues();
         }
 
+        return wb;
+    }
+
+    /// <summary>
+    /// 从流打开工作簿。输入流不关闭；不可定位流内部复制到内存。
+    /// path 为 null，<see cref="Workbook.CurrentPath"/> 为 null。
+    /// </summary>
+    private static Workbook OpenFromStream(Stream stream, ExcelFormat format, ExcelReadOptions? options)
+    {
+        options ??= new ExcelReadOptions();
+
+        // 复制到可定位的内存流（支持网络流/响应流等不可 seek 的输入），不关闭原始流
+        // Workbook 本身是内存模型，此拷贝不会显著增加峰值内存
+        var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        ms.Position = 0;
+
+        switch (format)
+        {
+            case ExcelFormat.Xlsx:
+            case ExcelFormat.Xlsm:
+                break;
+            case ExcelFormat.Csv:
+            {
+                var csvSheet = CsvBackend.Read(ms);
+                return FinishOpen(new[] { csvSheet }, null, ExcelFormat.Csv, null, options);
+            }
+            case ExcelFormat.Xls:
+            {
+                var sheets = XlsBackend.ReadAll(ms);
+                var wbX = Workbook.FromSheetData(sheets, null, ExcelFormat.Xls, null);
+                ms.Position = 0;
+                wbX.Date1904 = XlsBackend.ReadDate1904(ms);
+                return wbX;
+            }
+            case ExcelFormat.Xlsb:
+            {
+                // 加密 xlsb 同样是 CFB 容器，先识别再进 zip 读取
+                EncryptionDetector.ThrowIfEncryptedOoxml(ms, "<stream>");
+                ms.Position = 0;
+                var sheets = XlsbBackend.ReadAll(ms);
+                var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, null);
+                ms.Position = 0;
+                wbB.VbaProjectBytes = XlsbBackend.ReadVbaProject(ms);
+                ms.Position = 0;
+                wbB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(ms);
+                ms.Position = 0;
+                wbB.Date1904 = XlsbBackend.ReadDate1904(ms);
+                return wbB;
+            }
+            default:
+                throw new NotSupportedException($"{format} 读取后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls/xlsb");
+        }
+
+        // xlsx/xlsm：单次解压内完成读表/读属性/捕获保留部件
+        Workbook wb;
+        OoxmlPreservedParts? preserved;
+        {
+            EncryptionDetector.ThrowIfEncryptedOoxml(ms, "<stream>");
+            ms.Position = 0;
+            using var zip = new ZipArchive(ms, ZipArchiveMode.Read, leaveOpen: true);
+            var sheets = XlsxReader.ReadAllRaw(zip);
+            var props = XlsxReader.ReadProperties(zip);
+            preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
+            preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
+            wb = Workbook.FromSheetData(sheets, props, format, null);
+            if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
+                wb.VbaProjectBytes = vbaBytes;
+            wb.WorkbookCodeName = preserved.WorkbookCodeName;
+            wb.Date1904 = XlsxReader.Date1904Snapshot;
+        }
+        wb.PreservedParts = preserved;
+
+        if (options.FillMergedCells)
+        {
+            foreach (var ws in wb.Worksheets)
+                ws.FillMergedValues();
+        }
+
+        return wb;
+    }
+
+    private static Workbook FinishOpen(IReadOnlyList<SheetData> sheets, WorkbookProperties? props,
+        ExcelFormat format, string? path, ExcelReadOptions options)
+    {
+        var wb = Workbook.FromSheetData(sheets, props, format, path);
+        if (options.FillMergedCells)
+        {
+            foreach (var ws in wb.Worksheets)
+                ws.FillMergedValues();
+        }
         return wb;
     }
 
@@ -151,10 +263,9 @@ public static class Excel
         options ??= new ExcelWriteOptions();
         var format = workbook.Format;
 
-        // 根据扩展名推断目标格式（若与工作簿格式冲突，以扩展名为准）
+        // 根据扩展名推断目标格式，与 DetectFormat 完全一致：扩展名与工作簿格式冲突时以扩展名为准
         var extFormat = DetectFormat(path);
-        if (extFormat is ExcelFormat.Xlsx or ExcelFormat.Xlsm or ExcelFormat.Csv)
-            format = extFormat;
+        format = extFormat;
 
         ApplyWriteOptions(workbook, options);
         workbook.SaveAs(path, format);

@@ -11,10 +11,10 @@ public enum ExcelFormat
     /// <summary>启用宏的工作簿（OOXML + 宏） </summary>
     Xlsm,
 
-    /// <summary>二进制工作簿（OOXML 二进制格式，预留） </summary>
+    /// <summary>二进制工作簿（BIFF12） </summary>
     Xlsb,
 
-    /// <summary>旧版二进制工作簿（BIFF，预留，先只读） </summary>
+    /// <summary>旧版二进制工作簿（BIFF8） </summary>
     Xls,
 
     /// <summary>逗号分隔文本（轻量格式，仅表格数据） </summary>

@@ -1,6 +1,6 @@
 # LiteExcel 使用手册
 
-**版本**：2.2.6  
+**版本**：2.3.0  
 **目标框架**：net48 + net8.0  
 **依赖**：零第三方依赖，仅用 .NET BCL
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.6" />
+  <PackageReference Include="LiteExcel" Version="2.3.0" />
 </ItemGroup>
 ```
 
@@ -296,11 +296,11 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 
 | 格式 | 读 | 写 | 说明 |
 |---|---|---|---|
-| `xlsx` | ✅ | ✅ | 完整读写 |
+| `xlsx` | ✅ | ✅ | 完整读写；支持 1904 日期系统读/写；含宏工作簿写 `.xlsx` 会抛错（见下方"宏与降级"） |
 | `xlsm` | ✅ | ✅ | 读写保存；宏部件 `vbaProject.bin` 与宿主 codeName 绑定（`workbookPr`/`sheetPr`）保存时保留 |
 | `csv` | ✅ | ✅ | 仅表格数据，无样式/合并等 |
-| `xls` | ✅ | ✅ | 读写（BIFF8，Excel 97+）；写入时公式降级为静态值 |
-| `xlsb` | ✅ | ✅ | 读写（BIFF12 二进制 OOXML）；公式写入按缓存值降级 |
+| `xls` | ✅ | ✅ | 读写（BIFF8，Excel 97+）；写入时公式降级为静态值；含宏工作簿写 `.xls` 会抛错（见下方"宏与降级"） |
+| `xlsb` | ✅ | ✅ | 读写（BIFF12 二进制 OOXML）；公式写入按缓存值降级；支持 1904 日期系统读/写 |
 
 > **xls 读取范围**：`Excel.Open("file.xls")` 可读取 BIFF8 工作簿的数据单元格（文本/数字/日期/布尔）、共享字符串（含跨 CONTINUE 续接）、合并单元格、列宽、行高、冻结表头。公式单元格返回缓存结果值，并解析公式文本（常见单元格引用、运算符与内置函数；数组/3D 引用等不支持的公式仅返回缓存值）。
 
@@ -313,6 +313,14 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 > **保存保真**：通过 `Excel.Open` 打开后修改再保存时，LiteExcel 会重建已映射的部件（工作表数据、样式、合并、批注、验证、筛选、公式等），并将**未映射的 OOXML 部件按原始字节保留**（如宏 `vbaProject.bin`、主题、绘图、图表、表格、外部链接等）。因此 `xlsm` 打开→修改→保存后宏不会丢失。此外，工作簿与工作表的 VBA 宿主代码名（`workbookPr@codeName` / `sheetPr@codeName`）也会在打开时捕获、保存时按 schema 位置写回，确保 VBA 工程中的模块绑定（`ThisWorkbook`、工作表模块、事件宏）不因宿主被重新命名而错位失效。
 >
 > **降级规则**：若打开后新增/删除/重命名/移动了工作表（结构发生变化），工作表级未映射关系（如绘图、超链接）不再复用到新文件，但这些部件的原始字节仍会保留为无害的未引用条目。工作簿级部件（宏、主题）不受结构变化影响。
+
+> **1904 日期系统**：`Excel.Open` 打开 1904 日期系统的工作簿（`workbookPr@date1904` / `BrtWbProp` flags / `DATE1904` 记录）时，日期单元格会按 1904 基准（1904-01-01 = 序列 0）换算。`SaveAs` 到 xlsx/xlsb/xls 时会写回 1904 标志并保持序列一致，因此 1904 工作簿跨格式转换不会偏移 4 年。
+
+> **加密文件识别**：带打开密码的 xlsx/xlsm/xlsb 实际是 OLE CFB 容器（内含 `EncryptionInfo`/`EncryptedPackage` 流）。当前版本**暂不支持解密读取**，但打开时会识别并抛 `LiteExcelException`（"文件已加密（带打开密码）"），而不是误报为 zip 损坏。加密 `.xls`（BIFF8 `FILEPASS` 记录）同样识别并抛明确异常。密码读写能力规划在后续版本。
+
+> **宏与降级**：工作簿若含 VBA 宏（打开 xlsm/xlsb 捕获 `vbaProject.bin`），`SaveAs` 到 `.xlsx` 或 `.xls`（不支持宏）会抛 `LiteExcelException` 阻止静默丢失，请在创建文件前拦截。含宏工作簿请保存为 `.xlsm` 或 `.xlsb`。数据单元格的值在任意格式转换中都不会静默丢失；xls 不支持批注/数据验证/自动筛选等元数据时按文档化降级（忽略，不写错文件）。
+
+> **Stream API**：`Excel.Open(Stream, format)` 支持五格式对象模型读取（必须显式指定格式，流无扩展名）；`Workbook.Save(Stream, format)` 支持五格式保存。输入流不会被关闭（由调用方管理）；支持不可定位的流（内部复制到内存）。`XlsxReader.StreamRows(Stream, ...)` 仍是 xlsx/xlsm 专用底层流式逐行读取。从 Stream 打开后 `Workbook.CurrentPath` 为 null，需用 `SaveAs` 指定保存路径。
 
 ### 2.13 新旧 API 对照
 

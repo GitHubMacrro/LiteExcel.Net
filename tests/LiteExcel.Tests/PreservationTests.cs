@@ -106,10 +106,11 @@ public class PreservationTests
     [Fact]
     public void Open_Modify_Save_PreservesUnknownParts_And_Data()
     {
-        var file = GetTempFile(".xlsx");
+        // 注入 vbaProject.bin 的文件必须保存为 xlsm（xlsx 不支持宏）
+        var file = GetTempFile(".xlsm");
         try
         {
-            var wb = Excel.Create();
+            var wb = Excel.Create(ExcelFormat.Xlsm);
             wb.Worksheets["Sheet1"].SetValue("A1", "数据");
             wb.SaveAs(file);
             InjectExtraParts(file);
@@ -180,10 +181,11 @@ public class PreservationTests
     [Fact]
     public void StructureChanged_DropsSheetRels_ButKeepsBlobs()
     {
-        var file = GetTempFile(".xlsx");
+        // 注入 vbaProject.bin 的文件必须保存为 xlsm（xlsx 不支持宏）
+        var file = GetTempFile(".xlsm");
         try
         {
-            var wb = Excel.Create();
+            var wb = Excel.Create(ExcelFormat.Xlsm);
             wb.Worksheets["Sheet1"].SetValue("A1", "v");
             wb.SaveAs(file);
             InjectExtraParts(file);

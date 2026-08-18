@@ -70,7 +70,7 @@ public static partial class XlsxWriter
     /// <paramref name="mergeSheetRels"/> 为 false 时丢弃工作表级保留 rels（工作表结构已变化）。
     /// </summary>
     internal static void Write(Stream stream, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties,
-        OoxmlPreservedParts? preserved, bool mergeSheetRels, bool macroEnabled = false)
+        OoxmlPreservedParts? preserved, bool mergeSheetRels, bool macroEnabled = false, bool date1904 = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
@@ -124,7 +124,7 @@ public static partial class XlsxWriter
 
         WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled));
         WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
-        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved));
+        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904));
         WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count, preserved));
 
         // 文档属性（文件属性对话框信息）
@@ -136,7 +136,7 @@ public static partial class XlsxWriter
 
         for (int i = 0; i < sheets.Count; i++)
         {
-            var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet);
+            var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet, date1904);
             WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
 
             // 批注：每张有批注的 sheet 对应一个 comments 文件
@@ -286,7 +286,7 @@ public static partial class XlsxWriter
     // ── 工作表 XML 构建 ──
 
     private static string BuildSheetXml(SheetData sheet,
-        Dictionary<string, int> sharedIndex, Stylesheet stylesheet)
+        Dictionary<string, int> sharedIndex, Stylesheet stylesheet, bool date1904)
     {
         var sb = new StringBuilder(4096);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -386,7 +386,7 @@ public static partial class XlsxWriter
                         resolvedStyle = sheet.DefaultStyle;
                 }
 
-                WriteCell(sb, currentRow, col, cell, sharedIndex, stylesheet, resolvedStyle);
+                WriteCell(sb, currentRow, col, cell, sharedIndex, stylesheet, resolvedStyle, date1904);
             }
             sb.Append("</row>");
             dataRowIdx++;
@@ -557,7 +557,7 @@ public static partial class XlsxWriter
     }
 
     private static void WriteCell(StringBuilder sb, int row, int col, Cell cell,
-        Dictionary<string, int> sharedIndex, Stylesheet stylesheet, CellStyle? resolvedStyle = null)
+        Dictionary<string, int> sharedIndex, Stylesheet stylesheet, CellStyle? resolvedStyle = null, bool date1904 = false)
     {
         var cellRef = CellRef.ToString(row - 1, col);
         // 使用解析后的样式（优先级已在外部处理），或 cell 自带的样式
@@ -574,7 +574,7 @@ public static partial class XlsxWriter
                     sb.Append($"<c r=\"{cellRef}\"{styleAttr}><f>{fEsc}</f><v>{FormatDouble(cell.Number)}</v></c>");
                     break;
                 case CellType.Date:
-                    sb.Append($"<c r=\"{cellRef}\"{styleAttr}><f>{fEsc}</f><v>{FormatDouble(cell.Date.ToOADate())}</v></c>");
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr}><f>{fEsc}</f><v>{FormatDouble(FormatDetector.DateToSerial(cell.Date, date1904))}</v></c>");
                     break;
                 case CellType.Boolean:
                     sb.Append($"<c r=\"{cellRef}\"{styleAttr} t=\"b\"><f>{fEsc}</f><v>{(cell.Boolean ? 1 : 0)}</v></c>");
@@ -612,7 +612,7 @@ public static partial class XlsxWriter
                 break;
 
             case CellType.Date:
-                var serial = cell.Date.ToOADate();
+                var serial = FormatDetector.DateToSerial(cell.Date, date1904);
                 sb.Append($"<c r=\"{cellRef}\"{styleAttr}><v>{FormatDouble(serial)}</v></c>");
                 break;
 
@@ -922,15 +922,24 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string WorkbookXml(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved)
+    private static string WorkbookXml(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved, bool date1904)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append($"<workbook xmlns=\"{MainNs}\" xmlns:r=\"{OfficeRelNs}\">");
         // 工作簿宿主 VBA 代码名：schema 要求位于 sheets 之前，缺失会导致 Excel 重排宏文档模块
+        // date1904：1904 日期系统（1904-01-01 基准，读取侧 XlsxReader 按此换算）
         var wbCodeName = preserved?.WorkbookCodeName;
-        if (!string.IsNullOrEmpty(wbCodeName))
-            sb.Append($"<workbookPr codeName=\"{XmlEscape(wbCodeName)}\"/>");
+        bool hasWbAttr = !string.IsNullOrEmpty(wbCodeName) || date1904;
+        if (hasWbAttr)
+        {
+            sb.Append("<workbookPr");
+            if (!string.IsNullOrEmpty(wbCodeName))
+                sb.Append($" codeName=\"{XmlEscape(wbCodeName)}\"");
+            if (date1904)
+                sb.Append(" date1904=\"1\"");
+            sb.Append("/>");
+        }
         sb.Append("<sheets>");
         for (int i = 0; i < sheets.Count; i++)
         {

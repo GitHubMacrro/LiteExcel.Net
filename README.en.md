@@ -1,6 +1,11 @@
 # LiteExcel
 
-A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.2.6**
+[![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.3.0**
 
 > [中文 README](README.zh-CN.md)
 
@@ -23,7 +28,7 @@ dotnet add package LiteExcel
 Or reference a local .nupkg:
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.2.6" />
+<PackageReference Include="LiteExcel" Version="2.3.0" />
 ```
 
 ## Quick Start (recommended: object-model API)
@@ -95,6 +100,7 @@ foreach (var row in read.Rows)
 | Type / Method | Description |
 |---|---|
 | `Excel.Open(path)` | open a workbook, format auto-detected from extension |
+| `Excel.Open(stream, format)` | open a workbook from stream (format must be specified) |
 | `Excel.Create(format)` / `Excel.Create(sheetName, format)` / `Excel.Create(sheetNames[], format)` | create a workbook (xlsx/xlsm/csv/xls/xlsb), batch sheet creation supported |
 | `Excel.Read<T>(path, sheetName?)` | read as List\<T\> (reflection, not AOT compatible) |
 | `Excel.ReadAsDataTable(path, sheetName?)` | read as DataTable (AOT safe) |

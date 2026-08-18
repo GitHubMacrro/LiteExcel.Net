@@ -103,7 +103,7 @@ internal static class XlsbWriter
     private const int FirstCustomFmtId = 164;
 
     /// <summary>写出 .xlsb 工作簿到流。vbaProject 为源工作簿捕获的宏工程字节（可为 null）；workbookCodeName 为宿主代码名（可为 null）</summary>
-    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null)
+    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null, bool date1904 = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
@@ -153,7 +153,7 @@ internal static class XlsbWriter
         // 包结构
         WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null));
         WriteEntry(zip, "_rels/.rels", RootRelsXml());
-        WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName));
+        WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904));
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null));
         WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs));
         if (vbaProject is not null && vbaProject.Length > 0)
@@ -162,7 +162,7 @@ internal static class XlsbWriter
             WriteEntry(zip, "xl/sharedStrings.bin", BuildSharedStringsBin(sst, sstIndex));
 
         for (int i = 0; i < sheets.Count; i++)
-            WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf));
+            WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf, date1904));
     }
 
     // ── 包 XML 部件 ──
@@ -224,12 +224,12 @@ internal static class XlsbWriter
 
     // ── workbook.bin ──
 
-    private static byte[] BuildWorkbookBin(IReadOnlyList<SheetData> sheets, string? workbookCodeName)
+    private static byte[] BuildWorkbookBin(IReadOnlyList<SheetData> sheets, string? workbookCodeName, bool date1904)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginBook, Array.Empty<byte>());
         WriteRecord(ms, BrtFileVersion, FileVersion());
-        WriteRecord(ms, BrtWbProp, WbProp(workbookCodeName)); // 1900 日期系统
+        WriteRecord(ms, BrtWbProp, WbProp(workbookCodeName, date1904)); // 日期系统由 flags bit0 指定
         WriteRecord(ms, BrtBeginBookViews, Array.Empty<byte>());
         WriteRecord(ms, BrtBookView, BookView());
         WriteRecord(ms, BrtEndBookViews, Array.Empty<byte>());
@@ -270,11 +270,12 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    private static byte[] WbProp(string? codeName)
+    private static byte[] WbProp(string? codeName, bool date1904)
     {
         // 对照 Excel：flags(4) + defaultThemeVersion(4) + CodeName(XLWideString，可为空 → cch=0 占 4 字节)
+        // flags bit0 = 1 表示 1904 日期系统（读取侧 XlsbBackend 用 &0x01 判断）
         var ms = new MemoryStream();
-        WriteU32(ms, 0x00010020);
+        WriteU32(ms, date1904 ? 0x00010021u : 0x00010020u);
         WriteU32(ms, 0x0003163C);
         WriteWideString(ms, codeName ?? "");
         return ms.ToArray();
@@ -485,7 +486,7 @@ internal static class XlsbWriter
 
     // ── worksheet.bin ──
 
-    private static byte[] BuildWorksheetBin(SheetData sheet, Dictionary<string, int> sstIndex, Func<string?, int> getXf)
+    private static byte[] BuildWorksheetBin(SheetData sheet, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginSheet, Array.Empty<byte>());
@@ -567,7 +568,7 @@ internal static class XlsbWriter
             bool firstInRow = true;
             foreach (var (col, cell) in cells)
             {
-                WriteCell(ms, col, cell, sstIndex, getXf, ref prevCol, firstInRow);
+                WriteCell(ms, col, cell, sstIndex, getXf, ref prevCol, firstInRow, date1904);
                 firstInRow = false;
             }
         }
@@ -656,7 +657,7 @@ internal static class XlsbWriter
     }
 
     private static void WriteCell(MemoryStream ms, int col, Cell cell, Dictionary<string, int> sstIndex,
-        Func<string?, int> getXf, ref int prevCol, bool firstInRow)
+        Func<string?, int> getXf, ref int prevCol, bool firstInRow, bool date1904)
     {
         int xf = getXf(cell.NumberFormat);
         bool lastSeen = !firstInRow && col == prevCol + 1;
@@ -682,7 +683,7 @@ internal static class XlsbWriter
                 break;
             case CellType.Number:
             case CellType.Date:
-                double v = cell.Type == CellType.Date ? cell.Date.ToOADate() : cell.Number;
+                double v = cell.Type == CellType.Date ? FormatDetector.DateToSerial(cell.Date, date1904) : cell.Number;
                 // 整数小值用 RK，其余用 Real
                 if (v == Math.Floor(v) && v > -1000 && v < 1000)
                 {

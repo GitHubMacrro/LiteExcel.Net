@@ -13,8 +13,17 @@ internal static class CsvBackend
     public static SheetData Read(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var reader = new StreamReader(fs, DetectEncoding(fs) ?? Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return Read(reader, Path.GetFileNameWithoutExtension(path));
+        return Read(fs, Path.GetFileNameWithoutExtension(path));
+    }
+
+    /// <summary>从流读取 CSV 为单张工作表的原始数据。sheetName 用于工作表命名 </summary>
+    public static SheetData Read(Stream stream, string sheetName = "Sheet1")
+    {
+        var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        ms.Position = 0;
+        using var reader = new StreamReader(ms, DetectEncoding(ms) ?? Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return Read(reader, sheetName);
     }
 
     internal static SheetData Read(TextReader reader, string sheetName)
@@ -140,9 +149,10 @@ internal static class CsvBackend
         return fields;
     }
 
-    private static Encoding? DetectEncoding(FileStream fs)
+    private static Encoding? DetectEncoding(Stream fs)
     {
         // BOM 检测
+        if (!fs.CanSeek) return null;
         var bom = new byte[3];
         int read = fs.Read(bom, 0, 3);
         if (read >= 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF) return Encoding.UTF8;

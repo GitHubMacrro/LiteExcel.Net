@@ -1,9 +1,14 @@
 # LiteExcel
 
+[![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 A lightweight, zero-dependency .NET library for reading and writing Excel xlsx/xlsm/csv files, plus legacy xls/xlsb files (xls read/write, xlsb read/write).
 轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。
 
-**Version / 版本**: 2.2.6
+**Version / 版本**: 2.3.0
 
 ## Language / 语言
 

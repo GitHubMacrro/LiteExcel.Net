@@ -1,6 +1,11 @@
 # LiteExcel
 
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.2.6**
+[![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+[![NuGet 下载](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.3.0**
 
 > [English README](README.en.md)
 
@@ -23,7 +28,7 @@ dotnet add package LiteExcel
 或本地 .nupkg 引用：
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.2.6" />
+<PackageReference Include="LiteExcel" Version="2.3.0" />
 ```
 
 ## 快速上手（推荐：对象模型 API）
@@ -95,6 +100,7 @@ foreach (var row in read.Rows)
 | 类型 / 方法 | 说明 |
 |---|---|
 | `Excel.Open(path)` | 按扩展名自动识别格式打开工作簿 |
+| `Excel.Open(stream, format)` | 从流打开工作簿（必须显式指定格式） |
 | `Excel.Create(format)` / `Excel.Create(sheetName, format)` / `Excel.Create(sheetNames[], format)` | 新建工作簿（xlsx/xlsm/csv/xls/xlsb），支持批量添加工作表 |
 | `Excel.Read<T>(path, sheetName?)` | 读为 List\<T\>（反射，不兼容 AOT） |
 | `Excel.ReadAsDataTable(path, sheetName?)` | 读为 DataTable（AOT 安全） |

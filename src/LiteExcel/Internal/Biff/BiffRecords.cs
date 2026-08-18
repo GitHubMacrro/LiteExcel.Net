@@ -32,6 +32,7 @@ internal static class BiffRecords
     public const ushort OpColInfo = 0x007D;
     public const ushort OpPane = 0x0041;
     public const ushort OpWindow2 = 0x023E;
+    public const ushort OpFilePass = 0x002F;
 
     public readonly struct Record
     {

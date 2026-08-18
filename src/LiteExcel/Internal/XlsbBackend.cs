@@ -64,7 +64,13 @@ internal static class XlsbBackend
     public static byte[]? ReadVbaProject(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true);
+        return ReadVbaProject(fs);
+    }
+
+    /// <summary>从流读取 .xlsb 包中的 VBA 宏工程原始字节，无宏返回 null。流必须可读 </summary>
+    public static byte[]? ReadVbaProject(Stream stream)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
         return ReadEntry(zip, "xl/vbaProject.bin");
     }
 
@@ -72,7 +78,18 @@ internal static class XlsbBackend
     public static string? ReadWorkbookCodeName(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true);
+        return ReadWorkbookCodeName(fs);
+    }
+
+    /// <summary>从流读取 .xlsb 工作簿宿主的 VBA 代码名，无则返回 null </summary>
+    public static string? ReadWorkbookCodeName(Stream stream)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        return ReadWorkbookCodeNameCore(zip);
+    }
+
+    private static string? ReadWorkbookCodeNameCore(ZipArchive zip)
+    {
         var wbBytes = ReadEntry(zip, "xl/workbook.bin");
         if (wbBytes is null) return null;
         var records = Biff12Records.ReadAll(wbBytes);
@@ -86,6 +103,28 @@ internal static class XlsbBackend
             return System.Text.Encoding.Unicode.GetString(rec.Data, off, (int)cch * 2);
         }
         return null;
+    }
+
+    /// <summary>读取 .xlsb 工作簿的 1904 日期系统标志（BrtWbProp flags bit0） </summary>
+    public static bool ReadDate1904(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return ReadDate1904(fs);
+    }
+
+    /// <summary>从流读取 .xlsb 工作簿的 1904 日期系统标志 </summary>
+    public static bool ReadDate1904(Stream stream)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        var wbBytes = ReadEntry(zip, "xl/workbook.bin");
+        if (wbBytes is null) return false;
+        var records = Biff12Records.ReadAll(wbBytes);
+        foreach (var rec in records)
+        {
+            if (rec.Rt != BrtWbProp || rec.Data.Length < 4) continue;
+            return (Biff12Records.ReadU32(rec.Data, 0) & 0x01) != 0;
+        }
+        return false;
     }
 
     public static List<SheetData> ReadAll(Stream stream)

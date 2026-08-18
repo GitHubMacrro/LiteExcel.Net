@@ -4,12 +4,14 @@ using System.Text;
 
 namespace LiteExcel.Internal;
 
-/// <summary>
-/// 数字格式代码识别助手（xls / xlsb 共用）。
+/// <summary>数字格式代码识别助手（xls / xlsb 共用）。
 /// 将"数字单元格是否应解释为日期"的逻辑集中在此，避免两个后端各自维护一套。
 /// </summary>
 internal static class FormatDetector
 {
+    /// <summary>1900 与 1904 日期系统 epoch 的天数差（1904-01-01 = OADate 1462） </summary>
+    private const int Date1904Offset = 1462;
+
     private static readonly HashSet<int> BuiltInDateFmtIds = new()
     {
         14, 15, 16, 17, 18, 19, 20, 21, 22,
@@ -33,6 +35,12 @@ internal static class FormatDetector
             return Cell.FromDate(date, fmtCode);
         }
         return Cell.FromNumber(val, fmtCode);
+    }
+
+    /// <summary>将 DateTime 转为 Excel 序列值（按日期系统选择基准）。1904 系统基准为 1904-01-01 </summary>
+    public static double DateToSerial(DateTime date, bool date1904)
+    {
+        return date1904 ? date.ToOADate() - Date1904Offset : date.ToOADate();
     }
 
     public static string? GetFormatCode(int ifmt, Dictionary<int, string> formats)

@@ -1,5 +1,6 @@
 *.xlsx
 !tests/LiteExcel.Tests/Fixtures/excel-authored-compatibility.xlsx
+!tests/LiteExcel.Tests/Fixtures/protected.xlsx
 bin/
 obj/
 *.nupkg

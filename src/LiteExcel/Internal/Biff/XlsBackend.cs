@@ -31,6 +31,28 @@ internal static class XlsBackend
         return ParseWorkbook(workbook);
     }
 
+    /// <summary>读取 .xls 工作簿的 1904 日期系统标志（DATE1904 记录，0x0022） </summary>
+    public static bool ReadDate1904(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return ReadDate1904(fs);
+    }
+
+    /// <summary>从流读取 .xls 工作簿的 1904 日期系统标志 </summary>
+    public static bool ReadDate1904(Stream stream)
+    {
+        var cfb = CfbFile.Open(stream);
+        var workbook = cfb.GetStream("Workbook") ?? cfb.GetStream("Book");
+        if (workbook is null) return false;
+        var records = BiffRecords.ReadAll(workbook);
+        foreach (var rec in records)
+        {
+            if (rec.Opcode == BiffRecords.OpDateMode && rec.Data.Length >= 2)
+                return BiffRecords.ReadU16(rec.Data, 0) == 1;
+        }
+        return false;
+    }
+
     private static List<SheetData> ParseWorkbook(byte[] wb)
     {
         var records = BiffRecords.ReadAll(wb);
@@ -51,6 +73,10 @@ internal static class XlsBackend
 
             switch (rec.Opcode)
             {
+                case BiffRecords.OpFilePass:
+                    // BIFF8 加密：BOF 后紧跟明文 FILEPASS 记录（标准/增强加密标记），后续记录全部密文
+                    throw new LiteExcelException("该 .xls 文件已加密（带打开密码）。当前版本暂不支持读取加密工作簿，" +
+                        "请在 Excel 中另存为无密码文件后再打开（密码支持规划在后续版本）。");
                 case BiffRecords.OpBoundSheet:
                     boundSheets.Add(ParseBoundSheet(rec.Data));
                     break;

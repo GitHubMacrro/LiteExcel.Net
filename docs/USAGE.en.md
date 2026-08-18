@@ -1,6 +1,6 @@
 # LiteExcel Usage Guide
 
-**Version**: 2.2.6  
+**Version**: 2.3.0  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -44,7 +44,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.2.6" />
+  <PackageReference Include="LiteExcel" Version="2.3.0" />
 </ItemGroup>
 ```
 
@@ -296,11 +296,11 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 
 | Format | Read | Write | Notes |
 |---|---|---|---|
-| `xlsx` | ✅ | ✅ | full read/write |
+| `xlsx` | ✅ | ✅ | full read/write; 1904 date system read/write; saving a macro workbook to `.xlsx` throws (see "Macros & degradation") |
 | `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part and host codeName bindings (`workbookPr`/`sheetPr`) preserved on save |
 | `csv` | ✅ | ✅ | tabular data only, no styles/merge |
-| `xls` | ✅ | ✅ | read/write (BIFF8, Excel 97+); formulas written as static cached values |
-| `xlsb` | ✅ | ✅ | read/write (BIFF12 binary OOXML); formulas written as static cached values |
+| `xls` | ✅ | ✅ | read/write (BIFF8, Excel 97+); formulas written as static cached values; saving a macro workbook to `.xls` throws (see "Macros & degradation") |
+| `xlsb` | ✅ | ✅ | read/write (BIFF12 binary OOXML); formulas written as static cached values; 1904 date system read/write |
 
 > **xls read scope**: `Excel.Open("file.xls")` reads BIFF8 workbooks: data cells (text/number/date/boolean), shared strings (including cross-CONTINUE continuation), merged cells, column widths, row heights, frozen header. Formula cells return the cached result value and the parsed formula text (common cell references, operators and built-in functions; unsupported formulas such as array/3D references return only the cached value).
 
@@ -313,6 +313,14 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 > **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros. In addition, the VBA host code names (`workbookPr@codeName` / `sheetPr@codeName`) are captured on open and written back in their schema-required positions on save, so module bindings in the VBA project (`ThisWorkbook`, sheet modules, event macros) are not broken by hosts being renamed.
 >
 > **Degradation rule**: if the workbook structure changed after open (sheets added/removed/renamed/moved), sheet-level unmapped relationships (drawings, hyperlinks) are not re-attached to the new file, though the raw part bytes are still kept as harmless unreferenced entries. Workbook-level parts (macros, theme) are unaffected by structure changes.
+
+> **1904 date system**: when `Excel.Open` reads a 1904-date-system workbook (`workbookPr@date1904` / `BrtWbProp` flags / `DATE1904` record), date cells are converted on the 1904 base (1904-01-01 = serial 0). `SaveAs` to xlsx/xlsb/xls writes back the 1904 flag and keeps serials consistent, so 1904 workbooks do not shift 4 years across format conversion.
+
+> **Encrypted file detection**: password-protected xlsx/xlsm/xlsb are actually OLE CFB containers (containing `EncryptionInfo`/`EncryptedPackage` streams). The current version **does not support decryption**, but it detects such files on open and throws `LiteExcelException` ("file is encrypted (has an open password)") instead of a misleading zip-corruption error. Encrypted `.xls` (BIFF8 `FILEPASS` record) is also detected with a clear error. Password read/write is planned for a future version.
+
+> **Macros & degradation**: if a workbook contains VBA macros (captured from `vbaProject.bin` on open), `SaveAs` to `.xlsx` or `.xls` (which do not support macros) throws `LiteExcelException` to prevent silent loss, before the file is created. Save macro workbooks as `.xlsm` or `.xlsb`. Cell data values are never silently lost across any format conversion; metadata unsupported by xls (comments, data validation, auto filter) follows the documented degradation (ignored, no corrupt file produced).
+
+> **Stream API**: `Excel.Open(Stream, format)` supports reading all five formats via the object model (format must be specified explicitly — a stream has no extension); `Workbook.Save(Stream, format)` supports saving all five formats. The input stream is not closed (caller manages its lifetime); non-seekable streams are supported (copied to memory internally). `XlsxReader.StreamRows(Stream, ...)` remains an xlsx/xlsm-only low-level streaming row reader. After opening from a stream, `Workbook.CurrentPath` is null — use `SaveAs` to specify a save path.
 
 ### 2.13 Old vs New API
 

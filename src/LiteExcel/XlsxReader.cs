@@ -34,38 +34,55 @@ public static partial class XlsxReader
 
     // ── 公开 API：文件路径重载 ──
 
+    /// <summary>打开文件流并在进入 zip 前检测加密（CFB 容器 + EncryptionInfo），避免误报 zip 损坏 </summary>
+    private static FileStream OpenFileStreamChecked(string path)
+    {
+        var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        try
+        {
+            EncryptionDetector.ThrowIfEncryptedOoxml(fs, path);
+        }
+        catch
+        {
+            fs.Dispose();
+            throw;
+        }
+        fs.Position = 0;
+        return fs;
+    }
+
     /// <summary>列出所有工作表名 </summary>
     public static List<string> GetSheetNames(string path)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var fs = OpenFileStreamChecked(path);
         return GetSheetNames(fs);
     }
 
     /// <summary>按索引读取单表 </summary>
     public static SheetData Read(string path, int sheetIndex, bool firstRowIsHeader = true)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var fs = OpenFileStreamChecked(path);
         return Read(fs, sheetIndex, firstRowIsHeader);
     }
 
     /// <summary>按名称读取单表 </summary>
     public static SheetData Read(string path, string sheetName, bool firstRowIsHeader = true)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var fs = OpenFileStreamChecked(path);
         return Read(fs, sheetName, firstRowIsHeader);
     }
 
     /// <summary>读取所有工作表 </summary>
     public static List<SheetData> ReadAll(string path)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var fs = OpenFileStreamChecked(path);
         return ReadAll(fs);
     }
 
     /// <summary>流式读取大文件，逐行回调，不驻留内存 </summary>
     public static void StreamRows(string path, string sheetName, Action<IReadOnlyList<Cell>> onRow)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var fs = OpenFileStreamChecked(path);
         StreamRows(fs, sheetName, onRow);
     }
 
@@ -79,7 +96,7 @@ public static partial class XlsxReader
 
         //   快速扫描获取总数据行数（仅遍历 <row> 元素计数，不解析单元格）
         int totalDataRows;
-        using (var fsScan = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var fsScan = OpenFileStreamChecked(path))
         using (var zipScan = new ZipArchive(fsScan, ZipArchiveMode.Read))
         {
             var sheetsScan = ReadWorkbook(zipScan);
@@ -104,7 +121,7 @@ public static partial class XlsxReader
         }
 
         //   流式逐行读取，每读一行回调 onProgress(current, total)
-        using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var fs = OpenFileStreamChecked(path))
         using (var zip = new ZipArchive(fs, ZipArchiveMode.Read))
         {
             var shared = ReadSharedStrings(zip);
@@ -214,7 +231,7 @@ public static partial class XlsxReader
     /// <summary>读取工作簿文档属性（作者/最后保存者/时间/标题等） 无属性时返回空对象 </summary>
     public static WorkbookProperties ReadProperties(string path)
     {
-        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var fs = OpenFileStreamChecked(path);
         return ReadProperties(fs);
     }
 
@@ -392,6 +409,9 @@ public static partial class XlsxReader
 
     /// <summary>最近一次 ReadWorkbook 捕获的工作簿 codeName（同线程、单次打开内有效，供 OpenCore 取用） </summary>
     internal static string? WorkbookCodeNameSnapshot => s_workbookCodeName;
+
+    /// <summary>最近一次 ReadWorkbook 捕获的 1904 日期系统标志（同线程、单次打开内有效，供 OpenCore 取用） </summary>
+    internal static bool Date1904Snapshot => s_globalDate1904;
 
     private static SheetData ReadWorksheet(ZipArchive zip, string sheetPath, string sheetName,
         List<string> shared, StylesheetInfo styles, bool firstRowIsHeader)

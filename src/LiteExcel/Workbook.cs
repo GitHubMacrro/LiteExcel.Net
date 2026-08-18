@@ -39,6 +39,9 @@ public sealed class Workbook
     /// <summary>打开时捕获的工作簿宿主 VBA 代码名（workbookPr@codeName / BrtWbProp codeName） </summary>
     internal string? WorkbookCodeName { get; set; }
 
+    /// <summary>是否使用 1904 日期系统（Excel 序列值基准为 1904-01-01）。打开时捕获；保存时写回对应格式标志。 </summary>
+    internal bool Date1904 { get; set; }
+
     /// <summary>
     /// 当前目标路径。
     /// <see cref="Open"/> 后指向源文件；<see cref="SaveAs"/> 后更新为新路径；
@@ -141,12 +144,18 @@ public sealed class Workbook
 
     private void SaveCore(string path, ExcelFormat format)
     {
+        // 先做格式能力校验（宏不支持目标格式时提前报错），避免创建残缺文件
+        ThrowIfMacroNotSupported(format);
+
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
         SaveCore(fs, format);
     }
 
     private void SaveCore(Stream stream, ExcelFormat format)
     {
+        // Stream 版同样校验宏保护
+        ThrowIfMacroNotSupported(format);
+
         switch (format)
         {
             case ExcelFormat.Xlsx:
@@ -154,7 +163,7 @@ public sealed class Workbook
                 var sheets = BuildSheetDataList();
                 bool structureUnchanged = StructureUnchanged(sheets);
                 XlsxWriter.Write(stream, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
-                    macroEnabled: format == ExcelFormat.Xlsm);
+                    macroEnabled: format == ExcelFormat.Xlsm, date1904: Date1904);
                 break;
             case ExcelFormat.Csv:
                 if (Worksheets.Count != 1)
@@ -163,15 +172,24 @@ public sealed class Workbook
                 break;
             case ExcelFormat.Xls:
                 var xlsSheets = BuildSheetDataList();
-                XlsWriter.Write(stream, xlsSheets);
+                XlsWriter.Write(stream, xlsSheets, Date1904);
                 break;
             case ExcelFormat.Xlsb:
                 var xlsbSheets = BuildSheetDataList();
-                XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName);
+                XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904);
                 break;
             default:
                 throw new NotSupportedException($"未知格式：{format}");
         }
+    }
+
+    /// <summary>含 VBA 宏的工作簿不允许保存为不支持宏的格式（xlsx/xls），防止宏静默丢失或生成不一致文件 </summary>
+    private void ThrowIfMacroNotSupported(ExcelFormat format)
+    {
+        if (VbaProjectBytes is not null && (format == ExcelFormat.Xls || format == ExcelFormat.Xlsx))
+            throw new LiteExcelException(
+                $"无法写出 {format}：当前工作簿包含 VBA 宏，而 {format} 格式不支持宏。" +
+                "请另存为 .xlsm 或 .xlsb 以保留宏。");
     }
 
     internal List<SheetData> BuildSheetDataList()

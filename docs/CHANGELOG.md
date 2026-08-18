@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.3.0] - 2026-08-17
+
+### Added
+- **`Excel.Open(Stream, format)` 对象模型 Stream 打开**：新增 `Excel.Open(Stream stream, ExcelFormat format, ExcelReadOptions? options)` 重载，支持五格式从流读取。必须显式指定格式（流无扩展名）；输入流不关闭（由调用方管理）；支持不可定位流（内部复制到内存）；打开后 `CurrentPath` 为 null，需 `SaveAs` 指定保存路径。与 `Workbook.Save(Stream, format)` 配对，五格式 Stream 读写闭环。
+  - 底层后端新增 Stream 重载：`XlsbBackend.ReadVbaProject/ReadWorkbookCodeName/ReadDate1904(Stream)`、`XlsBackend.ReadDate1904(Stream)`、`CsvBackend.Read(Stream, sheetName)`。
+  - 新增 `StreamOpenTests` 15 个（五格式 Stream 往返、不可定位流、流不关闭、CurrentPath=null、SaveAs 可用、1904 保留、加密识别含 `<stream>` 显示名回归、参数校验）。
+- **加密文件识别**：带打开密码的 xlsx/xlsm/xlsb（OLE CFB 容器，含 `EncryptionInfo`/`EncryptedPackage` 流）与加密 `.xls`（BIFF8 `FILEPASS` 记录）打开时现可识别并抛 `LiteExcelException`（"文件已加密（带打开密码）"），不再误报为 zip 损坏或解析出乱数据。完整密码读写规划在后续版本。
+  - 新增 `Internal/EncryptionDetector.cs`（CFB 魔数嗅探 + `EncryptionInfo` 流检测，复用 `CfbFile`）；`Excel.Open` 的 xlsx/xlsm/xlsb 路径在进 zip 前先识别。
+  - 加密识别现已覆盖**所有公开 path 读取入口**：`Excel.Open`、`Excel.Read<T>`、`Excel.ReadAsDataTable`、`Excel.GetSheetNames`、`Excel.StreamRows`、`XlsxReader.Read/ReadAll/GetSheetNames/StreamRows/ReadWithProgress/ReadProperties`。
+  - 新增 `EncryptedWorkbookTests` 17 个（真实 Excel 生成的 4 个加密 fixture + 公开读取入口覆盖）。
+- **1904 日期系统写出**：`Workbook.Date1904`（打开时捕获）现可在 xlsx/xlsb/xls 写出侧写回标志并保持日期序列一致，修复 1904 工作簿往返偏移 4 年的缺陷。
+  - `XlsxWriter` 写 `<workbookPr date1904="1"/>`；`XlsbWriter` 写 `BrtWbProp` flags bit0；`XlsWriter` 写 `DATE1904` 记录。
+  - 日期序列换算统一到 `FormatDetector.DateToSerial(date, date1904)`（1904 基准 = OADate - 1462）。
+  - Excel COM 验证：LiteExcel 生成的 1904 xlsx/xlsb 无修复提示，序列值正确（2024-03-15=43904、1904-01-01=0）。
+  - 新增 `Date1904Tests` 6 个（含真实 Excel fixture `excel-authored-date1904.xlsb`）。
+- **`Excel.Write` 扩展名推断一致化**：现与 `DetectFormat` 完全一致——`.xls` 扩展名转 Xls、`.xlsb` 转 Xlsb（此前忽略这两个扩展名），规则简单可预测。
+- 新增 `DegradationBehaviorTests` 8 个（扩展名推断、宏保护 xlsx/xls、Stream 宏保护、xlsm/xlsb 宏仍可用、CSV 多表报错等）。
+
+### Changed
+- **宏保护扩展到 `.xlsx`**：含 VBA 宏的工作簿 `SaveAs` 到 `.xlsx` 或 `.xls`（不支持宏）现抛 `LiteExcelException`（在创建文件前拦截），防止宏被静默丢弃或生成不一致文件。含宏工作簿请保存为 `.xlsm` 或 `.xlsb`。无宏工作簿不受影响。
+
+### Notes / 兼容性
+- 既有 API 无破坏性变更（`Date1904` 为 internal 属性，不暴露公开 API；`XlsWriter.Write`/`XlsbWriter.Write`/`XlsxWriter.Write` 的 `date1904` 均为带默认值的可选参数）。
+- 加密文件此前会误报为 zip 损坏；2.3.0 起抛明确 `LiteExcelException`。这是错误信息改善，非行为破坏。
+- **net48 兼容性修复**：Stream 打开加密文件时，错误信息中的显示名 `"<stream>"` 在 net48 下会被 `Path.GetFileName` 判定为非法路径字符而抛 `ArgumentException`（net8.0 不抛）。现改用 `SafeDisplayName` 兜底，net48 下正常抛 `LiteExcelException`（由 WindowsFormsApp5 真实外部验证发现并修复）。
+- 含宏工作簿保存为 `.xlsx` 此前可能生成包含 `vbaProject.bin` 但主文档类型为普通 xlsx 的不一致文件；2.3.0 起明确抛错。这是保护性变更。
+- 真实文件验证：Excel COM 打开 1904 xlsx/xlsb 无修复、日期正确；SheetJS 交叉验证 xlsb 大文件数据一致（10k/50k 行、中文、emoji、特殊字符、合并、冻结）。
+- 全量 **302 测试通过**（256 + 15 Stream Open + 17 加密 + 6 个 1904 + 8 个降级行为），net48+net8.0 干净。
+
 ## [2.2.6] - 2026-08-17
 
 ### Fixed

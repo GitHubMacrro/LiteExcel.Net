@@ -8,7 +8,7 @@
     <AssemblyName>LiteExcel</AssemblyName>
     <RootNamespace>LiteExcel</RootNamespace>
     <PackageId>LiteExcel</PackageId>
-    <Version>2.2.6</Version>
+    <Version>2.3.0</Version>
     <Authors>JackZ</Authors>	  
     <Description>轻量级 xlsx/xlsm/csv 读写库，零第三方依赖，AOT 友好，支持 net48 和 net8.0。</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -40,6 +40,12 @@
     <None Include="..\..\docs\USAGE.zh-CN.md" Pack="true" PackagePath="docs\" Condition="Exists('..\..\docs\USAGE.zh-CN.md')" />
     <None Include="..\..\docs\USAGE.en.md" Pack="true" PackagePath="docs\" Condition="Exists('..\..\docs\USAGE.en.md')" />
     <None Include="..\..\docs\CHANGELOG.md" Pack="true" PackagePath="docs\" Condition="Exists('..\..\docs\CHANGELOG.md')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>LiteExcel.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>
