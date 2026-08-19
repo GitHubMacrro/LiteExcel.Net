@@ -13,15 +13,10 @@ public class OpenPasswordReadTests
     {
         get
         {
-            // 测试运行目录 -> 仓库根/tests/LiteExcel.Tests/bin/Release/net8.0
-            var dir = AppContext.BaseDirectory;
-            for (int i = 0; i < 4 && dir is not null; i++)
-                dir = Path.GetDirectoryName(dir);
-            // 向上找到 LiteXlsx 仓库根（含 files/）
             var probe = Path.GetDirectoryName(AppContext.BaseDirectory);
-            while (probe is not null && !Directory.Exists(Path.Combine(probe, "files")))
+            while (probe is not null && !Directory.Exists(Path.Combine(probe, "tests", "LiteExcel.Tests", "Fixtures")))
                 probe = Path.GetDirectoryName(probe);
-            return Path.Combine(probe!, "files");
+            return Path.Combine(probe!, "tests", "LiteExcel.Tests", "Fixtures", "EncryptedSamples");
         }
     }
 

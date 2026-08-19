@@ -14,9 +14,9 @@ public class ModifyPasswordTests
         get
         {
             var probe = Path.GetDirectoryName(AppContext.BaseDirectory);
-            while (probe is not null && !Directory.Exists(Path.Combine(probe, "files")))
+            while (probe is not null && !Directory.Exists(Path.Combine(probe, "tests", "LiteExcel.Tests", "Fixtures")))
                 probe = Path.GetDirectoryName(probe);
-            return Path.Combine(probe!, "files");
+            return Path.Combine(probe!, "tests", "LiteExcel.Tests", "Fixtures", "EncryptedSamples");
         }
     }
 

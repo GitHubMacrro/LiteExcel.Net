@@ -8,6 +8,9 @@ files/
 !tests/LiteExcel.Tests/Fixtures/excel-authored.xlsb
 !tests/LiteExcel.Tests/Fixtures/excel-authored-date1904.xlsb
 !tests/LiteExcel.Tests/Fixtures/protected.xlsb
+!tests/LiteExcel.Tests/Fixtures/EncryptedSamples/*.xlsx
+!tests/LiteExcel.Tests/Fixtures/EncryptedSamples/*.xlsm
+!tests/LiteExcel.Tests/Fixtures/EncryptedSamples/*.xlsb
 bin/
 obj/
 *.nupkg
