@@ -2,10 +2,11 @@
 
 [![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![NuGet 下载](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+[![CI](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.0**
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.1**
 
 > [English README](README.en.md)
 
@@ -20,7 +21,7 @@
 - **文件级安全**：打开密码（Agile 加密）+ 修改密码（写保护），支持 xlsx/xlsm/xlsb，通过 `Workbook.Security`（`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`）
 - **超链接**：xlsx/xlsm/xlsb/xls 四格式读写（外部 URL/文件/mailto/UNC + 内部 `#Sheet1!A1` 跳转，`Cell.Hyperlink`）
 - **冻结窗格**：`FreezeRows` / `FreezeColumns` 支持 xlsx/xlsb/xls 任意行列冻结，`FreezeHeader` 兼容
-- **图片写回**：xlsx/xlsm 浮动图片 + 单元格内嵌图片（`ws.AddImage`；图片读取不在 2.4.0 范围）
+- **图片写回**：xlsx/xlsm 浮动图片 + 单元格内嵌图片，支持锚点/移动方式/AltText（`ws.AddImage`、`ImageAnchor`、`ImageMoveMode`；图片读取不在 2.4.0 范围）
 - **真实文件兼容**：可正确读取 Excel/WPS 创建的 xlsx（含 Table/theme 等扩展部件）
 
 ## 安装
@@ -164,7 +165,7 @@ foreach (var row in read.Rows)
 | `AutoFilter` / `FilterColumn` | 自动筛选 |
 | `DataValidation` | 数据验证 |
 | `Hyperlink` / `Cell.Hyperlink` | 单元格超链接（外部 URL / 内部跳转） |
-| `WorksheetImage` / `ImagePlacement` | 图片（浮动 / 单元格内嵌） |
+| `WorksheetImage` / `ImagePlacement` / `ImageAnchor` / `ImageMoveMode` | 图片（浮动 / 单元格内嵌，锚点 / 移动方式 / AltText） |
 | `WorkbookSecurity` / `Workbook.Security` | 文件级安全（打开密码 / 修改密码 / 只读状态） |
 | `WorkbookProperties` | 文档属性（作者/时间/标题/应用名） |
 | `LiteExcelException` / `InvalidSheetNameException` | 异常 |

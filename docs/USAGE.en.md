@@ -1102,6 +1102,32 @@ ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
 
 > Images are only supported in xlsx/xlsm format and are **write-only** (opening a file does not fill `Images`; reading images is out of scope for 2.4.0). xls/xlsb/csv do not support images. InCell images display as `#VALUE!` in Excel (consistent with natively produced Excel samples).
 
+### Image Anchor and Move Mode (2.4.1+)
+
+Floating images support high-precision anchors: top-left cell + EMU offsets + display size + move/resize behavior with cells, plus accessibility alt text (AltText):
+
+```csharp
+ws.AddImage(logoData, new ImageAnchor
+{
+    TopLeftCell = "B2",           // top-left cell A1 reference
+    TopLeftOffsetX = 9525,       // horizontal offset (EMU, 1px≈9525)
+    TopLeftOffsetY = 0,           // vertical offset
+    WidthPixels = 200,
+    HeightPixels = 120,
+    MoveMode = ImageMoveMode.MoveAndSizeWithCells, // move + size with cells
+}, extension: "png", name: "logo", altText: "Company Logo");
+```
+
+`ImageMoveMode` three modes:
+
+| Mode | OOXML | Behavior |
+|---|---|---|
+| `MoveButDontSizeWithCells` (default) | oneCellAnchor | Moves with cells, does not resize |
+| `MoveAndSizeWithCells` | twoCellAnchor | Moves and resizes with cells (image stretches with grid) |
+| `FixedPosition` | oneCellAnchor editAs="absolute" | Fixed position, does not move/resize with cells |
+
+> `twoCellAnchor` end position is estimated using default column width≈64px / row height≈20px; with non-default grid the image scales with cells. `ImageAnchor` applies to Floating only; InCell ignores anchors.
+
 ---
 
 ## 15. Data Validation (Dropdown List)

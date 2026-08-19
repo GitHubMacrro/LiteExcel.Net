@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.4.1] - 2026-08-19
+
+### Added
+- **图片细化锚点能力**（Floating 图片）：
+  - `ImageMoveMode` 枚举：`MoveAndSizeWithCells`（随格移动+缩放，twoCellAnchor）/ `MoveButDontSizeWithCells`（随格移动不缩放，默认）/ `FixedPosition`（固定位置，editAs="absolute"）
+  - `ImageAnchor` 类：`TopLeftCell`（A1 引用）+ `TopLeftOffsetX/Y`（EMU 偏移）+ `WidthPixels/HeightPixels` + `MoveMode`
+  - `WorksheetImage.Anchor`（可选，设置后优先于 Row/Column）+ `AltText`（cNvPr descr 无障碍文本）+ 只读 `CellAddress`
+  - `Worksheet.AddImage(byte[], ImageAnchor, extension?, name?, altText?)` 新重载
+  - 写入侧 `BuildDrawingXml` / `MergeDrawingXml` 两处统一锚点渲染（oneCellAnchor/twoCellAnchor + editAs + 偏移 + descr）
+  - `twoCellAnchor` 的 to 按默认列宽≈64px/行高≈20px 估算（随格缩放特性下初始尺寸≈设定像素）
+  - Excel COM 验证三种模式 + AltText 正确、无修复提示
+
+### Notes
+- 向后兼容：现有 `Row/Column` `AddImage` 行为不变（默认 MoveButDontSizeWithCells，无 editAs）
+- InCell 图片忽略 Anchor（richData 无锚点概念）
+- 全量 **429 测试通过**，net48+net8.0 构建干净
+
 ## [2.4.0] - 2026-08-18
 
 ### Added

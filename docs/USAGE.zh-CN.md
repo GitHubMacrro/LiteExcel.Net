@@ -1264,6 +1264,32 @@ ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
 
 > 图片仅支持 xlsx/xlsm 格式，且仅支持**写回**（打开文件不会回填 `Images`，图片读取不在 2.4.0 范围）。xls/xlsb/csv 不支持图片。InCell 嵌入图片在 Excel 中单元格显示为 `#VALUE!`（与 Excel 原生真实样本一致）。
 
+### 图片锚点与移动方式（2.4.1+）
+
+浮动图片支持高精度锚点，可指定左上单元格 + EMU 偏移 + 显示尺寸 + 随单元格的移动/缩放方式，以及无障碍替换文本（AltText）：
+
+```csharp
+ws.AddImage(logoData, new ImageAnchor
+{
+    TopLeftCell = "B2",           // 左上单元格 A1 引用
+    TopLeftOffsetX = 9525,       // 水平偏移（EMU，1px≈9525）
+    TopLeftOffsetY = 0,           // 垂直偏移
+    WidthPixels = 200,
+    HeightPixels = 120,
+    MoveMode = ImageMoveMode.MoveAndSizeWithCells, // 随格移动+缩放
+}, extension: "png", name: "logo", altText: "公司 Logo");
+```
+
+`ImageMoveMode` 三种模式：
+
+| 模式 | OOXML | 行为 |
+|---|---|---|
+| `MoveButDontSizeWithCells`（默认） | oneCellAnchor | 随单元格移动，不缩放 |
+| `MoveAndSizeWithCells` | twoCellAnchor | 随单元格移动并缩放（图片跟随格子拉伸） |
+| `FixedPosition` | oneCellAnchor editAs="absolute" | 固定位置，不随单元格移动/缩放 |
+
+> `twoCellAnchor` 的终止位置按默认列宽≈64px/行高≈20px 估算，非默认格子下图片按格子缩放。`ImageAnchor` 仅 Floating 生效；InCell 忽略锚点。
+
 ---
 ## 15. 数据验证（下拉列表）
 

@@ -2,10 +2,11 @@
 
 [![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+[![CI](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.4.0**
+A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.4.1**
 
 > [中文 README](README.zh-CN.md)
 
@@ -20,7 +21,7 @@ A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/cs
 - **File-level security**: open password (Agile Encryption) + modify password (write protection) on xlsx/xlsm/xlsb, via `Workbook.Security` (`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`)
 - **Hyperlinks**: read + write on all 4 formats (xlsx/xlsm/xlsb/xls; external URLs/files/mailto/UNC + internal `#Sheet1!A1` jumps via `Cell.Hyperlink`)
 - **Freeze panes**: `FreezeRows` / `FreezeColumns` on xlsx/xlsb/xls (arbitrary rows/columns), `FreezeHeader` compatible
-- **Images (write-only)**: xlsx/xlsm floating images + in-cell images (`ws.AddImage`; image reading is out of scope for 2.4.0)
+- **Images (write-only)**: xlsx/xlsm floating images + in-cell images, with anchor/move-mode/AltText (`ws.AddImage`, `ImageAnchor`, `ImageMoveMode`; image reading is out of scope for 2.4.0)
 - **Real file compatibility**: correctly reads xlsx created by Excel/WPS (including Table/theme extension parts)
 
 ## Installation
@@ -164,7 +165,7 @@ foreach (var row in read.Rows)
 | `AutoFilter` / `FilterColumn` | auto filter |
 | `DataValidation` | data validation |
 | `Hyperlink` / `Cell.Hyperlink` | cell hyperlink (external URL / internal jump) |
-| `WorksheetImage` / `ImagePlacement` | image (floating / in-cell) |
+| `WorksheetImage` / `ImagePlacement` / `ImageAnchor` / `ImageMoveMode` | image (floating / in-cell, anchor / move-mode / alt-text) |
 | `WorkbookSecurity` / `Workbook.Security` | file-level security (open password / modify password / read-only state) |
 | `WorkbookProperties` | document properties (author/time/title/app name) |
 | `LiteExcelException` / `InvalidSheetNameException` | exceptions |

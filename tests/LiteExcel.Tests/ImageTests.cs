@@ -287,4 +287,126 @@ public class ImageTests
             if (File.Exists(src)) File.Delete(src);
         }
     }
+
+    [Fact]
+    public void Anchor_MoveAndSizeWithCells_WritesTwoCellAnchor()
+    {
+        var wb = Excel.Create();
+        wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor
+        {
+            TopLeftCell = "B2",
+            WidthPixels = 100,
+            HeightPixels = 80,
+            MoveMode = ImageMoveMode.MoveAndSizeWithCells,
+        });
+        var path = Save(wb);
+        try
+        {
+            var drawing = ReadEntry(path, "xl/drawings/drawing1.xml");
+            Assert.Contains("<xdr:twoCellAnchor>", drawing);
+            Assert.Contains("<xdr:to>", drawing);
+            Assert.Contains("</xdr:twoCellAnchor>", drawing);
+            Assert.Contains("<xdr:col>1</xdr:col>", drawing);
+            Assert.Contains("<xdr:row>1</xdr:row>", drawing);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void Anchor_FixedPosition_WritesEditAsAbsolute()
+    {
+        var wb = Excel.Create();
+        wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor
+        {
+            TopLeftCell = "A1",
+            WidthPixels = 50,
+            HeightPixels = 50,
+            MoveMode = ImageMoveMode.FixedPosition,
+        });
+        var path = Save(wb);
+        try
+        {
+            var drawing = ReadEntry(path, "xl/drawings/drawing1.xml");
+            Assert.Contains("<xdr:oneCellAnchor editAs=\"absolute\">", drawing);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void Anchor_Offsets_WrittenToColOffRowOff()
+    {
+        var wb = Excel.Create();
+        wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor
+        {
+            TopLeftCell = "A1",
+            TopLeftOffsetX = 9525,
+            TopLeftOffsetY = 19050,
+            WidthPixels = 50,
+            HeightPixels = 50,
+            MoveMode = ImageMoveMode.MoveButDontSizeWithCells,
+        });
+        var path = Save(wb);
+        try
+        {
+            var drawing = ReadEntry(path, "xl/drawings/drawing1.xml");
+            Assert.Contains("<xdr:colOff>9525</xdr:colOff>", drawing);
+            Assert.Contains("<xdr:rowOff>19050</xdr:rowOff>", drawing);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void Anchor_AltText_WrittenAsDescr()
+    {
+        var wb = Excel.Create();
+        wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor
+        {
+            TopLeftCell = "A1",
+            WidthPixels = 50,
+            HeightPixels = 50,
+        }, altText: "公司 Logo");
+        var path = Save(wb);
+        try
+        {
+            var drawing = ReadEntry(path, "xl/drawings/drawing1.xml");
+            Assert.Contains("descr=\"公司 Logo\"", drawing);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void CellAddress_ReturnsA1Ref()
+    {
+        var wb = Excel.Create();
+        var img = wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor
+        {
+            TopLeftCell = "C5",
+            WidthPixels = 50,
+            HeightPixels = 50,
+        });
+        Assert.Equal("C5", img.CellAddress);
+        Assert.Equal(5, img.Row);
+        Assert.Equal(3, img.Column);
+    }
+
+    [Fact]
+    public void Anchor_MultipleMoveModes_MixedDrawing()
+    {
+        var wb = Excel.Create();
+        wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor { TopLeftCell = "A1", WidthPixels = 50, HeightPixels = 50, MoveMode = ImageMoveMode.MoveButDontSizeWithCells });
+        wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor { TopLeftCell = "C3", WidthPixels = 50, HeightPixels = 50, MoveMode = ImageMoveMode.MoveAndSizeWithCells });
+        wb.Worksheets[0].AddImage(Png1x1, new ImageAnchor { TopLeftCell = "E5", WidthPixels = 50, HeightPixels = 50, MoveMode = ImageMoveMode.FixedPosition });
+        var path = Save(wb);
+        try
+        {
+            var drawing = ReadEntry(path, "xl/drawings/drawing1.xml");
+            Assert.Contains("<xdr:oneCellAnchor>", drawing);
+            Assert.Contains("<xdr:twoCellAnchor>", drawing);
+            Assert.Contains("<xdr:oneCellAnchor editAs=\"absolute\">", drawing);
+            Assert.Contains("r:embed=\"rId1\"", drawing);
+            Assert.Contains("r:embed=\"rId2\"", drawing);
+            Assert.Contains("r:embed=\"rId3\"", drawing);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
 }

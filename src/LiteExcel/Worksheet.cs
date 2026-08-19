@@ -115,7 +115,35 @@ public sealed class Worksheet
         return img;
     }
 
-    /// <summary>按 1-based 行列访问单元格。越界读取返回空单元格视图；写入会按需扩展网格 </summary>
+    /// <summary>
+    /// 添加一张浮动图片（高精度锚点：左上单元格 + EMU 偏移 + 显示尺寸 + 移动方式）。
+    /// 仅 Floating；InCell 请用 row/column 重载。
+    /// </summary>
+    public WorksheetImage AddImage(byte[] data, ImageAnchor anchor,
+        string? extension = null, string? name = null, string? altText = null)
+    {
+        if (data is null || data.Length == 0)
+            throw new ArgumentException("图片数据不能为空", nameof(data));
+        if (anchor is null)
+            throw new ArgumentNullException(nameof(anchor));
+
+        var (r, c) = CellRef.Parse(anchor.TopLeftCell);
+        var img = new WorksheetImage
+        {
+            Data = data,
+            Row = r + 1,
+            Column = c + 1,
+            WidthPx = anchor.WidthPixels,
+            HeightPx = anchor.HeightPixels,
+            Placement = ImagePlacement.Floating,
+            Extension = extension,
+            Name = name ?? $"图片 {Images.Count + 1}",
+            Anchor = anchor,
+            AltText = altText,
+        };
+        Images.Add(img);
+        return img;
+    }
     public Cell Cell(int row, int column)
     {
         if (row < 1 || column < 1)

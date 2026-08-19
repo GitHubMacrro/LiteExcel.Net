@@ -2,13 +2,14 @@
 
 [![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+[![CI](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A lightweight, zero-dependency .NET library for reading and writing Excel xlsx/xlsm/csv files, plus legacy xls/xlsb files (xls read/write, xlsb read/write).
 轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。
 
-**Version / 版本**: 2.4.0
+**Version / 版本**: 2.4.1
 
 ## Language / 语言
 
@@ -62,7 +63,7 @@ var read = XlsxReader.Read("output2.xlsx", 0);
 - File-level security: open password (Agile Encryption) + modify password (write protection) on xlsx/xlsm/xlsb, via `Workbook.Security` (`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`) / 文件级安全：打开密码（Agile 加密）+ 修改密码（写保护），支持 xlsx/xlsm/xlsb
 - Hyperlinks: read + write on all 4 formats (xlsx/xlsm/xlsb/xls; external URLs + internal `#Sheet1!A1` jumps via `Cell.Hyperlink`) / 超链接：xlsx/xlsm/xlsb/xls 四格式读写（外部链接 + 内部跳转）
 - Freeze panes: `FreezeRows` / `FreezeColumns` on xlsx/xlsb/xls (arbitrary rows/columns), `FreezeHeader` compatible / 冻结窗格：xlsx/xlsb/xls 任意行列冻结，`FreezeHeader` 兼容
-- Images: write-only on xlsx/xlsm — Floating drawing + InCell richData (`ws.AddImage`) / 图片：仅写回 xlsx/xlsm（浮动图 + 单元格内嵌）
+- Images: write-only on xlsx/xlsm — Floating drawing + InCell richData, with anchor/move-mode/AltText (`ws.AddImage`, `ImageAnchor`, `ImageMoveMode`) / 图片：仅写回 xlsx/xlsm（浮动图 + 单元格内嵌，支持锚点/移动方式/AltText）
 
 ## Docs / 文档
 

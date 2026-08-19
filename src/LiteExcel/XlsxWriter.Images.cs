@@ -162,26 +162,7 @@ public static partial class XlsxWriter
             var sb = new StringBuilder(1024);
             for (int j = 0; j < floating.Count; j++)
             {
-                var img = floating[j];
-                var (w, h) = img.PixelSize;
-                double wEmu = (img.WidthPx ?? w) * WorksheetImage.EmuPerPixel;
-                double hEmu = (img.HeightPx ?? h) * WorksheetImage.EmuPerPixel;
-                int rid = maxRid + j + 1;
-                string name = XmlEscape(img.Name ?? "图片 " + (j + 1));
-
-                sb.Append("<xdr:oneCellAnchor>");
-                sb.Append($"<xdr:from><xdr:col>{img.Column - 1}</xdr:col><xdr:colOff>0</xdr:colOff>");
-                sb.Append($"<xdr:row>{img.Row - 1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>");
-                sb.Append($"<xdr:ext cx=\"{FormatDouble(wEmu)}\" cy=\"{FormatDouble(hEmu)}\"/>");
-                sb.Append("<xdr:pic><xdr:nvPicPr>");
-                sb.Append($"<xdr:cNvPr id=\"{maxRid + j + 1}\" name=\"{name}\"/>");
-                sb.Append("<xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr>");
-                sb.Append("<xdr:blipFill>");
-                sb.Append($"<a:blip xmlns:r=\"{OfficeRelNs}\" r:embed=\"rId{rid}\"/>");
-                sb.Append("<a:stretch><a:fillRect/></a:stretch></xdr:blipFill>");
-                sb.Append($"<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{FormatDouble(wEmu)}\" cy=\"{FormatDouble(hEmu)}\"/></a:xfrm>");
-                sb.Append("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr>");
-                sb.Append("</xdr:pic><xdr:clientData/></xdr:oneCellAnchor>");
+                AppendFloatingAnchor(sb, floating[j], maxRid + j + 1, maxRid + j + 1);
             }
             string anchors = sb.ToString();
 
@@ -323,34 +304,85 @@ public static partial class XlsxWriter
             sb.Append("xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">");
             for (int i = 0; i < floating.Count; i++)
             {
-                var img = floating[i];
-                var (w, h) = img.PixelSize;
-                double wEmu = (img.WidthPx ?? w) * WorksheetImage.EmuPerPixel;
-                double hEmu = (img.HeightPx ?? h) * WorksheetImage.EmuPerPixel;
-
-                sb.Append("<xdr:oneCellAnchor>");
-                sb.Append($"<xdr:from><xdr:col>{img.Column - 1}</xdr:col><xdr:colOff>0</xdr:colOff>");
-                sb.Append($"<xdr:row>{img.Row - 1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>");
-                sb.Append($"<xdr:ext cx=\"{FormatDouble(wEmu)}\" cy=\"{FormatDouble(hEmu)}\"/>");
-                sb.Append("<xdr:pic>");
-                sb.Append("<xdr:nvPicPr>");
-                sb.Append($"<xdr:cNvPr id=\"{i + 1}\" name=\"{XmlEscape(img.Name ?? "图片 " + (i + 1))}\"/>");
-                sb.Append("<xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr>");
-                sb.Append("</xdr:nvPicPr>");
-                sb.Append("<xdr:blipFill>");
-                sb.Append($"<a:blip xmlns:r=\"{OfficeRelNs}\" r:embed=\"rId{i + 1}\"/>");
-                sb.Append("<a:stretch><a:fillRect/></a:stretch>");
-                sb.Append("</xdr:blipFill>");
-                sb.Append("<xdr:spPr>");
-                sb.Append($"<a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{FormatDouble(wEmu)}\" cy=\"{FormatDouble(hEmu)}\"/></a:xfrm>");
-                sb.Append("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>");
-                sb.Append("</xdr:spPr>");
-                sb.Append("</xdr:pic>");
-                sb.Append("<xdr:clientData/>");
-                sb.Append("</xdr:oneCellAnchor>");
+                AppendFloatingAnchor(sb, floating[i], i + 1, i + 1);
             }
             sb.Append("</xdr:wsDr>");
             return sb.ToString();
+        }
+
+        /// <summary>默认列宽（EMU，≈64px）。twoCellAnchor 的 to 估算用 </summary>
+        private const double DefaultColWidthEmu = 609600.0;
+        /// <summary>默认行高（EMU，≈20px）。twoCellAnchor 的 to 估算用 </summary>
+        private const double DefaultRowHeightEmu = 190500.0;
+
+        /// <summary>
+        /// 按 img.Anchor/MoveMode 生成浮动图片锚点 XML（oneCellAnchor/twoCellAnchor + editAs + 偏移 + descr）。
+        /// cNvPrId 为 cNvPr@id；rid 为 r:embed 的 rId 序号。
+        /// </summary>
+        private static void AppendFloatingAnchor(StringBuilder sb, WorksheetImage img, int cNvPrId, int rid)
+        {
+            var (w, h) = img.PixelSize;
+            double wEmu = (img.WidthPx ?? w) * WorksheetImage.EmuPerPixel;
+            double hEmu = (img.HeightPx ?? h) * WorksheetImage.EmuPerPixel;
+
+            int col, row, colOff, rowOff;
+            ImageMoveMode moveMode;
+            if (img.Anchor is not null)
+            {
+                var (r, c) = CellRef.Parse(img.Anchor.TopLeftCell);
+                col = c; row = r;
+                colOff = img.Anchor.TopLeftOffsetX;
+                rowOff = img.Anchor.TopLeftOffsetY;
+                moveMode = img.Anchor.MoveMode;
+            }
+            else
+            {
+                col = img.Column - 1; row = img.Row - 1;
+                colOff = 0; rowOff = 0;
+                moveMode = ImageMoveMode.MoveButDontSizeWithCells;
+            }
+
+            string descr = string.IsNullOrEmpty(img.AltText) ? "" : $" descr=\"{XmlEscape(img.AltText)}\"";
+            string name = XmlEscape(img.Name ?? "图片");
+
+            string openTag = moveMode == ImageMoveMode.MoveAndSizeWithCells ? "<xdr:twoCellAnchor>"
+                            : moveMode == ImageMoveMode.FixedPosition ? "<xdr:oneCellAnchor editAs=\"absolute\">"
+                            : "<xdr:oneCellAnchor>";
+            string closeTag = moveMode == ImageMoveMode.MoveAndSizeWithCells ? "</xdr:twoCellAnchor>" : "</xdr:oneCellAnchor>";
+
+            sb.Append(openTag);
+            sb.Append($"<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>{colOff}</xdr:colOff>");
+            sb.Append($"<xdr:row>{row}</xdr:row><xdr:rowOff>{rowOff}</xdr:rowOff></xdr:from>");
+            if (moveMode == ImageMoveMode.MoveAndSizeWithCells)
+            {
+                var (toCol, toColOff) = AdvanceCell(col, colOff, wEmu, DefaultColWidthEmu);
+                var (toRow, toRowOff) = AdvanceCell(row, rowOff, hEmu, DefaultRowHeightEmu);
+                sb.Append($"<xdr:to><xdr:col>{toCol}</xdr:col><xdr:colOff>{toColOff}</xdr:colOff>");
+                sb.Append($"<xdr:row>{toRow}</xdr:row><xdr:rowOff>{toRowOff}</xdr:rowOff></xdr:to>");
+            }
+            else
+            {
+                sb.Append($"<xdr:ext cx=\"{FormatDouble(wEmu)}\" cy=\"{FormatDouble(hEmu)}\"/>");
+            }
+            sb.Append("<xdr:pic><xdr:nvPicPr>");
+            sb.Append($"<xdr:cNvPr id=\"{cNvPrId}\" name=\"{name}\"{descr}/>");
+            sb.Append("<xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr>");
+            sb.Append("<xdr:blipFill>");
+            sb.Append($"<a:blip xmlns:r=\"{OfficeRelNs}\" r:embed=\"rId{rid}\"/>");
+            sb.Append("<a:stretch><a:fillRect/></a:stretch></xdr:blipFill>");
+            sb.Append($"<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{FormatDouble(wEmu)}\" cy=\"{FormatDouble(hEmu)}\"/></a:xfrm>");
+            sb.Append("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr>");
+            sb.Append("</xdr:pic><xdr:clientData/>");
+            sb.Append(closeTag);
+        }
+
+        /// <summary>从 (cell, offset) 出发前进 sizeEmu，返回到达的 (cell, offset) </summary>
+        private static (int cell, int off) AdvanceCell(int fromCell, int fromOff, double sizeEmu, double cellSizeEmu)
+        {
+            double total = fromOff + sizeEmu;
+            int cells = (int)(total / cellSizeEmu);
+            int off = (int)(total - cells * cellSizeEmu);
+            return (fromCell + cells, off);
         }
 
         /// <summary>InCell 图片：生成 richData 各部件（metadata / richValueRel / rdrichvalue / structure / types） </summary>
