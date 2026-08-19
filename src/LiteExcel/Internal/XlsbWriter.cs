@@ -21,6 +21,7 @@ internal static class XlsbWriter
     private const int BrtBeginBook = 0x0083;
     private const int BrtFileVersion = 0x0080;
     private const int BrtWbProp = 0x0099;
+    private const int BrtFileSharingIso = 0x02A4;
     private const int BrtBeginBookViews = 0x0087;
     private const int BrtBookView = 0x009E;
     private const int BrtEndBookViews = 0x0088;
@@ -92,6 +93,7 @@ internal static class XlsbWriter
     private const int BrtBeginMergeCells = 0x00B1;
     private const int BrtMergeCell = 0x00B0;
     private const int BrtEndMergeCells = 0x00B2;
+    private const int BrtHLink = 0x01EE;
     private const int BrtEndSheet = 0x0082;
 
     private const int DefaultFontId = 0;
@@ -103,7 +105,8 @@ internal static class XlsbWriter
     private const int FirstCustomFmtId = 164;
 
     /// <summary>写出 .xlsb 工作簿到流。vbaProject 为源工作簿捕获的宏工程字节（可为 null）；workbookCodeName 为宿主代码名（可为 null）</summary>
-    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null, bool date1904 = false)
+    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null, bool date1904 = false,
+        string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
@@ -153,7 +156,7 @@ internal static class XlsbWriter
         // 包结构
         WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null));
         WriteEntry(zip, "_rels/.rels", RootRelsXml());
-        WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904));
+        WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended));
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null));
         WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs));
         if (vbaProject is not null && vbaProject.Length > 0)
@@ -162,7 +165,50 @@ internal static class XlsbWriter
             WriteEntry(zip, "xl/sharedStrings.bin", BuildSharedStringsBin(sst, sstIndex));
 
         for (int i = 0; i < sheets.Count; i++)
-            WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf, date1904));
+        {
+            var extLinks = CollectExternalHyperlinks(sheets[i]);
+            WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf, date1904, extLinks));
+            if (extLinks.Count > 0)
+            {
+                WriteEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.bin.rels", SheetRelsXml(extLinks));
+            }
+        }
+    }
+
+    /// <summary>收集工作表中外部超链接（按行序遍历，保持稳定顺序） </summary>
+    private static List<string> CollectExternalHyperlinks(SheetData sheet)
+    {
+        var list = new List<string>();
+        foreach (var row in sheet.Rows)
+        {
+            foreach (var cell in row)
+            {
+                if (cell.Hyperlink is null || cell.Hyperlink.IsInternal) continue;
+                if (string.IsNullOrEmpty(cell.Hyperlink.Target)) continue;
+                if (!list.Contains(cell.Hyperlink.Target)) list.Add(cell.Hyperlink.Target);
+            }
+        }
+        return list;
+    }
+
+    /// <summary>工作表级 rels：外部超链接（rIdH1 起） </summary>
+    private static string SheetRelsXml(List<string> extTargets)
+    {
+        var sb = new StringBuilder(256);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+        for (int i = 0; i < extTargets.Count; i++)
+        {
+            sb.Append($"<Relationship Id=\"rIdH{i + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"{XmlEscape(extTargets[i])}\" TargetMode=\"External\"/>");
+        }
+        sb.Append("</Relationships>");
+        return sb.ToString();
+    }
+
+    private static string XmlEscape(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
     }
 
     // ── 包 XML 部件 ──
@@ -224,12 +270,16 @@ internal static class XlsbWriter
 
     // ── workbook.bin ──
 
-    private static byte[] BuildWorkbookBin(IReadOnlyList<SheetData> sheets, string? workbookCodeName, bool date1904)
+    private static byte[] BuildWorkbookBin(IReadOnlyList<SheetData> sheets, string? workbookCodeName, bool date1904,
+        string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginBook, Array.Empty<byte>());
         WriteRecord(ms, BrtFileVersion, FileVersion());
         WriteRecord(ms, BrtWbProp, WbProp(workbookCodeName, date1904)); // 日期系统由 flags bit0 指定
+        // 写保护（修改密码）：BrtFileSharingIso（对齐 Excel 样本布局）
+        if (!string.IsNullOrEmpty(fileSharingHash))
+            WriteRecord(ms, BrtFileSharingIso, FileSharingIso(fileSharingHash, fileSharingSalt, fileSharingSpin ?? 100000, fileSharingReadOnlyRecommended));
         WriteRecord(ms, BrtBeginBookViews, Array.Empty<byte>());
         WriteRecord(ms, BrtBookView, BookView());
         WriteRecord(ms, BrtEndBookViews, Array.Empty<byte>());
@@ -288,6 +338,34 @@ internal static class XlsbWriter
         WriteU32(ms, (uint)(index + 1)); // iTabID
         WriteNullableWideString(ms, "rId" + (index + 1));
         WriteWideString(ms, name.Length > 31 ? name.Substring(0, 31) : name);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// BrtFileSharingIso（0x02A4）写保护记录，对齐 Excel 样本布局：
+    /// spinCount(4) + flags(2)[bit0=readOnlyRecommended] + stUser(XLWideString "Admin") +
+    /// hashValue(4+bytes, base64 解码) + saltValue(4+bytes) + algorithmName(XLWideString "SHA-512")。
+    /// </summary>
+    private static byte[] FileSharingIso(string hashB64, string? saltB64, int spinCount, bool readOnlyRecommended)
+    {
+        var ms = new MemoryStream();
+        WriteU32(ms, (uint)spinCount);
+        WriteU16(ms, (ushort)(readOnlyRecommended ? 1 : 0));
+        WriteWideString(ms, "Admin");
+        var hash = Convert.FromBase64String(hashB64);
+        WriteU32(ms, (uint)hash.Length);
+        ms.Write(hash, 0, hash.Length);
+        if (!string.IsNullOrEmpty(saltB64))
+        {
+            var salt = Convert.FromBase64String(saltB64);
+            WriteU32(ms, (uint)salt.Length);
+            ms.Write(salt, 0, salt.Length);
+        }
+        else
+        {
+            WriteU32(ms, 0);
+        }
+        WriteWideString(ms, "SHA-512");
         return ms.ToArray();
     }
 
@@ -486,10 +564,13 @@ internal static class XlsbWriter
 
     // ── worksheet.bin ──
 
-    private static byte[] BuildWorksheetBin(SheetData sheet, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904)
+    private static byte[] BuildWorksheetBin(SheetData sheet, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904, List<string> extTargets)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginSheet, Array.Empty<byte>());
+
+        var extRelIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < extTargets.Count; i++) extRelIndex[extTargets[i]] = i;
 
         // 计算范围
         int maxRow = -1, maxCol = -1;
@@ -522,8 +603,11 @@ internal static class XlsbWriter
         // 视图（冻结）
         WriteRecord(ms, BrtBeginWsViews, Array.Empty<byte>());
         WriteRecord(ms, BrtBeginWsView, WsView());
-        if (sheet.FreezeHeader)
-            WriteRecord(ms, BrtPane, Pane());
+        int freezeRows = sheet.FreezeRows;
+        int freezeCols = sheet.FreezeColumns;
+        if (sheet.FreezeHeader) freezeRows = Math.Max(freezeRows, 1);
+        if (freezeRows > 0 || freezeCols > 0)
+            WriteRecord(ms, BrtPane, Pane(freezeRows, freezeCols));
         WriteRecord(ms, BrtEndWsView, Array.Empty<byte>());
         WriteRecord(ms, BrtEndWsViews, Array.Empty<byte>());
 
@@ -583,8 +667,53 @@ internal static class XlsbWriter
             WriteRecord(ms, BrtEndMergeCells, Array.Empty<byte>());
         }
 
+        // 超链接（外部经 relId 指向 sheet rels；内部走 location）
+        WriteHyperlinks(ms, sheet, extRelIndex);
+
         WriteRecord(ms, BrtEndSheet, Array.Empty<byte>());
         return ms.ToArray();
+    }
+
+    /// <summary>写出 BrtHLink 记录。外部链接 relId = rIdH{n+1}；内部链接 location = 目标去前导 '#' </summary>
+    private static void WriteHyperlinks(MemoryStream ms, SheetData sheet, Dictionary<string, int> extRelIndex)
+    {
+        for (int r = 0; r < sheet.Rows.Count; r++)
+        {
+            var row = sheet.Rows[r];
+            for (int c = 0; c < row.Count; c++)
+            {
+                var link = row[c].Hyperlink;
+                if (link is null || string.IsNullOrEmpty(link.Target)) continue;
+
+                var inner = new MemoryStream();
+                WriteRfX(inner, r, r, c, c);
+                if (link.IsInternal)
+                {
+                    WriteNullableWideString(inner, null);
+                    var loc = link.Target.StartsWith("#", StringComparison.Ordinal) ? link.Target.Substring(1) : link.Target;
+                    WriteWideString(inner, loc);
+                    WriteWideString(inner, link.Tooltip ?? "");
+                    WriteWideString(inner, "");
+                }
+                else
+                {
+                    int relIdx = extRelIndex.TryGetValue(link.Target, out var i) ? i : 0;
+                    WriteNullableWideString(inner, "rIdH" + (relIdx + 1));
+                    WriteWideString(inner, "");
+                    WriteWideString(inner, link.Tooltip ?? "");
+                    WriteWideString(inner, "");
+                }
+                WriteRecord(ms, BrtHLink, inner.ToArray());
+            }
+        }
+    }
+
+    private static void WriteRfX(MemoryStream ms, int rwFirst, int rwLast, int colFirst, int colLast)
+    {
+        WriteS32(ms, rwFirst);
+        WriteS32(ms, rwLast);
+        WriteS32(ms, colFirst);
+        WriteS32(ms, colLast);
     }
 
     private static byte[] WsProp(string? codeName)
@@ -621,16 +750,16 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    private static byte[] Pane()
+    private static byte[] Pane(int freezeRows, int freezeCols)
     {
-        // 对照 Excel 冻结首行：colFrozen(Xnum 8)=0 + rowFrozen(Xnum 8)=1.0 + topLeftCell 行(4)=1 + 列(4)=0
-        // + activePane(4)=2 + state(1)=frozen
+        // colFrozen(Xnum 8) + rowFrozen(Xnum 8) + topLeftCell 行(4) + 列(4) + activePane(4) + state(1)=frozen
         var ms = new MemoryStream();
-        WriteDouble(ms, 0); // colFrozen
-        WriteDouble(ms, 1); // rowFrozen
-        WriteU32(ms, 1);    // topLeftCell 行 = A2 的 0-based 行 1
-        WriteU32(ms, 0);    // topLeftCell 列
-        WriteU32(ms, 2);    // activePane = bottomLeft
+        WriteDouble(ms, freezeCols); // colFrozen
+        WriteDouble(ms, freezeRows); // rowFrozen
+        WriteU32(ms, (uint)freezeRows); // topLeftCell 行
+        WriteU32(ms, (uint)freezeCols); // topLeftCell 列
+        uint activePane = freezeRows > 0 && freezeCols > 0 ? 0u : freezeRows > 0 ? 2u : 1u;
+        WriteU32(ms, activePane);
         ms.WriteByte(0x01); // state = frozen
         return ms.ToArray();
     }

@@ -21,6 +21,18 @@ public sealed class ExcelReadOptions
     /// 读取完成后是否保持输入流打开（仅 Stream 重载有效）。默认 false
     /// </summary>
     public bool LeaveOpen { get; set; }
+
+    /// <summary>
+    /// 打开密码（文件加密）。用于解密带打开密码的 xlsx/xlsm/xlsb。
+    /// 未提供时若文件已加密，将抛出明确的加密异常。
+    /// </summary>
+    public string? OpenPassword { get; set; }
+
+    /// <summary>
+    /// 修改密码（写保护）。用于获得编辑/保存权限。
+    /// 文件设置了修改密码但未提供（或提供错误）时，工作簿以只读方式打开，不能保存。
+    /// </summary>
+    public string? ModifyPassword { get; set; }
 }
 
 /// <summary>

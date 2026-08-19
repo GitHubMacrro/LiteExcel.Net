@@ -6,7 +6,7 @@ namespace LiteExcel.Internal;
 /// <summary>
 /// 加密工作簿识别器。
 /// 带打开密码的 xlsx/xlsm/xlsb 实际是 OLE CFB 复合文档（内含 EncryptionInfo + EncryptedPackage 流），
-/// 而非普通 zip 包。当前版本不支持解密读取，打开前先识别并给出明确异常，
+/// 而非普通 zip 包。用于未提供打开密码时给出明确异常（提示提供 OpenPassword），
 /// 避免误报为"zip 损坏"之类的无关错误。
 /// </summary>
 internal static class EncryptionDetector
@@ -16,15 +16,15 @@ internal static class EncryptionDetector
 
     /// <summary>
     /// 检查流是否为加密的 OOXML 工作簿（CFB 容器 + EncryptionInfo 流）。
-    /// 是则抛 <see cref="LiteExcelException"/>；否则不抛（可能是普通 zip 或其他格式）。
+    /// 是则返回 true；否则返回 false（可能是普通 zip 或其他格式）。
     /// 流位置在方法返回时已复位到起始位置，调用方可继续使用。
     /// <paramref name="path"/> 用于错误信息中的文件名展示；Stream 场景可传显示名（如 "&lt;stream&gt;"）。
     /// </summary>
-    public static void ThrowIfEncryptedOoxml(Stream stream, string path)
+    public static bool IsEncryptedOoxml(Stream stream, string path)
     {
-        if (!LooksLikeCfb(stream)) return;
+        if (!LooksLikeCfb(stream)) return false;
 
-        CfbFile cfb;
+        CfbFile? cfb = null;
         try
         {
             stream.Position = 0;
@@ -33,8 +33,7 @@ internal static class EncryptionDetector
         catch (LiteExcelException)
         {
             // CFB 结构非法：按原有路径报格式错误，不在这里拦截
-            stream.Position = 0;
-            return;
+            return false;
         }
         finally
         {
@@ -43,11 +42,19 @@ internal static class EncryptionDetector
             stream.Position = 0;
         }
 
-        if (cfb.GetStream("EncryptionInfo") is not null)
+        return cfb.GetStream("EncryptionInfo") is not null;
+    }
+
+    /// <summary>
+    /// 检查流是否为加密的 OOXML 工作簿，是则抛 <see cref="LiteExcelException"/>（未提供密码时的明确错误）。
+    /// 流位置复位到起始位置。
+    /// </summary>
+    public static void ThrowIfEncryptedOoxml(Stream stream, string path)
+    {
+        if (IsEncryptedOoxml(stream, path))
         {
             throw new LiteExcelException(
-                $"文件 '{SafeDisplayName(path)}' 已加密（带打开密码）。当前版本暂不支持读取加密工作簿，" +
-                "请在 Excel 中另存为无密码文件后再打开（密码支持规划在后续版本）。");
+                $"文件 '{SafeDisplayName(path)}' 已加密（带打开密码）。请通过 Excel.Open 的 ExcelReadOptions.OpenPassword 提供正确的打开密码。");
         }
     }
 

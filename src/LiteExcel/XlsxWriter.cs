@@ -70,7 +70,9 @@ public static partial class XlsxWriter
     /// <paramref name="mergeSheetRels"/> 为 false 时丢弃工作表级保留 rels（工作表结构已变化）。
     /// </summary>
     internal static void Write(Stream stream, IReadOnlyList<SheetData> sheets, WorkbookProperties? properties,
-        OoxmlPreservedParts? preserved, bool mergeSheetRels, bool macroEnabled = false, bool date1904 = false)
+        OoxmlPreservedParts? preserved, bool mergeSheetRels, bool macroEnabled = false, bool date1904 = false,
+        string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null,
+        bool fileSharingReadOnlyRecommended = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
@@ -115,17 +117,39 @@ public static partial class XlsxWriter
                 sheetsWithComments.Add(i);
         }
 
+        // 图片规划：分配 media 序号、生成 drawing/richData 部件
+        var imagePlan = ImagePlan.Create(sheets, preserved);
+
         // 先写保留部件（blob），再写重建部件，避免重名时重建优先
+        // 浮动图片 drawing 部件会在后续整体合并/新建，若与保留部件重名则跳过保留（避免 zip 重名异常）
         if (preserved is not null)
         {
+            var imageEntries = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+            foreach (var (entry, _) in imagePlan.FloatingDrawingParts(preserved))
+                imageEntries.Add(entry);
             foreach (var kv in preserved.Parts)
+            {
+                if (imageEntries.Contains(kv.Key)) continue;
                 WriteEntry(zip, kv.Key, kv.Value);
+            }
         }
 
-        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled));
+        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled, imagePlan));
         WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
-        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904));
-        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count, preserved));
+        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended));
+        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count, preserved, imagePlan));
+
+        // 图片 media
+        foreach (var (entry, bytes) in imagePlan.MediaEntries())
+            WriteEntry(zip, entry, bytes);
+
+        // 浮动图片 drawing 部件（含既有 drawing 合并 + rels）
+        foreach (var (entry, xml) in imagePlan.FloatingDrawingParts(preserved))
+            WriteEntry(zip, entry, xml);
+
+        // InCell richData 部件
+        foreach (var (entry, xml) in imagePlan.InCellEntries())
+            WriteXmlEntry(zip, entry, xml);
 
         // 文档属性（文件属性对话框信息）
         if (properties is not null)
@@ -136,7 +160,11 @@ public static partial class XlsxWriter
 
         for (int i = 0; i < sheets.Count; i++)
         {
-            var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet, date1904);
+            var hyperlinks = new List<(string Ref, string Target, string? Tooltip, bool IsInternal)>();
+            var inCellVm = imagePlan.InCellVmBySheet(i);
+            bool hasDrawing = imagePlan.FloatingBySheet[i].Count > 0;
+            string drawingRelId = hasDrawing ? imagePlan.DrawingTargetFor(i, preserved).RelId : "";
+            var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet, date1904, hyperlinks, inCellVm, hasDrawing, drawingRelId);
             WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
 
             // 批注：每张有批注的 sheet 对应一个 comments 文件
@@ -146,8 +174,8 @@ public static partial class XlsxWriter
                 WriteXmlEntry(zip, $"xl/comments{i + 1}.xml", CommentsXml(sheets[i].Comments!));
             }
 
-            // 工作表 rels：合并保留的绘图/超链接等 rel（工作表结构未变时）
-            var sheetRels = MergeSheetRels(i + 1, hasComments, preserved, mergeSheetRels);
+            // 工作表 rels：合并保留的绘图/超链接等 rel（工作表结构未变时），追加新建超链接/批注/drawing
+            var sheetRels = MergeSheetRels(i + 1, hasComments, preserved, mergeSheetRels, hyperlinks, hasDrawing, imagePlan);
             if (sheetRels is not null)
             {
                 WriteXmlEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.xml.rels", sheetRels);
@@ -286,23 +314,36 @@ public static partial class XlsxWriter
     // ── 工作表 XML 构建 ──
 
     private static string BuildSheetXml(SheetData sheet,
-        Dictionary<string, int> sharedIndex, Stylesheet stylesheet, bool date1904)
+        Dictionary<string, int> sharedIndex, Stylesheet stylesheet, bool date1904,
+        List<(string Ref, string Target, string? Tooltip, bool IsInternal)>? hyperlinks = null,
+        Dictionary<string, int>? inCellVm = null, bool hasDrawing = false, string drawingRelId = "rIdD1")
     {
         var sb = new StringBuilder(4096);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
-        sb.Append($"<worksheet xmlns=\"{MainNs}\"");
+        sb.Append($"<worksheet xmlns=\"{MainNs}\" xmlns:r=\"{OfficeRelNs}\"");
         sb.Append(">");
 
         // 工作表宿主 VBA 代码名：schema 要求 sheetPr 为 worksheet 第一个子元素，位于 sheetViews 之前
         if (!string.IsNullOrEmpty(sheet.CodeName))
             sb.Append($"<sheetPr codeName=\"{XmlEscape(sheet.CodeName)}\"/>");
 
-        // sheetView（冻结表头）
-        if (sheet.FreezeHeader)
+        // sheetView（冻结窗格）
+        int freezeRows = sheet.FreezeRows;
+        int freezeCols = sheet.FreezeColumns;
+        if (sheet.FreezeHeader) freezeRows = Math.Max(freezeRows, 1);
+        if (freezeRows > 0 || freezeCols > 0)
         {
             sb.Append("<sheetViews><sheetView workbookViewId=\"0\">");
-            sb.Append("<pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/>");
-            sb.Append("<selection pane=\"bottomLeft\"/>");
+            sb.Append($"<pane");
+            if (freezeRows > 0) sb.Append($" ySplit=\"{freezeRows}\"");
+            if (freezeCols > 0) sb.Append($" xSplit=\"{freezeCols}\"");
+            if (freezeRows > 0 && freezeCols > 0)
+                sb.Append($" topLeftCell=\"{CellRef.ToString(freezeRows, freezeCols)}\" activePane=\"bottomRight\"");
+            else if (freezeRows > 0)
+                sb.Append($" topLeftCell=\"{CellRef.ToString(freezeRows, 0)}\" activePane=\"bottomLeft\"");
+            else
+                sb.Append($" topLeftCell=\"{CellRef.ToString(0, freezeCols)}\" activePane=\"topRight\"");
+            sb.Append(" state=\"frozen\"/>");
             sb.Append("</sheetView></sheetViews>");
         }
         else
@@ -386,13 +427,78 @@ public static partial class XlsxWriter
                         resolvedStyle = sheet.DefaultStyle;
                 }
 
+                if (hyperlinks is not null && cell.Hyperlink is not null)
+                {
+                    hyperlinks.Add((CellRef.ToString(currentRow - 1, col), cell.Hyperlink.Target, cell.Hyperlink.Tooltip, cell.Hyperlink.IsInternal));
+                }
+
+                // InCell 图片单元格：t="e" vm 指向 metadata 中的 richData 记录
+                if (inCellVm is not null && inCellVm.TryGetValue(CellRef.ToString(currentRow - 1, col), out int vm))
+                {
+                    sb.Append($"<c r=\"{CellRef.ToString(currentRow - 1, col)}\" t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
+                    continue;
+                }
+
                 WriteCell(sb, currentRow, col, cell, sharedIndex, stylesheet, resolvedStyle, date1904);
             }
             sb.Append("</row>");
             dataRowIdx++;
         }
 
+        // 补充 InCell 图片单元格：所在行可能不在数据网格中（如空行或超出网格），需按行号补齐
+        if (inCellVm is { Count: > 0 })
+        {
+            int lastRow = rowIndex - 1;
+            var rowGroups = new SortedDictionary<int, List<(int Col, int Vm)>>();
+            foreach (var kv in inCellVm)
+            {
+                var (r, c) = CellRef.Parse(kv.Key);
+                int row1 = r + 1, col1 = c + 1;
+                if (row1 > lastRow)
+                {
+                    if (!rowGroups.TryGetValue(row1, out var list))
+                    {
+                        list = new List<(int, int)>();
+                        rowGroups[row1] = list;
+                    }
+                    list.Add((col1, kv.Value));
+                }
+            }
+            foreach (var grp in rowGroups)
+            {
+                for (int r = lastRow + 1; r < grp.Key; r++)
+                    sb.Append($"<row r=\"{r}\"/>");
+                sb.Append($"<row r=\"{grp.Key}\">");
+                foreach (var (col1, vm) in grp.Value)
+                    sb.Append($"<c r=\"{CellRef.ToString(grp.Key - 1, col1 - 1)}\" t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
+                sb.Append("</row>");
+                lastRow = grp.Key;
+            }
+        }
+
         sb.Append("</sheetData>");
+
+        // 超链接（外部 r:id 与 sheet rels 编号对应，从 rIdH1 起；内部链接用 location）
+        if (hyperlinks is { Count: > 0 })
+        {
+            sb.Append("<hyperlinks>");
+            int extIndex = 0;
+            for (int h = 0; h < hyperlinks.Count; h++)
+            {
+                var (ref_, target, tooltip, isInternal) = hyperlinks[h];
+                string tooltipAttr = string.IsNullOrEmpty(tooltip) ? "" : $" tooltip=\"{XmlEscape(tooltip)}\"";
+                if (isInternal)
+                {
+                    sb.Append($"<hyperlink ref=\"{ref_}\" location=\"{XmlEscape(NormalizeInternalLocation(target))}\"{tooltipAttr}/>");
+                }
+                else
+                {
+                    extIndex++;
+                    sb.Append($"<hyperlink ref=\"{ref_}\" r:id=\"rIdH{extIndex}\"{tooltipAttr}/>");
+                }
+            }
+            sb.Append("</hyperlinks>");
+        }
 
         // 数据验证
         if (sheet.Validations is { Count: > 0 })
@@ -460,6 +566,12 @@ public static partial class XlsxWriter
                 sb.Append($"<mergeCell ref=\"{from}:{to}\"/>");
             }
             sb.Append("</mergeCells>");
+        }
+
+        // 浮动图片 drawing 引用
+        if (hasDrawing)
+        {
+            sb.Append($"<drawing r:id=\"{drawingRelId}\"/>");
         }
 
         sb.Append("</worksheet>");
@@ -624,7 +736,7 @@ public static partial class XlsxWriter
 
     // ── OOXML 部件构建 ──
 
-    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved, bool macroEnabled = false)
+    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved, bool macroEnabled = false, ImagePlan? imagePlan = null)
     {
         var defaults = new List<(string Ext, string Ct)>();
         var overrides = new List<(string Part, string Ct)>();
@@ -649,6 +761,40 @@ public static partial class XlsxWriter
         {
             overrides.Add(("/docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml"));
             overrides.Add(("/docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml"));
+        }
+
+        // 图片：media 类型 Default + drawing / richData Override
+        if (imagePlan is { Any: true })
+        {
+            var imgSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "rels", "xml" };
+            foreach (var img in imagePlan.All)
+            {
+                if (imgSeen.Add(img.EffectiveExtension))
+                {
+                    string ct = img.EffectiveExtension switch
+                    {
+                        "png" => "image/png",
+                        "jpg" => "image/jpeg",
+                        "gif" => "image/gif",
+                        "bmp" => "image/bmp",
+                        _ => "application/octet-stream",
+                    };
+                    defaults.Add((img.EffectiveExtension, ct));
+                }
+            }
+            for (int i = 0; i < imagePlan.FloatingBySheet.Count; i++)
+            {
+                if (imagePlan.FloatingBySheet[i].Count > 0)
+                    overrides.Add(($"/{imagePlan.DrawingTargetFor(i, preserved).Entry}", "application/vnd.openxmlformats-officedocument.drawing+xml"));
+            }
+            if (imagePlan.HasInCell)
+            {
+                overrides.Add(("/xl/metadata.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"));
+                overrides.Add(("/xl/richData/richValueRel.xml", "application/vnd.ms-excel.richvaluerel+xml"));
+                overrides.Add(("/xl/richData/rdrichvalue.xml", "application/vnd.ms-excel.rdrichvalue+xml"));
+                overrides.Add(("/xl/richData/rdrichvaluestructure.xml", "application/vnd.ms-excel.rdrichvaluestructure+xml"));
+                overrides.Add(("/xl/richData/rdRichValueTypes.xml", "application/vnd.ms-excel.rdrichvaluetypes+xml"));
+            }
         }
 
         // 保留的声明（排除与重建部件冲突的）
@@ -687,16 +833,6 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string SheetRelsXml(int sheetNumber)
-    {
-        var sb = new StringBuilder(256);
-        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
-        sb.Append($"<Relationships xmlns=\"{RelNs}\">");
-        sb.Append($"<Relationship Id=\"rId1\" Type=\"{OfficeRelNs}/comments\" Target=\"../comments{sheetNumber}.xml\"/>");
-        sb.Append("</Relationships>");
-        return sb.ToString();
-    }
-
     // ── rels 合并（保留部件） ──
 
     private sealed class RelInfo
@@ -707,8 +843,10 @@ public static partial class XlsxWriter
         public string TargetMode = "";
     }
 
-    /// <summary>合并工作表级 rels：保留未重建目标（绘图/超链接等），追加重建的批注 rel。返回 null 表示无需写出 </summary>
-    private static string? MergeSheetRels(int sheetNumber, bool hasComments, OoxmlPreservedParts? preserved, bool mergeSheetRels)
+    /// <summary>合并工作表级 rels：保留未重建目标（绘图/超链接等），追加新建超链接与批注 rel。返回 null 表示无需写出 </summary>
+    private static string? MergeSheetRels(int sheetNumber, bool hasComments, OoxmlPreservedParts? preserved,
+        bool mergeSheetRels, List<(string Ref, string Target, string? Tooltip, bool IsInternal)>? hyperlinks = null,
+        bool hasDrawing = false, XlsxWriter.ImagePlan? imagePlan = null)
     {
         string original = "";
         if (mergeSheetRels && preserved is not null
@@ -717,9 +855,83 @@ public static partial class XlsxWriter
             original = r;
         }
 
-        string rebuilt = hasComments ? SheetRelsXml(sheetNumber) : "";
+        // 重建 rels（完整 XML）：批注 + 超链接 + drawing
+        var relParts = new List<RelInfo>();
+        if (hasComments)
+        {
+            relParts.Add(new RelInfo
+            {
+                Id = "rId1",
+                Type = $"{OfficeRelNs}/comments",
+                Target = $"../comments{sheetNumber}.xml",
+            });
+        }
+        if (hyperlinks is { Count: > 0 })
+        {
+            int extIndex = 0;
+            for (int h = 0; h < hyperlinks.Count; h++)
+            {
+                if (hyperlinks[h].IsInternal) continue; // 内部链接不需要 rels
+                extIndex++;
+                relParts.Add(new RelInfo
+                {
+                    Id = $"rIdH{extIndex}",
+                    Type = $"{OfficeRelNs}/hyperlink",
+                    Target = hyperlinks[h].Target,
+                    TargetMode = "External",
+                });
+            }
+        }
+        if (hasDrawing)
+        {
+            // 既有 drawing 时其 rel 已由 MergeRelsXml 保留，无需新增；新建 drawing 才加 rIdD1
+            var (drawingEntry, _) = imagePlan is not null
+                ? imagePlan.DrawingTargetFor(sheetNumber - 1, preserved)
+                : ($"xl/drawings/drawing{sheetNumber}.xml", "rIdD1");
+            bool hasExistingDrawingRel = false;
+            if (!string.IsNullOrEmpty(original))
+            {
+                foreach (var rel in ParseRels(original))
+                {
+                    if (rel.Type.EndsWith("/drawing", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var abs = ResolveRelsTarget("xl/worksheets", rel.Target);
+                        if (abs == drawingEntry) { hasExistingDrawingRel = true; break; }
+                    }
+                }
+            }
+            if (!hasExistingDrawingRel)
+            {
+                relParts.Add(new RelInfo
+                {
+                    Id = "rIdD1",
+                    Type = $"{OfficeRelNs}/drawing",
+                    Target = $"../drawings/{drawingEntry.Substring(drawingEntry.LastIndexOf('/') + 1)}",
+                });
+            }
+        }
+
+        string rebuilt = RelsXml(relParts);
         var rebuiltTargets = new HashSet<string> { $"xl/comments{sheetNumber}.xml" };
         return MergeRelsXml(original, "xl/worksheets", rebuiltTargets, rebuilt);
+    }
+
+    /// <summary>把 rel 列表序列化为完整 &lt;Relationships&gt; XML </summary>
+    private static string RelsXml(List<RelInfo> rels)
+    {
+        if (rels.Count == 0) return "";
+        var sb = new StringBuilder(256);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<Relationships xmlns=\"{RelNs}\">");
+        foreach (var rel in rels)
+        {
+            sb.Append($"<Relationship Id=\"{rel.Id}\" Type=\"{XmlEscape(rel.Type)}\" Target=\"{XmlEscape(rel.Target)}\"");
+            if (rel.TargetMode.Length > 0)
+                sb.Append($" TargetMode=\"{XmlEscape(rel.TargetMode)}\"");
+            sb.Append("/>");
+        }
+        sb.Append("</Relationships>");
+        return sb.ToString();
     }
 
     /// <summary>
@@ -922,7 +1134,9 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string WorkbookXml(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved, bool date1904)
+    private static string WorkbookXml(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved, bool date1904,
+        string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null,
+        bool fileSharingReadOnlyRecommended = false)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -940,6 +1154,14 @@ public static partial class XlsxWriter
                 sb.Append(" date1904=\"1\"");
             sb.Append("/>");
         }
+        // fileSharing（修改密码 / 写保护）：位于 workbookPr 之后、sheets 之前
+        if (!string.IsNullOrEmpty(fileSharingHash))
+        {
+            sb.Append($"<fileSharing readOnlyRecommended=\"{(fileSharingReadOnlyRecommended ? 1 : 0)}\" " +
+                      $"userName=\"Admin\" algorithmName=\"SHA-512\" " +
+                      $"hashValue=\"{fileSharingHash}\" saltValue=\"{fileSharingSalt ?? ""}\" " +
+                      $"spinCount=\"{fileSharingSpin ?? 100000}\"/>");
+        }
         sb.Append("<sheets>");
         for (int i = 0; i < sheets.Count; i++)
         {
@@ -952,7 +1174,7 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string WorkbookRelsXml(int sheetCount, OoxmlPreservedParts? preserved)
+    private static string WorkbookRelsXml(int sheetCount, OoxmlPreservedParts? preserved, ImagePlan? imagePlan = null)
     {
         var rebuiltTargets = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 1; i <= sheetCount; i++)
@@ -961,15 +1183,23 @@ public static partial class XlsxWriter
         }
         rebuiltTargets.Add("xl/sharedStrings.xml");
         rebuiltTargets.Add("xl/styles.xml");
+        if (imagePlan is { HasInCell: true })
+        {
+            rebuiltTargets.Add("xl/metadata.xml");
+            rebuiltTargets.Add("xl/richData/richValueRel.xml");
+            rebuiltTargets.Add("xl/richData/rdrichvalue.xml");
+            rebuiltTargets.Add("xl/richData/rdrichvaluestructure.xml");
+            rebuiltTargets.Add("xl/richData/rdRichValueTypes.xml");
+        }
 
         string original = "";
         if (preserved is not null && preserved.Rels.TryGetValue("xl/_rels/workbook.xml.rels", out var r))
             original = r;
 
-        return MergeRelsXml(original, "xl", rebuiltTargets, WriterWorkbookRels(sheetCount)) ?? WriterWorkbookRels(sheetCount);
+        return MergeRelsXml(original, "xl", rebuiltTargets, WriterWorkbookRels(sheetCount, imagePlan)) ?? WriterWorkbookRels(sheetCount, imagePlan);
     }
 
-    private static string WriterWorkbookRels(int sheetCount)
+    private static string WriterWorkbookRels(int sheetCount, ImagePlan? imagePlan = null)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -980,6 +1210,17 @@ public static partial class XlsxWriter
         }
         sb.Append($"<Relationship Id=\"rId{sheetCount + 1}\" Type=\"{OfficeRelNs}/sharedStrings\" Target=\"sharedStrings.xml\"/>");
         sb.Append($"<Relationship Id=\"rId{sheetCount + 2}\" Type=\"{OfficeRelNs}/styles\" Target=\"styles.xml\"/>");
+
+        // InCell richData 部件（workbook 级关系）
+        int rid = sheetCount + 3;
+        if (imagePlan is { HasInCell: true })
+        {
+            sb.Append($"<Relationship Id=\"rId{rid++}\" Type=\"{OfficeRelNs}/sheetMetadata\" Target=\"metadata.xml\"/>");
+            sb.Append($"<Relationship Id=\"rId{rid++}\" Type=\"http://schemas.microsoft.com/office/2017/06/relationships/rdRichValue\" Target=\"richData/rdrichvalue.xml\"/>");
+            sb.Append($"<Relationship Id=\"rId{rid++}\" Type=\"http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueStructure\" Target=\"richData/rdrichvaluestructure.xml\"/>");
+            sb.Append($"<Relationship Id=\"rId{rid++}\" Type=\"http://schemas.microsoft.com/office/2017/06/relationships/rdRichValueTypes\" Target=\"richData/rdRichValueTypes.xml\"/>");
+            sb.Append($"<Relationship Id=\"rId{rid++}\" Type=\"http://schemas.microsoft.com/office/2022/10/relationships/richValueRel\" Target=\"richData/richValueRel.xml\"/>");
+        }
         sb.Append("</Relationships>");
         return sb.ToString();
     }
@@ -1046,6 +1287,12 @@ public static partial class XlsxWriter
             }
         }
         return sb.ToString();
+    }
+
+    /// <summary>内部超链接 location 以 '#' 开头时去除（OOXML location 不带 '#'） </summary>
+    private static string NormalizeInternalLocation(string target)
+    {
+        return target.StartsWith("#", StringComparison.Ordinal) ? target.Substring(1) : target;
     }
 
     // ── 列宽自适应 ──

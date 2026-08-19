@@ -17,6 +17,8 @@ internal static class XlsbBackend
     // workbook.bin
     private const int BrtBundleSh = 0x009C;   // 工作表清单条目
     private const int BrtWbProp = 0x0099;     // 工作簿属性（date1904 标志）
+    private const int BrtFileSharing = 0x0224;      // 写保护（旧式）
+    private const int BrtFileSharingIso = 0x02A4;   // 写保护（ISO 盐化哈希）
 
     // sharedStrings.bin
     private const int BrtBeginSst = 0x009F;
@@ -53,6 +55,7 @@ internal static class XlsbBackend
     private const int BrtWsDim = 0x0094;
     private const int BrtPane = 0x0097;
     private const int BrtMergeCell = 0x00B0;
+    private const int BrtHLink = 0x01EE;
 
     public static List<SheetData> ReadAll(string path)
     {
@@ -127,6 +130,76 @@ internal static class XlsbBackend
         return false;
     }
 
+    /// <summary>读取 .xlsb 工作簿的写保护（fileSharing）信息。无则返回 null </summary>
+    public static Internal.Encryption.FileSharingInfo? ReadFileSharing(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return ReadFileSharing(fs);
+    }
+
+    /// <summary>从流读取 .xlsb 工作簿的写保护（fileSharing）信息。无则返回 null </summary>
+    public static Internal.Encryption.FileSharingInfo? ReadFileSharing(Stream stream)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        var wbBytes = ReadEntry(zip, "xl/workbook.bin");
+        if (wbBytes is null) return null;
+        var records = Biff12Records.ReadAll(wbBytes);
+        foreach (var rec in records)
+        {
+            if (rec.Rt != BrtFileSharing && rec.Rt != BrtFileSharingIso) continue;
+            var info = ParseFileSharing(rec.Data);
+            if (info is not null) return info;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 解析 BrtFileSharingIso(0x02A4) / BrtFileSharing(0x0224) 记录。
+    /// Iso 布局（样本）：spinCount(4) + flags(2) + stUser(XLWideString) + hashValue(4+bytes) + saltValue(4+bytes) + algorithmName(XLWideString)。
+    /// 旧式 0x0224 无哈希参数（仅标记写保护）。
+    /// </summary>
+    private static Internal.Encryption.FileSharingInfo? ParseFileSharing(byte[] d)
+    {
+        if (d.Length < 6) return null;
+        int spin = Biff12Records.ReadS32(d, 0);
+        bool readOnlyRecommended = (Biff12Records.ReadU16(d, 4) & 0x01) != 0;
+
+        int off = 6;
+        if (off + 4 > d.Length) return null;
+        int userCch = Biff12Records.ReadS32(d, off); off += 4;
+        off += userCch * 2;
+        if (off > d.Length) return null;
+
+        // 旧式 0x0224：仅 stUser + flags，无哈希参数
+        if (off + 4 > d.Length) return null;
+        int hashLen = Biff12Records.ReadS32(d, off); off += 4;
+        if (hashLen <= 0 || hashLen > 512 || off + hashLen > d.Length) return null;
+        var hash = new byte[hashLen];
+        Array.Copy(d, off, hash, 0, hashLen);
+        off += hashLen;
+
+        if (off + 4 > d.Length) return null;
+        int saltLen = Biff12Records.ReadS32(d, off); off += 4;
+        byte[]? salt = null;
+        if (saltLen > 0 && saltLen <= 512 && off + saltLen <= d.Length)
+        {
+            salt = new byte[saltLen];
+            Array.Copy(d, off, salt, 0, saltLen);
+            off += saltLen;
+        }
+
+        string algorithmName = "";
+        if (off + 4 <= d.Length)
+        {
+            int algoCch = Biff12Records.ReadS32(d, off); off += 4;
+            if (algoCch > 0 && algoCch < 64 && off + algoCch * 2 <= d.Length)
+                algorithmName = System.Text.Encoding.Unicode.GetString(d, off, algoCch * 2);
+        }
+
+        if (string.IsNullOrEmpty(algorithmName)) algorithmName = "SHA-512";
+        return new Internal.Encryption.FileSharingInfo(hash, salt, algorithmName, spin, readOnlyRecommended);
+    }
+
     public static List<SheetData> ReadAll(Stream stream)
     {
         using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
@@ -151,7 +224,8 @@ internal static class XlsbBackend
             var data = ReadEntry(zip, sheetPaths[i]);
             if (data is null)
                 throw new LiteExcelException($"缺少工作表文件: {sheetPaths[i]}");
-            result.Add(ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, date1904));
+            var rels = ReadSheetHyperlinkRels(zip, sheetPaths[i]);
+            result.Add(ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, date1904, rels));
         }
 
         if (result.Count == 0)
@@ -314,8 +388,40 @@ internal static class XlsbBackend
 
     // ── worksheet.bin ──
 
+    /// <summary>读取工作表 rels 中 hyperlink 关系（外部超链接 rId → Target）</summary>
+    private static Dictionary<string, string> ReadSheetHyperlinkRels(ZipArchive zip, string sheetPath)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(sheetPath)) return result;
+        var slash = sheetPath.LastIndexOf('/');
+        var dir = slash < 0 ? "" : sheetPath.Substring(0, slash);
+        var file = slash < 0 ? sheetPath : sheetPath.Substring(slash + 1);
+        var relsPath = $"{dir}/_rels/{file}.rels";
+
+        var relsEntry = zip.GetEntry(relsPath);
+        if (relsEntry is null) return result;
+        try
+        {
+            var rels = XElement.Load(relsEntry.Open());
+            var relNs = rels.Name.Namespace;
+            foreach (var rel in rels.Elements(relNs + "Relationship"))
+            {
+                var type = rel.Attribute("Type")?.Value ?? "";
+                if (!type.EndsWith("/hyperlink", StringComparison.OrdinalIgnoreCase)) continue;
+                var id = rel.Attribute("Id")?.Value;
+                var target = rel.Attribute("Target")?.Value ?? "";
+                if (id is not null && !string.IsNullOrEmpty(target)) result[id] = target;
+            }
+        }
+        catch
+        {
+            result.Clear();
+        }
+        return result;
+    }
+
     private static SheetData ParseWorksheet(byte[] data, string sheetName, List<string> sst,
-        Dictionary<int, string> formats, List<int> cellXfs, bool date1904)
+        Dictionary<int, string> formats, List<int> cellXfs, bool date1904, Dictionary<string, string>? hlinkRels = null)
     {
         var records = Biff12Records.ReadAll(data);
         var sheet = new SheetData { SheetName = sheetName };
@@ -324,7 +430,8 @@ internal static class XlsbBackend
         int maxCol = -1;
         var colWidths = new Dictionary<int, double>();
         var rowHeights = new Dictionary<int, double>();
-        bool freeze = false;
+        int freezeRows = 0;
+        int freezeCols = 0;
         int currentRow = -1;
         int prevCol = -1;
 
@@ -420,13 +527,20 @@ internal static class XlsbBackend
                 case BrtMergeCell:
                     ParseMergeCell(d, sheet);
                     break;
+                case BrtHLink:
+                    ParseHLink(d, cells, hlinkRels, ref maxRow, ref maxCol);
+                    break;
                 case BrtPane:
                     // colFrozen(Xnum 8) + rowFrozen(Xnum 8)
                     if (d.Length >= 16)
                     {
                         double colFrozen = BitConverter.ToDouble(d, 0);
                         double rowFrozen = BitConverter.ToDouble(d, 8);
-                        if (colFrozen >= 1.0 || rowFrozen >= 1.0) freeze = true;
+                        if (colFrozen >= 1.0 || rowFrozen >= 1.0)
+                        {
+                            freezeRows = (int)Math.Round(rowFrozen);
+                            freezeCols = (int)Math.Round(colFrozen);
+                        }
                     }
                     break;
             }
@@ -456,7 +570,9 @@ internal static class XlsbBackend
         if (rowHeights.Count > 0)
             sheet.RowHeights = rowHeights;
 
-        sheet.FreezeHeader = freeze;
+        sheet.FreezeHeader = freezeRows == 1 && freezeCols == 0;
+        sheet.FreezeRows = freezeRows;
+        sheet.FreezeColumns = freezeCols;
         return sheet;
     }
 
@@ -470,6 +586,73 @@ internal static class XlsbBackend
         if ((flags & 0x20) != 0 && miyRw != 0 && miyRw != 0xFF)
             rowHeights[rw] = miyRw / 20.0;
         return rw;
+    }
+
+    private static void ParseHLink(byte[] d, Dictionary<int, Dictionary<int, Cell>> cells,
+        Dictionary<string, string>? hlinkRels, ref int maxRow, ref int maxCol)
+    {
+        // BrtHLink = RfX(16) + relId(XLNullableWideString) + location + tooltip + display
+        if (d.Length < 16) return;
+        int off = 0;
+        int rwFirst = ReadS32(d, off); off += 4;
+        int rwLast = ReadS32(d, off); off += 4;
+        int colFirst = ReadS32(d, off); off += 4;
+        int colLast = ReadS32(d, off); off += 4;
+
+        var relId = ReadNullableWideString(d, ref off);
+        var location = Biff12Records.ReadWideString(d, ref off);
+        var tooltip = Biff12Records.ReadWideString(d, ref off);
+        Biff12Records.ReadWideString(d, ref off); // display（忽略）
+
+        string target;
+        bool isInternal;
+        if (!string.IsNullOrEmpty(location))
+        {
+            target = location.StartsWith("#", StringComparison.Ordinal) ? location : "#" + location;
+            isInternal = true;
+        }
+        else if (hlinkRels is not null && !string.IsNullOrEmpty(relId) && hlinkRels.TryGetValue(relId, out var t))
+        {
+            target = t;
+            isInternal = false;
+        }
+        else
+        {
+            return;
+        }
+
+        for (int r = rwFirst; r <= rwLast; r++)
+        {
+            for (int c = colFirst; c <= colLast; c++)
+            {
+                if (!cells.TryGetValue(r, out var rowCells))
+                {
+                    rowCells = new Dictionary<int, Cell>();
+                    cells[r] = rowCells;
+                }
+                if (!rowCells.TryGetValue(c, out var cell))
+                {
+                    cell = Cell.Empty;
+                    rowCells[c] = cell;
+                }
+                cell.Hyperlink = new Hyperlink { Target = target, Tooltip = string.IsNullOrEmpty(tooltip) ? null : tooltip, IsInternal = isInternal };
+                if (r > maxRow) maxRow = r;
+                if (c > maxCol) maxCol = c;
+            }
+        }
+    }
+
+    private static string ReadNullableWideString(byte[] d, ref int off)
+    {
+        if (off + 4 > d.Length) return "";
+        uint cch = Biff12Records.ReadU32(d, off);
+        off += 4;
+        if (cch == 0 || cch == 0xFFFFFFFF) return "";
+        int bytes = (int)cch * 2;
+        if (off + bytes > d.Length) return "";
+        var s = System.Text.Encoding.Unicode.GetString(d, off, bytes);
+        off += bytes;
+        return s;
     }
 
     private static void PutCell(Dictionary<int, Dictionary<int, Cell>> cells, byte[] d, bool shortCell,

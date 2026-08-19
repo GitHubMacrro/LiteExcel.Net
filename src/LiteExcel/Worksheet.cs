@@ -19,6 +19,12 @@ public sealed class Worksheet
     /// <summary>是否冻结首行 </summary>
     public bool FreezeHeader { get; set; }
 
+    /// <summary>冻结行数（0 = 不冻结行）。FreezeHeader = true 等价于 1 </summary>
+    public int FreezeRows { get; set; }
+
+    /// <summary>冻结列数（0 = 不冻结列） </summary>
+    public int FreezeColumns { get; set; }
+
     /// <summary>列宽（0-based 列索引 -> 宽度） </summary>
     public Dictionary<int, double>? ColumnWidths { get; set; }
 
@@ -48,6 +54,9 @@ public sealed class Worksheet
 
     /// <summary>工作表宿主的 VBA 代码名（打开时捕获，保存时随 SheetData 写回 sheetPr@codeName） </summary>
     internal string? CodeName { get; set; }
+
+    /// <summary>工作表图片（InCell / Floating） </summary>
+    public List<WorksheetImage> Images { get; } = new();
 
     /// <summary>合并区域（CellRange 为 0-based，与低层模型一致） </summary>
     public IReadOnlyList<CellRange> MergedRanges => _mergedRanges;
@@ -81,6 +90,30 @@ public sealed class Worksheet
     }
 
     // ── 单元格访问 ──
+
+    /// <summary>添加一张浮动图片（以 row/column 左上角为锚点，默认按图片原始尺寸显示） </summary>
+    public WorksheetImage AddImage(byte[] data, int row, int column, double? widthPx = null, double? heightPx = null,
+        ImagePlacement placement = ImagePlacement.Floating, string? extension = null, string? name = null)
+    {
+        if (data is null || data.Length == 0)
+            throw new ArgumentException("图片数据不能为空", nameof(data));
+        if (row < 1 || column < 1)
+            throw new ArgumentOutOfRangeException(nameof(row), "图片锚点行/列必须从 1 开始");
+
+        var img = new WorksheetImage
+        {
+            Data = data,
+            Row = row,
+            Column = column,
+            WidthPx = widthPx,
+            HeightPx = heightPx,
+            Placement = placement,
+            Extension = extension,
+            Name = name ?? $"图片 {Images.Count + 1}",
+        };
+        Images.Add(img);
+        return img;
+    }
 
     /// <summary>按 1-based 行列访问单元格。越界读取返回空单元格视图；写入会按需扩展网格 </summary>
     public Cell Cell(int row, int column)
@@ -239,6 +272,8 @@ public sealed class Worksheet
         {
             SheetName = Name,
             FreezeHeader = FreezeHeader,
+            FreezeRows = FreezeRows,
+            FreezeColumns = FreezeColumns,
             HeaderStyle = HeaderStyle,
             DefaultStyle = DefaultStyle,
             RowStyles = RowStyles,
@@ -250,6 +285,9 @@ public sealed class Worksheet
             Filter = Filter,
             CodeName = CodeName,
         };
+
+        if (Images.Count > 0)
+            sheet.Images = Images;
 
         foreach (var range in _mergedRanges)
             sheet.MergedRanges.Add(range);
@@ -271,6 +309,8 @@ public sealed class Worksheet
         var ws = new Worksheet(sheet.SheetName)
         {
             FreezeHeader = sheet.FreezeHeader,
+            FreezeRows = sheet.FreezeRows,
+            FreezeColumns = sheet.FreezeColumns,
             HeaderStyle = sheet.HeaderStyle,
             DefaultStyle = sheet.DefaultStyle,
             RowStyles = sheet.RowStyles,
@@ -281,6 +321,12 @@ public sealed class Worksheet
             Filter = sheet.Filter,
             CodeName = sheet.CodeName,
         };
+
+        if (sheet.Images is { Count: > 0 })
+        {
+            foreach (var img in sheet.Images)
+                ws.Images.Add(img);
+        }
 
         if (sheet.ColumnWidths is not null)
             ws.ColumnWidths = sheet.ColumnWidths.Select((w, i) => (i, w)).ToDictionary(x => x.i, x => x.w);

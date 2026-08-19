@@ -51,6 +51,18 @@ public sealed class Cell
     /// </summary>
     public bool IsFormula { get; set; }
 
+    /// <summary>单元格超链接（可选） </summary>
+    public Hyperlink? Hyperlink
+    {
+        get => _hyperlink;
+        set
+        {
+            _hyperlink = value;
+            Owner?.OnCellChanged(this);
+        }
+    }
+    private Hyperlink? _hyperlink;
+
     /// <summary>所属工作表（由高层 Worksheet 挂接，用于写回） </summary>
     internal Worksheet? Owner { get; set; }
 
@@ -162,6 +174,7 @@ public sealed class Cell
         Style = other.Style;
         NumberFormat = other.NumberFormat;
         IsFormula = other.IsFormula;
+        Hyperlink = other.Hyperlink?.Clone();
     }
     /// <summary>以字符串读取值。Empty 返回 null，Number/Date/Boolean 按惯例格式化 </summary>
     public string? GetString()

@@ -11,6 +11,12 @@ public sealed class SheetData
     public List<CellRange> MergedRanges { get; set; } = new();
     public AutoFilter? Filter { get; set; }
     public bool FreezeHeader { get; set; }
+
+    /// <summary>冻结行数（0 = 不冻结行） </summary>
+    public int FreezeRows { get; set; }
+
+    /// <summary>冻结列数（0 = 不冻结列） </summary>
+    public int FreezeColumns { get; set; }
     public List<double>? ColumnWidths { get; set; }
     public CellStyle? HeaderStyle { get; set; }
 
@@ -34,4 +40,7 @@ public sealed class SheetData
 
     /// <summary>工作表宿主的 VBA 代码名（sheetPr@codeName）。带宏工作簿经保存后仍与 vbaProject 绑定，避免 Excel 重排文档模块 </summary>
     public string? CodeName { get; set; }
+
+    /// <summary>工作表图片（InCell richData / Floating drawing） </summary>
+    public List<WorksheetImage>? Images { get; set; }
 }

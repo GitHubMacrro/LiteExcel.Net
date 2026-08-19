@@ -355,6 +355,25 @@ public static partial class XlsxReader
         var date1904 = date1904Attr == "1" || string.Equals(date1904Attr, "true", StringComparison.OrdinalIgnoreCase);
         s_workbookCodeName = wbPr?.Attribute("codeName")?.Value;
 
+        // 捕获 fileSharing（修改密码/写保护）
+        s_fileSharingHash = null;
+        var fsEl = workbook.Element(ns + "fileSharing");
+        if (fsEl is not null)
+        {
+            var hash = fsEl.Attribute("hashValue")?.Value;
+            var salt = fsEl.Attribute("saltValue")?.Value;
+            var algo = fsEl.Attribute("algorithmName")?.Value;
+            var spin = fsEl.Attribute("spinCount")?.Value;
+            var readOnlyRecommended = fsEl.Attribute("readOnlyRecommended")?.Value == "1";
+            if (!string.IsNullOrEmpty(hash))
+            {
+                s_fileSharingHash = new Internal.Encryption.FileSharingInfo(
+                    Convert.FromBase64String(hash),
+                    salt is null ? null : Convert.FromBase64String(salt),
+                    algo, spin is null ? 0 : int.Parse(spin), readOnlyRecommended);
+            }
+        }
+
         // 读取 sheet 列表
         var sheetsEl = workbook.Element(ns + "sheets");
         if (sheetsEl is null) return result;
@@ -407,11 +426,17 @@ public static partial class XlsxReader
     [ThreadStatic]
     private static string? s_workbookCodeName;
 
+    [ThreadStatic]
+    private static Internal.Encryption.FileSharingInfo? s_fileSharingHash;
+
     /// <summary>最近一次 ReadWorkbook 捕获的工作簿 codeName（同线程、单次打开内有效，供 OpenCore 取用） </summary>
     internal static string? WorkbookCodeNameSnapshot => s_workbookCodeName;
 
     /// <summary>最近一次 ReadWorkbook 捕获的 1904 日期系统标志（同线程、单次打开内有效，供 OpenCore 取用） </summary>
     internal static bool Date1904Snapshot => s_globalDate1904;
+
+    /// <summary>最近一次 ReadWorkbook 捕获的 fileSharing（修改密码）信息 </summary>
+    internal static Internal.Encryption.FileSharingInfo? FileSharingSnapshot => s_fileSharingHash;
 
     private static SheetData ReadWorksheet(ZipArchive zip, string sheetPath, string sheetName,
         List<string> shared, StylesheetInfo styles, bool firstRowIsHeader)
@@ -495,12 +520,19 @@ public static partial class XlsxReader
             }
             else if (reader.LocalName == "pane")
             {
-                // 冻结窗格：ySplit 或 xSplit 存在且 state="frozen" 视为冻结首行/首列
+                // 冻结窗格：ySplit/xSplit 任意值 + state="frozen"
                 var state = reader.GetAttribute("state");
                 var ySplit = reader.GetAttribute("ySplit");
                 var xSplit = reader.GetAttribute("xSplit");
-                if (state == "frozen" && (ySplit == "1" || xSplit == "1"))
-                    sheet.FreezeHeader = true;
+                if (state == "frozen")
+                {
+                    if (int.TryParse(ySplit, out int yRows) && yRows > 0)
+                        sheet.FreezeRows = yRows;
+                    if (int.TryParse(xSplit, out int xCols) && xCols > 0)
+                        sheet.FreezeColumns = xCols;
+                    if (sheet.FreezeRows > 0 || sheet.FreezeColumns > 0)
+                        sheet.FreezeHeader = sheet.FreezeRows == 1;
+                }
             }
         }
 
@@ -519,7 +551,107 @@ public static partial class XlsxReader
         // 读取单元格批注（通过 sheet rels 查找 comments 部件）
         ReadCommentsForSheet(zip, sheetPath, sheet);
 
+        // 读取单元格超链接（通过 sheet rels 的 hyperlink 关系 + sheet 的 <hyperlinks> 元素）
+        ReadHyperlinksForSheet(zip, sheetPath, sheet);
+
         return sheet;
+    }
+
+    /// <summary>读取单元格超链接：sheet rels 的 hyperlink 关系（外部）+ sheet 的 &lt;hyperlinks&gt; 元素（含内部 location） </summary>
+    private static void ReadHyperlinksForSheet(ZipArchive zip, string sheetPath, SheetData sheet)
+    {
+        // 外部超链接经 rels 映射；内部超链接直接在 sheet 中带 location，无需 rels
+        var hyperlinkRels = new Dictionary<string, string>(StringComparer.Ordinal);
+        var dir = System.IO.Path.GetDirectoryName(sheetPath);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            dir = dir.Replace('\\', '/');
+            var file = System.IO.Path.GetFileName(sheetPath);
+            var relsPath = $"{dir}/_rels/{file}.rels";
+
+            var relsEntry = zip.GetEntry(relsPath);
+            if (relsEntry is not null)
+            {
+                using (var relsReader = XmlReader.Create(relsEntry.Open(), XmlSettings))
+                {
+                    while (relsReader.Read())
+                    {
+                        if (relsReader.NodeType == XmlNodeType.Element && relsReader.LocalName == "Relationship")
+                        {
+                            var type = relsReader.GetAttribute("Type") ?? "";
+                            if (type.EndsWith("/hyperlink", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var id = relsReader.GetAttribute("Id");
+                                var target = relsReader.GetAttribute("Target") ?? "";
+                                var mode = relsReader.GetAttribute("TargetMode") ?? "";
+                                if (id is not null)
+                                {
+                                    // 非 External（TargetMode 为空）需解析为相对路径
+                                    hyperlinkRels[id] = mode == "External"
+                                        ? target
+                                        : ResolveRelativePath(sheetPath, target);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        var entry = zip.GetEntry(sheetPath);
+        if (entry is null) return;
+
+        using var reader = XmlReader.Create(entry.Open(), XmlSettings);
+        while (reader.Read())
+        {
+            if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "hyperlink") continue;
+
+            var refAttr = reader.GetAttribute("ref");
+            var tooltip = reader.GetAttribute("tooltip");
+            if (refAttr is null) continue;
+
+            // 内部超链接：location 属性（无需 rels）
+            var location = reader.GetAttribute("location");
+            if (!string.IsNullOrEmpty(location))
+            {
+                SetCellHyperlink(sheet, refAttr, new Hyperlink
+                {
+                    Target = location.StartsWith("#", StringComparison.Ordinal) ? location : "#" + location,
+                    Tooltip = tooltip,
+                    IsInternal = true,
+                });
+                continue;
+            }
+
+            // 外部超链接：r:id 指向 rels
+            var rid = reader.GetAttribute("id", "http://schemas.openxmlformats.org/officeDocument/2006/relationships");
+            if (rid is null || !hyperlinkRels.TryGetValue(rid, out var target)) continue;
+
+            SetCellHyperlink(sheet, refAttr, new Hyperlink
+            {
+                Target = target,
+                Tooltip = tooltip,
+                IsInternal = false,
+            });
+        }
+    }
+
+    /// <summary>把超链接挂到 sheet 对应单元格（ref 可能是 "A1" 或区域，取左上角） </summary>
+    private static void SetCellHyperlink(SheetData sheet, string refCell, Hyperlink link)
+    {
+        // ref 可能是 "A1" 或 "A1:B2"（区域），取左上角
+        var refCellOnly = refCell.Split(':')[0];
+        var (r0, c0) = CellRef.Parse(refCellOnly);
+        int rowIdx = r0, colIdx = c0;
+
+        // SheetData 行索引：Header 占 1 行（Read 时 firstRowIsHeader=true），Rows 不含表头
+        int dataRow = rowIdx;
+        if (sheet.Headers.Count > 0) dataRow = rowIdx - 1;
+        if (dataRow < 0 || dataRow >= sheet.Rows.Count) return;
+        var row = sheet.Rows[dataRow];
+        if (colIdx < 0 || colIdx >= row.Count) return;
+
+        row[colIdx].Hyperlink = link;
     }
 
     // ── 批注读取 ──

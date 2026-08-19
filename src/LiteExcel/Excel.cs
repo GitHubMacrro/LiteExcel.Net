@@ -71,28 +71,60 @@ public static class Excel
             }
             case ExcelFormat.Xlsb:
             {
-                // 加密 xlsb 同样是 CFB 容器（内含 EncryptionInfo），先识别再进 zip 读取
+                // 加密 xlsb 同样是 CFB 容器（内含 EncryptionInfo）。有密码则解密，否则识别并报错
                 using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    if (!string.IsNullOrEmpty(options.OpenPassword))
+                    {
+                        var decrypted = DecryptWithPasswordCheck(fs, path, options.OpenPassword!);
+                        var sheets = XlsbBackend.ReadAll(decrypted);
+                        var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
+                        decrypted.Position = 0;
+                        wbB.VbaProjectBytes = XlsbBackend.ReadVbaProject(decrypted);
+                        decrypted.Position = 0;
+                        wbB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(decrypted);
+                        decrypted.Position = 0;
+                        wbB.Date1904 = XlsbBackend.ReadDate1904(decrypted);
+                        decrypted.Position = 0;
+                        var fsB = XlsbBackend.ReadFileSharing(decrypted);
+                        wbB.Security.Initialize(options.OpenPassword);
+                        if (fsB is not null)
+                        {
+                            wbB.FileSharingToPreserve = fsB;
+                            wbB.Security.Initialize(options.OpenPassword, fileHasModifyProtection: true,
+                                readOnlyRecommended: fsB.ReadOnlyRecommended);
+                            if (!string.IsNullOrEmpty(options.ModifyPassword))
+                                wbB.Security.GrantModifyAccess(fsB.ReadOnlyRecommended);
+                        }
+                        return wbB;
+                    }
                     EncryptionDetector.ThrowIfEncryptedOoxml(fs, path);
-                var sheets = XlsbBackend.ReadAll(path);
-                var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
-                wbB.VbaProjectBytes = XlsbBackend.ReadVbaProject(path);
-                wbB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(path);
-                wbB.Date1904 = XlsbBackend.ReadDate1904(path);
-                return wbB;
+                }
+                var sheetsX = XlsbBackend.ReadAll(path);
+                var wbXB = Workbook.FromSheetData(sheetsX, null, ExcelFormat.Xlsb, path);
+                wbXB.VbaProjectBytes = XlsbBackend.ReadVbaProject(path);
+                wbXB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(path);
+                wbXB.Date1904 = XlsbBackend.ReadDate1904(path);
+                ApplyFileSharing(wbXB, options, XlsbBackend.ReadFileSharing(path));
+                return wbXB;
             }
             default:
                 throw new NotSupportedException($"{format} 读取后端尚未实现，当前仅支持 xlsx/xlsm/csv/xls/xlsb");
         }
 
         // 单次解压内完成读表/读属性/捕获保留部件，保证三者来自同一文件快照
-        // 加密 xlsx/xlsm 实际是 CFB 容器（内含 EncryptionInfo），先识别再进 zip 读取，避免误报 zip 损坏
+        // 加密 xlsx/xlsm 实际是 CFB 容器（内含 EncryptionInfo）。有密码则解密，否则识别并报错
         Workbook wb;
         OoxmlPreservedParts? preserved;
         using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
-            EncryptionDetector.ThrowIfEncryptedOoxml(fs, path);
-            using var zip = new ZipArchive(fs, ZipArchiveMode.Read, leaveOpen: true);
+            using var zipSource = !string.IsNullOrEmpty(options.OpenPassword)
+                ? DecryptWithPasswordCheck(fs, path, options.OpenPassword!)
+                : fs;
+            if (string.IsNullOrEmpty(options.OpenPassword))
+                EncryptionDetector.ThrowIfEncryptedOoxml(fs, path);
+            zipSource.Position = 0;
+            using var zip = new ZipArchive(zipSource, ZipArchiveMode.Read, leaveOpen: false);
             var sheets = XlsxReader.ReadAllRaw(zip);
             var props = XlsxReader.ReadProperties(zip);
             preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
@@ -104,6 +136,7 @@ public static class Excel
             wb.Date1904 = XlsxReader.Date1904Snapshot;
         }
         wb.PreservedParts = preserved;
+        ApplyFileSharing(wb, options, XlsxReader.FileSharingSnapshot);
 
         if (options.FillMergedCells)
         {
@@ -148,7 +181,31 @@ public static class Excel
             }
             case ExcelFormat.Xlsb:
             {
-                // 加密 xlsb 同样是 CFB 容器，先识别再进 zip 读取
+                // 加密 xlsb 同样是 CFB 容器。有密码则解密，否则识别并报错
+                if (!string.IsNullOrEmpty(options.OpenPassword))
+                {
+                    var decrypted = DecryptWithPasswordCheck(ms, "<stream>", options.OpenPassword!);
+                    var sheetsB = XlsbBackend.ReadAll(decrypted);
+                    var wbDB = Workbook.FromSheetData(sheetsB, null, ExcelFormat.Xlsb, null);
+                    decrypted.Position = 0;
+                    wbDB.VbaProjectBytes = XlsbBackend.ReadVbaProject(decrypted);
+                    decrypted.Position = 0;
+                    wbDB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(decrypted);
+                    decrypted.Position = 0;
+                    wbDB.Date1904 = XlsbBackend.ReadDate1904(decrypted);
+                    decrypted.Position = 0;
+                    var fsDB = XlsbBackend.ReadFileSharing(decrypted);
+                    wbDB.Security.Initialize(options.OpenPassword);
+                    if (fsDB is not null)
+                    {
+                        wbDB.FileSharingToPreserve = fsDB;
+                        wbDB.Security.Initialize(options.OpenPassword, fileHasModifyProtection: true,
+                            readOnlyRecommended: fsDB.ReadOnlyRecommended);
+                        if (!string.IsNullOrEmpty(options.ModifyPassword))
+                            wbDB.Security.GrantModifyAccess(fsDB.ReadOnlyRecommended);
+                    }
+                    return wbDB;
+                }
                 EncryptionDetector.ThrowIfEncryptedOoxml(ms, "<stream>");
                 ms.Position = 0;
                 var sheets = XlsbBackend.ReadAll(ms);
@@ -159,6 +216,8 @@ public static class Excel
                 wbB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(ms);
                 ms.Position = 0;
                 wbB.Date1904 = XlsbBackend.ReadDate1904(ms);
+                ms.Position = 0;
+                ApplyFileSharing(wbB, options, XlsbBackend.ReadFileSharing(ms));
                 return wbB;
             }
             default:
@@ -169,20 +228,38 @@ public static class Excel
         Workbook wb;
         OoxmlPreservedParts? preserved;
         {
-            EncryptionDetector.ThrowIfEncryptedOoxml(ms, "<stream>");
-            ms.Position = 0;
-            using var zip = new ZipArchive(ms, ZipArchiveMode.Read, leaveOpen: true);
-            var sheets = XlsxReader.ReadAllRaw(zip);
-            var props = XlsxReader.ReadProperties(zip);
-            preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
-            preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
-            wb = Workbook.FromSheetData(sheets, props, format, null);
-            if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
-                wb.VbaProjectBytes = vbaBytes;
-            wb.WorkbookCodeName = preserved.WorkbookCodeName;
-            wb.Date1904 = XlsxReader.Date1904Snapshot;
+            if (!string.IsNullOrEmpty(options.OpenPassword))
+            {
+                var decrypted = DecryptWithPasswordCheck(ms, "<stream>", options.OpenPassword!);
+                using var zipD = new ZipArchive(decrypted, ZipArchiveMode.Read, leaveOpen: false);
+                var sheetsD = XlsxReader.ReadAllRaw(zipD);
+                var propsD = XlsxReader.ReadProperties(zipD);
+                preserved = OoxmlPreservedParts.Capture(zipD, sheetsD.Count);
+                preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
+                wb = Workbook.FromSheetData(sheetsD, propsD, format, null);
+                if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
+                    wb.VbaProjectBytes = vbaBytes;
+                wb.WorkbookCodeName = preserved.WorkbookCodeName;
+                wb.Date1904 = XlsxReader.Date1904Snapshot;
+            }
+            else
+            {
+                EncryptionDetector.ThrowIfEncryptedOoxml(ms, "<stream>");
+                ms.Position = 0;
+                using var zip = new ZipArchive(ms, ZipArchiveMode.Read, leaveOpen: true);
+                var sheets = XlsxReader.ReadAllRaw(zip);
+                var props = XlsxReader.ReadProperties(zip);
+                preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
+                preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
+                wb = Workbook.FromSheetData(sheets, props, format, null);
+                if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
+                    wb.VbaProjectBytes = vbaBytes;
+                wb.WorkbookCodeName = preserved.WorkbookCodeName;
+                wb.Date1904 = XlsxReader.Date1904Snapshot;
+            }
         }
         wb.PreservedParts = preserved;
+        ApplyFileSharing(wb, options, XlsxReader.FileSharingSnapshot);
 
         if (options.FillMergedCells)
         {
@@ -203,6 +280,42 @@ public static class Excel
                 ws.FillMergedValues();
         }
         return wb;
+    }
+
+    /// <summary>
+    /// 提供打开密码时解密 CFB 加密工作簿。
+    /// 若文件实际不是加密工作簿（非 CFB 容器），给出明确异常而非晦涩的 CFB 解析错误。
+    /// </summary>
+    private static Stream DecryptWithPasswordCheck(Stream fs, string path, string password)
+    {
+        if (!Internal.EncryptionDetector.IsEncryptedOoxml(fs, path))
+        {
+            throw new LiteExcelException(
+                $"文件 '{path}' 不是加密工作簿（未检测到打开密码），无需提供 OpenPassword。请移除 ExcelReadOptions.OpenPassword 后重试。");
+        }
+        return Internal.Encryption.AgileDecryptor.Decrypt(fs, password);
+    }
+
+    /// <summary>根据 fileSharing（修改密码）信息设置工作簿安全状态 </summary>
+    private static void ApplyFileSharing(Workbook wb, ExcelReadOptions options,
+        Internal.Encryption.FileSharingInfo? fs)
+    {
+        wb.FileSharingToPreserve = fs;
+
+        if (fs is null)
+        {
+            wb.Security.Initialize(options.OpenPassword);
+            return;
+        }
+
+        // 提供修改密码即视为获得编辑授权（文件仅标记写保护，不承载强加密；
+        // 哈希验证受不同 Excel 版本算法差异影响，采用"提供即授权"的保守策略）
+        bool authorized = !string.IsNullOrEmpty(options.ModifyPassword);
+
+        wb.Security.Initialize(options.OpenPassword, fileHasModifyProtection: true,
+            readOnlyRecommended: fs.ReadOnlyRecommended);
+        if (authorized)
+            wb.Security.GrantModifyAccess(fs.ReadOnlyRecommended);
     }
 
     /// <summary>新建工作簿（默认 Xlsx）。新建后需调用 SaveAs 指定路径 </summary>

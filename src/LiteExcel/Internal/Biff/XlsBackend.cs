@@ -193,6 +193,8 @@ internal static class XlsBackend
         var colWidths = new Dictionary<int, double>();
         var rowHeights = new Dictionary<int, double>();
         bool freeze = false;
+        int freezeRows = 0;
+        int freezeCols = 0;
 
         for (; i < records.Count; i++)
         {
@@ -237,6 +239,12 @@ internal static class XlsBackend
                 case BiffRecords.OpMergedCells:
                     ParseMergedCells(sheet, rec.Data);
                     break;
+                case BiffRecords.OpHlink:
+                    ParseHlink(cells, rec.Data, ref maxRow, ref maxCol);
+                    break;
+                case BiffRecords.OpHlinkTooltip:
+                    ParseHlinkTooltip(cells, rec.Data, ref maxRow, ref maxCol);
+                    break;
                 case BiffRecords.OpColInfo:
                     ParseColInfo(rec.Data, colWidths);
                     break;
@@ -244,11 +252,13 @@ internal static class XlsBackend
                     ParseRowHeight(rec.Data, rowHeights);
                     break;
                 case BiffRecords.OpPane:
-                    if (rec.Data.Length >= 6)
+                    // xSplit(2) ySplit(2) topRow(2) leftCol(2) activePane(1) fNoSplit(1)
+                    if (rec.Data.Length >= 8)
                     {
-                        int ySplit = BiffRecords.ReadU16(rec.Data, 2);
                         int xSplit = BiffRecords.ReadU16(rec.Data, 0);
-                        if (ySplit >= 1 || xSplit >= 1) freeze = true;
+                        int ySplit = BiffRecords.ReadU16(rec.Data, 2);
+                        freeze = ySplit >= 1 || xSplit >= 1;
+                        if (freeze) { freezeRows = ySplit; freezeCols = xSplit; }
                     }
                     break;
             }
@@ -278,8 +288,180 @@ internal static class XlsBackend
         if (rowHeights.Count > 0)
             sheet.RowHeights = rowHeights;
 
-        sheet.FreezeHeader = freeze;
+        sheet.FreezeHeader = freezeRows == 1 && freezeCols == 0;
+        sheet.FreezeRows = freezeRows;
+        sheet.FreezeColumns = freezeCols;
         return sheet;
+    }
+
+    /// <summary>解析 HLINK（0x01B8）：Ref(8) + CLSID(16) + Hyperlink 对象</summary>
+    private static void ParseHlink(Dictionary<int, Dictionary<int, Cell>> cells, byte[] d, ref int maxRow, ref int maxCol)
+    {
+        if (d.Length < 28) return;
+        int row = BiffRecords.ReadU16(d, 0);
+        int col = BiffRecords.ReadU16(d, 4);
+        int off = 24; // Ref(8) + Hyperlink CLSID(16)
+
+        int sVer = BiffRecords.ReadS32(d, off); off += 4;
+        if (sVer != 2) return;
+        int flags = BiffRecords.ReadU16(d, off); off += 2;
+        off += 2; // 保留字段（通常 0）
+
+        string displayName = "";
+        string loc = "";
+        string target = "";
+
+        if ((flags & 0x0010) != 0) displayName = ReadHlinkString(d, ref off);
+        if ((flags & 0x0080) != 0) ReadHlinkString(d, ref off); // targetFrameName（忽略）
+        if ((flags & 0x0100) != 0 && (flags & 0x0001) != 0) target = ReadHlinkString(d, ref off); // 字符串 moniker
+        else if ((flags & 0x0001) != 0) target = ReadHlinkMoniker(d, ref off); // URL/File moniker
+        if ((flags & 0x0008) != 0) loc = ReadHlinkString(d, ref off);
+        if ((flags & 0x0020) != 0) off += 16; // GUID
+        if ((flags & 0x0040) != 0) off += 8;  // FILETIME
+
+        if (!string.IsNullOrEmpty(loc))
+        {
+            target = string.IsNullOrEmpty(target) ? "#" + loc : target + "#" + loc;
+        }
+        // file:// 前缀重建：flags 0x0002 且路径以单个 '/' 开头（对齐 SheetJS）
+        if ((flags & 0x0002) != 0 && target.StartsWith("/", StringComparison.Ordinal)
+            && !target.StartsWith("//", StringComparison.Ordinal))
+        {
+            target = "file://" + target;
+        }
+        if (string.IsNullOrEmpty(target)) return;
+
+        // displayName 是单元格显示文本而非 tooltip（tooltip 由 HLinkTooltip 记录提供）
+        var existing = GetCell(cells, row, col);
+        AttachCellHyperlink(cells, row, col, new Hyperlink
+        {
+            Target = target,
+            IsInternal = target.StartsWith("#", StringComparison.Ordinal),
+            Tooltip = existing?.Hyperlink?.Tooltip, // 保留先出现的 HLinkTooltip
+        }, ref maxRow, ref maxCol);
+    }
+
+    /// <summary>解析 HLinkTooltip（0x0800）：0x0800(2) + Ref(8) + UTF-16LE(含 null)</summary>
+    private static void ParseHlinkTooltip(Dictionary<int, Dictionary<int, Cell>> cells, byte[] d, ref int maxRow, ref int maxCol)
+    {
+        if (d.Length < 12) return;
+        int row = BiffRecords.ReadU16(d, 2);
+        int col = BiffRecords.ReadU16(d, 6);
+        int off = 10;
+        var sb = new System.Text.StringBuilder();
+        while (off + 1 < d.Length)
+        {
+            int ch = BiffRecords.ReadU16(d, off);
+            if (ch == 0) break;
+            sb.Append((char)ch);
+            off += 2;
+        }
+        string tooltip = sb.ToString();
+        if (tooltip.Length == 0) return;
+
+        var cell = GetOrCreateCell(cells, row, col, ref maxRow, ref maxCol);
+        if (cell.Hyperlink is null)
+        {
+            cell.Hyperlink = new Hyperlink { Tooltip = tooltip };
+        }
+        else if (string.IsNullOrEmpty(cell.Hyperlink.Tooltip))
+        {
+            cell.Hyperlink.Tooltip = tooltip;
+        }
+    }
+
+    /// <summary>HyperlinkString：len(4) + UTF-16LE 字符（len 含 null 结尾）</summary>
+    private static string ReadHlinkString(byte[] d, ref int off)
+    {
+        if (off + 4 > d.Length) return "";
+        int len = BiffRecords.ReadS32(d, off); off += 4;
+        if (len <= 0 || len > 0xFFFF) return "";
+        if (off + len * 2 > d.Length) return "";
+        var chars = new char[len];
+        for (int i = 0; i < len; i++)
+            chars[i] = (char)BiffRecords.ReadU16(d, off + i * 2);
+        off += len * 2;
+        return new string(chars).TrimEnd('\0');
+    }
+
+    /// <summary>Moniker：CLSID(16) + 内容。支持 URL（E0C9EA79...）与 File（03030000...）</summary>
+    private static string ReadHlinkMoniker(byte[] d, ref int off)
+    {
+        if (off + 16 > d.Length) return "";
+        var clsid = new byte[16];
+        Array.Copy(d, off, clsid, 0, 16);
+        off += 16;
+
+        // URL Moniker：len(4) 字节数 + UTF-16LE（含 null）+ 可选 GUID(16)+FILETIME(8)
+        if (clsid[0] == 0xE0 && clsid[1] == 0xC9 && clsid[2] == 0xEA && clsid[3] == 0x79)
+        {
+            if (off + 4 > d.Length) return "";
+            int byteLen = BiffRecords.ReadS32(d, off); off += 4;
+            if (byteLen <= 0 || byteLen > 0xFFFF) return "";
+            if (off + byteLen > d.Length) return "";
+            int charCount = byteLen / 2;
+            var chars = new char[charCount];
+            for (int i = 0; i < charCount; i++)
+                chars[i] = (char)BiffRecords.ReadU16(d, off + i * 2);
+            off += byteLen;
+            var url = new string(chars).TrimEnd('\0');
+            // 尾部可选 GUID + FILETIME（SheetJS 判定为 24 字节）
+            if (off + 24 <= d.Length)
+            {
+                byte[] guid = { 0x79, 0x58, 0x81, 0xF4, 0x3B, 0x1D, 0x7F, 0x48, 0xAF, 0x2C, 0x82, 0x5D, 0xC4, 0x85, 0x27, 0x63 };
+                bool match = true;
+                for (int i = 0; i < 16; i++) if (d[off + i] != guid[i]) { match = false; break; }
+                if (match) off += 24;
+            }
+            return url;
+        }
+
+        // File Moniker：cAnti(2) + ANSI 路径（含 null）+ 后续字段（忽略）
+        if (clsid[0] == 0x03 && clsid[1] == 0x03)
+        {
+            if (off + 2 > d.Length) return "";
+            int cAnti = BiffRecords.ReadU16(d, off); off += 2;
+            string prefix = "";
+            for (int i = 0; i < cAnti; i++) prefix += "../";
+            int start = off;
+            int ansiLen = 0;
+            while (off + ansiLen < d.Length && d[start + ansiLen] != 0) ansiLen++;
+            var ansi = System.Text.Encoding.GetEncoding(0).GetString(d, start, ansiLen);
+            off += ansiLen + 1;
+            return prefix + ansi;
+        }
+
+        return "";
+    }
+
+    private static Cell? GetCell(Dictionary<int, Dictionary<int, Cell>> cells, int row, int col)
+    {
+        return cells.TryGetValue(row, out var rowCells) && rowCells.TryGetValue(col, out var cell) ? cell : null;
+    }
+
+    private static void AttachCellHyperlink(Dictionary<int, Dictionary<int, Cell>> cells, int row, int col,
+        Hyperlink link, ref int maxRow, ref int maxCol)
+    {
+        var cell = GetOrCreateCell(cells, row, col, ref maxRow, ref maxCol);
+        cell.Hyperlink = link;
+    }
+
+    private static Cell GetOrCreateCell(Dictionary<int, Dictionary<int, Cell>> cells, int row, int col,
+        ref int maxRow, ref int maxCol)
+    {
+        if (!cells.TryGetValue(row, out var rowCells))
+        {
+            rowCells = new Dictionary<int, Cell>();
+            cells[row] = rowCells;
+        }
+        if (!rowCells.TryGetValue(col, out var cell))
+        {
+            cell = Cell.Empty;
+            rowCells[col] = cell;
+        }
+        if (row > maxRow) maxRow = row;
+        if (col > maxCol) maxCol = col;
+        return cell;
     }
 
     private static void PutCell(Dictionary<int, Dictionary<int, Cell>> cells, byte[] d,

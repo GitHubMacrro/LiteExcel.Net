@@ -26,8 +26,10 @@ public static class Program
         Demo13_RowHeightAutoWidth(outDir);
         Demo14_AppendData(outDir);
         Demo15_DataValidation(outDir);
-        Demo16_ProgressCallback(outDir);
-        Demo17_PublicApi(outDir);
+Demo16_ProgressCallback(outDir);
+Demo17_PublicApi(outDir);
+Demo18_Security(outDir);
+Demo19_Images(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -724,6 +726,77 @@ public static class Program
         csvWb.SaveAs(csvFile);
         Console.WriteLine($"  CSV: {csvFile}");
 
+        Console.WriteLine();
+    }
+
+    // 18. 文件级安全（打开密码 / 修改密码）+ 超链接 + 冻结窗格
+    private static void Demo18_Security(string dir)
+    {
+        Console.WriteLine("[18] Security (open/modify password) + Hyperlink + Freeze");
+
+        // 新建带密码的工作簿
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        ws.SetValue("A1", "加密内容");
+        ws.Cell("A1").Hyperlink = new Hyperlink { Target = "https://github.com/GitHubMacrro/LiteExcel.Net", Tooltip = "打开项目主页" };
+        ws.FreezeRows = 1;
+        ws.FreezeColumns = 1;
+
+        wb.Security.SetOpenPassword("1");
+        wb.Security.SetModifyPassword("12");
+        var secured = Path.Combine(dir, "18_secured.xlsx");
+        wb.SaveAs(secured);
+        Console.WriteLine($"  Written (open=1, modify=12): {secured}");
+
+        // 用密码打开（同时提供修改密码以取得修改权限，便于后续移除写保护）
+        var opened = Excel.Open(secured, new ExcelReadOptions { OpenPassword = "1", ModifyPassword = "12" });
+        Console.WriteLine($"  Security: HasOpenPassword={opened.Security.HasOpenPassword}, HasModifyPassword={opened.Security.HasModifyPassword}");
+        Console.WriteLine($"  A1 = {opened.Worksheets[0].Cell("A1").GetString()}");
+        Console.WriteLine($"  FreezeRows={opened.Worksheets[0].FreezeRows}, FreezeColumns={opened.Worksheets[0].FreezeColumns}");
+
+        // 移除修改密码，保留打开密码另存
+        opened.Security.RemoveModifyPassword();
+        var unlocked = Path.Combine(dir, "18_modify_unlocked.xlsx");
+        opened.SaveAs(unlocked);
+        var reopened = Excel.Open(unlocked, new ExcelReadOptions { OpenPassword = "1" });
+        Console.WriteLine($"  After remove modify pwd: HasModifyPassword={reopened.Security.HasModifyPassword}");
+        Console.WriteLine($"  Written: {unlocked}");
+
+        // 未提供密码打开应抛异常
+        try
+        {
+            Excel.Open(secured);
+            Console.WriteLine("  [WARN] expected exception but open succeeded");
+        }
+        catch (LiteExcelException ex)
+        {
+            Console.WriteLine($"  Open without password throws (as expected): {ex.GetType().Name}");
+        }
+
+        Console.WriteLine();
+    }
+
+    // 19. 图片写回（Floating 浮动 + InCell 内嵌）
+    private static void Demo19_Images(string dir)
+    {
+        Console.WriteLine("[19] Images (Floating + InCell)");
+
+        // 1x1 红色 PNG
+        byte[] png = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        ws.SetValue("A1", "浮动图片");
+        ws.AddImage(png, 3, 1, widthPx: 64, heightPx: 64, placement: ImagePlacement.Floating);
+
+        var ws2 = wb.Worksheets.Add("InCell");
+        ws2.SetValue("A1", "单元格内嵌图片");
+        ws2.AddImage(png, 2, 1, placement: ImagePlacement.InCell);
+
+        var file = Path.Combine(dir, "19_images.xlsx");
+        wb.SaveAs(file);
+        Console.WriteLine($"  Written: {file} (floating on Sheet1, InCell on InCell sheet)");
         Console.WriteLine();
     }
 }

@@ -50,6 +50,8 @@ internal static class XlsWriter
     private const ushort OpNumber = 0x0203;
     private const ushort OpRk = 0x027E;
     private const ushort OpBoolErr = 0x0205;
+    private const ushort OpHlink = 0x01B8;
+    private const ushort OpHlinkTooltip = 0x0800;
 
     private const int MaxRecordData = 8192; // 保守的记录数据上限（规范为 8224 总长）
 
@@ -283,11 +285,16 @@ internal static class XlsWriter
         }
 
         // 尾部：WINDOW2 → PANE → MERGEDCELLS → CodeName → FeatHdr → Feat → EOF（对齐 Excel/SheetJS）
-        WriteRecord(ms, OpWindow2, Window2(sheet.FreezeHeader));
-        if (sheet.FreezeHeader)
-            WriteRecord(ms, OpPane, Pane());
+        int freezeRows = sheet.FreezeRows;
+        int freezeCols = sheet.FreezeColumns;
+        if (sheet.FreezeHeader) freezeRows = Math.Max(freezeRows, 1);
+        bool hasFreeze = freezeRows > 0 || freezeCols > 0;
+        WriteRecord(ms, OpWindow2, Window2(hasFreeze));
+        if (hasFreeze)
+            WriteRecord(ms, OpPane, Pane(freezeRows, freezeCols));
         if (sheet.MergedRanges.Count > 0)
             WriteRecord(ms, OpMergedCells, MergedCells(sheet.MergedRanges));
+        WriteHyperlinks(ms, sheet);
         WriteRecord(ms, 0x01BA, CodeName(sheet.SheetName));
         WriteRecord(ms, 0x0867, new byte[]
         {
@@ -301,6 +308,123 @@ internal static class XlsWriter
 
         WriteRecord(ms, OpEof, Array.Empty<byte>());
         return ms.ToArray();
+    }
+
+    /// <summary>写出 BIFF8 HLINK（0x01B8）+ HLinkTooltip（0x0800）记录（对齐 Excel / SheetJS 布局）</summary>
+    private static void WriteHyperlinks(MemoryStream ms, SheetData sheet)
+    {
+        for (int r = 0; r < sheet.Rows.Count; r++)
+        {
+            var row = sheet.Rows[r];
+            for (int c = 0; c < row.Count; c++)
+            {
+                var cell = row[c];
+                var link = cell.Hyperlink;
+                if (link is null || string.IsNullOrEmpty(link.Target)) continue;
+
+                string display = cell.Type == CellType.Text ? cell.Text ?? "" : "";
+                var hlink = BuildHlink(r, c, link.Target, link.IsInternal, display);
+                if (hlink.Length <= MaxRecordData)
+                    WriteRecord(ms, OpHlink, hlink);
+
+                if (!string.IsNullOrEmpty(link.Tooltip))
+                {
+                    var tt = BuildHlinkTooltip(r, c, link.Tooltip!);
+                    if (tt.Length <= MaxRecordData)
+                        WriteRecord(ms, OpHlinkTooltip, tt);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// BIFF8 HLINK 数据（对齐 Excel 字节）：Ref(8) + HyperlinkCLSID(16) + sVer(4)=2 + flags(4)
+    /// + displayName(HyperlinkString) + [内部: loc  |  外部: URL Moniker CLSID(16) + len(4) + URL(UTF-16LE,null)]
+    /// </summary>
+    private static byte[] BuildHlink(int rw, int col, string target, bool isInternal, string displayText)
+    {
+        string url = isInternal ? "" : (target.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ? target.Substring(7) : target);
+        string loc = isInternal ? target.Substring(1) : "";
+
+        int displayBytes = 4 + 2 * (displayText.Length + 1);
+        int locBytes = isInternal ? 4 + 2 * (loc.Length + 1) : 0;
+        int urlBytes = isInternal ? 0 : 16 + 4 + 2 * (url.Length + 1);
+
+        int size = 8 + 16 + 4 + 4 + displayBytes + locBytes + urlBytes;
+        var d = new byte[size];
+        int off = 0;
+
+        // Ref8U：rwFirst, rwLast, colFirst, colLast
+        WriteU16(d, off, (ushort)rw); WriteU16(d, off + 2, (ushort)rw);
+        WriteU16(d, off + 4, (ushort)col); WriteU16(d, off + 6, (ushort)col);
+        off += 8;
+
+        // Hyperlink CLSID（标准 OLE）
+        byte[] clsid = { 0xD0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B };
+        Array.Copy(clsid, 0, d, off, 16); off += 16;
+
+        // sVer = 2
+        WriteU32(d, off, 2u); off += 4;
+
+        // flags：外部 0x0017（moniker + displayName），内部 0x001C（loc）
+        uint flags = isInternal ? 0x001Cu : 0x0017u;
+        WriteU32(d, off, flags); off += 4;
+
+        WriteHlinkString(d, ref off, displayText);
+
+        if (isInternal)
+        {
+            WriteHlinkString(d, ref off, loc);
+        }
+        else
+        {
+            // URL Moniker CLSID + 长度(字节数, 含 null) + UTF-16LE
+            byte[] urlClsid = { 0xE0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B };
+            Array.Copy(urlClsid, 0, d, off, 16); off += 16;
+            WriteU32(d, off, (uint)(2 * (url.Length + 1))); off += 4;
+            for (int i = 0; i < url.Length; i++)
+            {
+                WriteU16(d, off, (ushort)url[i]); off += 2;
+            }
+            WriteU16(d, off, 0); off += 2;
+        }
+
+        return d;
+    }
+
+    private static void WriteHlinkString(byte[] d, ref int off, string s)
+    {
+        WriteU32(d, off, (uint)(s.Length + 1)); off += 4;
+        for (int i = 0; i < s.Length; i++)
+        {
+            WriteU16(d, off, (ushort)s[i]); off += 2;
+        }
+        WriteU16(d, off, 0); off += 2;
+    }
+
+    /// <summary>HLinkTooltip（0x0800）：0x0800 + Ref(8) + UTF-16LE(含 null)</summary>
+    private static byte[] BuildHlinkTooltip(int rw, int col, string tooltip)
+    {
+        var d = new byte[2 + 8 + 2 * (tooltip.Length + 1)];
+        int off = 0;
+        WriteU16(d, off, 0x0800); off += 2;
+        WriteU16(d, off, (ushort)rw); WriteU16(d, off + 2, (ushort)rw);
+        WriteU16(d, off + 4, (ushort)col); WriteU16(d, off + 6, (ushort)col);
+        off += 8;
+        for (int i = 0; i < tooltip.Length; i++)
+        {
+            WriteU16(d, off, (ushort)tooltip[i]); off += 2;
+        }
+        WriteU16(d, off, 0); off += 2;
+        return d;
+    }
+
+    private static void WriteU32(byte[] d, int offset, uint v)
+    {
+        d[offset] = (byte)v;
+        d[offset + 1] = (byte)(v >> 8);
+        d[offset + 2] = (byte)(v >> 16);
+        d[offset + 3] = (byte)(v >> 24);
     }
 
     /// <summary>CodeName（0x01BA）：Unicode 字符串形式的 VBA 工作表代号</summary>
@@ -555,15 +679,15 @@ internal static class XlsWriter
         return d;
     }
 
-    private static byte[] Pane()
+    private static byte[] Pane(int freezeRows, int freezeCols)
     {
         var d = new byte[10];
-        WriteU16(d, 0, 0); // xSplit
-        WriteU16(d, 2, 1); // ySplit（冻结 1 行）
-        WriteU16(d, 4, 1); // topRow
-        WriteU16(d, 6, 0); // leftCol
-        d[8] = 2;          // activePane = bottomLeft
-        d[9] = 0;          // fNoSplit = false（有分隔）
+        WriteU16(d, 0, (ushort)freezeCols); // xSplit
+        WriteU16(d, 2, (ushort)freezeRows); // ySplit
+        WriteU16(d, 4, (ushort)freezeRows); // topRow
+        WriteU16(d, 6, (ushort)freezeCols); // leftCol
+        d[8] = freezeRows > 0 && freezeCols > 0 ? (byte)0 : (byte)(freezeRows > 0 ? 2 : 1); // activePane: 双=topLeft, 行=bottomLeft, 列=topRight
+        d[9] = 0; // fNoSplit = false（有分隔）
         return d;
     }
 
@@ -620,13 +744,5 @@ internal static class XlsWriter
     {
         d[offset] = (byte)v;
         d[offset + 1] = (byte)(v >> 8);
-    }
-
-    private static void WriteU32(byte[] d, int offset, uint v)
-    {
-        d[offset] = (byte)v;
-        d[offset + 1] = (byte)(v >> 8);
-        d[offset + 2] = (byte)(v >> 16);
-        d[offset + 3] = (byte)(v >> 24);
     }
 }
