@@ -1,6 +1,13 @@
+files/
 *.xlsx
 !tests/LiteExcel.Tests/Fixtures/excel-authored-compatibility.xlsx
 !tests/LiteExcel.Tests/Fixtures/protected.xlsx
+*.xlsm
+!tests/LiteExcel.Tests/Fixtures/protected.xlsm
+*.xlsb
+!tests/LiteExcel.Tests/Fixtures/excel-authored.xlsb
+!tests/LiteExcel.Tests/Fixtures/excel-authored-date1904.xlsb
+!tests/LiteExcel.Tests/Fixtures/protected.xlsb
 bin/
 obj/
 *.nupkg
