@@ -1,6 +1,6 @@
 # LiteExcel 使用手册
 
-**版本**：2.3.0  
+**版本**：2.4.0  
 **目标框架**：net48 + net8.0  
 **依赖**：零第三方依赖，仅用 .NET BCL
 
@@ -19,19 +19,22 @@
 9. [自动筛选](#9-自动筛选)
 10. [行高与列宽](#10-行高与列宽)
 11. [单元格批注](#11-单元格批注)
-12. [数据验证（下拉列表）](#12-数据验证下拉列表)
-13. [追加数据](#13-追加数据)
-14. [List&lt;T&gt; 映射](#14-listt-映射反射不兼容-aot)
-15. [DataTable 便利 API](#15-datatable-便利-apiaot-安全)
-16. [Stream 读写](#16-stream-读写)
-17. [流式读取与进度回调](#17-流式读取与进度回调)
-18. [文档属性（作者/时间/标题）](#18-文档属性作者时间标题)
-19. [错误处理](#19-错误处理)
-20. [AOT 兼容性](#20-aot-兼容性)
-21. [完整 API 索引](#21-完整-api-索引)
+12. [超链接](#12-超链接)
+13. [冻结窗格](#13-冻结窗格)
+14. [图片](#14-图片)
+15. [数据验证（下拉列表）](#15-数据验证下拉列表)
+16. [追加数据](#16-追加数据)
+17. [List&lt;T&gt; 映射（反射，不兼容 AOT）](#17-listt-映射反射不兼容-aot)
+18. [DataTable 便利 API（AOT 安全）](#18-datatable-便利-apiaot-安全)
+19. [Stream 读写](#19-stream-读写)
+20. [流式读取与进度回调](#20-流式读取与进度回调)
+21. [文档属性（作者/时间/标题）](#21-文档属性作者时间标题)
+22. [文件级安全（打开密码 / 修改密码）](#22-文件级安全打开密码--修改密码)
+23. [错误处理](#23-错误处理)
+24. [AOT 兼容性](#24-aot-兼容性)
+25. [完整 API 索引](#25-完整-api-索引)
 
 ---
-
 ## 1. 安装与引用
 
 ### NuGet 安装
@@ -44,7 +47,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.3.0" />
+  <PackageReference Include="LiteExcel" Version="2.4.0" />
 </ItemGroup>
 ```
 
@@ -107,6 +110,18 @@ var forced = Excel.Open("data.csv", ExcelFormat.Csv);
 ```
 
 `Excel.DetectFormat(path)` 可单独判断文件格式。
+
+打开加密文件需提供密码：
+
+```csharp
+var opened = Excel.Open("encrypted.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "1",        // 打开密码
+    ModifyPassword = "12",     // 修改密码（可选）
+});
+```
+
+> 文件级安全（打开/修改密码）的完整说明见 [§22 文件级安全](#22-文件级安全打开密码--修改密码)。
 
 ### 2.3 读写单元格
 
@@ -286,11 +301,11 @@ ws.Cell("A3").SetValue(Cell.FromFormula("SUM(A1:A2)"));  // 写入公式字符�
 bool isFormula = ws.Cell("A3").IsFormula;
 
 ws.Merge("A1:B1");                    // 合并
-ws.FreezeHeader = true;               // 冻结表头
+ws.FreezeHeader = true;               // 冻结表头（等价于 FreezeRows = 1）
 ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 ```
 
-样式、合并、批注、数据验证、自动筛选、行高列宽等高级能力均可在 `Worksheet` 层直接使用，与 `SheetData` 能力一一对应。
+样式、合并、批注、数据验证、自动筛选、行高列宽、超链接、冻结窗格等高级能力均可在 `Worksheet` 层直接使用，与 `SheetData` 能力一一对应。
 
 ### 2.12 格式支持矩阵
 
@@ -316,7 +331,7 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 
 > **1904 日期系统**：`Excel.Open` 打开 1904 日期系统的工作簿（`workbookPr@date1904` / `BrtWbProp` flags / `DATE1904` 记录）时，日期单元格会按 1904 基准（1904-01-01 = 序列 0）换算。`SaveAs` 到 xlsx/xlsb/xls 时会写回 1904 标志并保持序列一致，因此 1904 工作簿跨格式转换不会偏移 4 年。
 
-> **加密文件识别**：带打开密码的 xlsx/xlsm/xlsb 实际是 OLE CFB 容器（内含 `EncryptionInfo`/`EncryptedPackage` 流）。当前版本**暂不支持解密读取**，但打开时会识别并抛 `LiteExcelException`（"文件已加密（带打开密码）"），而不是误报为 zip 损坏。加密 `.xls`（BIFF8 `FILEPASS` 记录）同样识别并抛明确异常。密码读写能力规划在后续版本。
+> **加密文件识别**：带打开密码的 xlsx/xlsm/xlsb 实际是 OLE CFB 容器（内含 `EncryptionInfo`/`EncryptedPackage` 流）。2.4.0 起支持打开密码读取与密码保存（见 [§22 文件级安全](#22-文件级安全打开密码--修改密码)）；加密 `.xls`（BIFF8 `FILEPASS` 记录）会识别并抛明确异常。
 
 > **宏与降级**：工作簿若含 VBA 宏（打开 xlsm/xlsb 捕获 `vbaProject.bin`），`SaveAs` 到 `.xlsx` 或 `.xls`（不支持宏）会抛 `LiteExcelException` 阻止静默丢失，请在创建文件前拦截。含宏工作簿请保存为 `.xlsm` 或 `.xlsb`。数据单元格的值在任意格式转换中都不会静默丢失；xls 不支持批注/数据验证/自动筛选等元数据时按文档化降级（忽略，不写错文件）。
 
@@ -335,7 +350,6 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 | 流式写 | `Excel.CreateWriter(path)` | `XlsxStreamWriter` |
 
 ---
-
 ## 3. 快速上手
 
 ### 最简写出
@@ -584,7 +598,19 @@ var sheet = new SheetData
 {
     Headers = new() { "A", "B" },
     Rows = ...,
-    FreezeHeader = true,  // 第一行冻结
+    FreezeHeader = true,  // 第一行冻结（等价于 FreezeRows = 1）
+};
+```
+
+### 任意行列冻结
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "A", "B", "C" },
+    Rows = ...,
+    FreezeRows = 2,       // 冻结前 2 行
+    FreezeColumns = 1,    // 冻结第 1 列
 };
 ```
 
@@ -795,7 +821,6 @@ var sheet = new SheetData
 | `HorizontalAlignment.Right` | |
 
 ---
-
 ## 8. 合并单元格
 
 ### 写出合并
@@ -1048,8 +1073,199 @@ if (sheet.Comments is not null)
 ```
 
 ---
+## 12. 超链接
 
-## 12. 数据验证（下拉列表）
+### 写出超链接
+
+超链接支持 xlsx/xlsm/xlsb/xls 四格式。通过 `Cell.Hyperlink` 属性设置：
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "姓名", "主页" },
+    Rows = new()
+    {
+        new Cell[]
+        {
+            Cell.FromText("张三"),
+            new Cell { Type = CellType.Text, Text = "点击访问", Hyperlink = new Hyperlink
+            {
+                Target = "https://example.com",
+                Tooltip = "张三的个人主页",
+            }},
+        },
+    },
+};
+
+XlsxWriter.Write("links.xlsx", sheet);
+```
+
+### Hyperlink 属性
+
+| 属性 | 类型 | 说明 |
+|---|---|---|
+| `Target` | `string` | 链接目标 URL（必填） |
+| `Tooltip` | `string?` | 悬停提示文本（可选） |
+| `IsInternal` | `bool` | 是否为内部链接（如 `Sheet1!A1`） |
+
+### 对象模型 API：设置超链接
+
+```csharp
+var wb = Excel.Open("links.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// 设置超链接
+ws.Cell("B2").Hyperlink = new Hyperlink
+{
+    Target = "https://example.com",
+    Tooltip = "点击访问",
+};
+
+wb.Save();
+```
+
+### 读取超链接
+
+```csharp
+var sheet = XlsxReader.Read("links.xlsx", 0);
+var cell = sheet.Rows[0][1];  // B2
+if (cell.Hyperlink is not null)
+{
+    Console.WriteLine($"目标: {cell.Hyperlink.Target}");
+    Console.WriteLine($"提示: {cell.Hyperlink.Tooltip}");
+}
+```
+
+> 超链接支持 xlsx/xlsm/xlsb/xls 四格式读写（外部 URL/文件/mailto/UNC 与内部 `#Sheet!A1` 跳转）；csv 不支持超链接。内部链接 `IsInternal=true` 时 Target 形如 `#Sheet1!A1`。
+
+---
+
+## 13. 冻结窗格
+
+### 设置冻结行/列
+
+通过 `SheetData.FreezeRows` 和 `FreezeColumns` 属性控制：
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "A", "B", "C", "D" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("数据1"), Cell.FromText("x"), Cell.FromText("y"), Cell.FromText("z") },
+        new Cell[] { Cell.FromText("数据2"), Cell.FromText("a"), Cell.FromText("b"), Cell.FromText("c") },
+    },
+    FreezeRows = 2,       // 冻结前 2 行
+    FreezeColumns = 1,    // 冻结第 1 列
+};
+```
+
+### FreezeHeader 兼容
+
+`FreezeHeader = true` 等价于 `FreezeRows = 1`：
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "A", "B" },
+    Rows = ...,
+    FreezeHeader = true,   // 等价于 FreezeRows = 1
+};
+```
+
+### 对象模型 API
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// 冻结前 2 行
+ws.FreezeRows = 2;
+
+// 冻结第 1 列
+ws.FreezeColumns = 1;
+
+// 或用 FreezeHeader 兼容语法
+ws.FreezeHeader = true;   // 等价于 FreezeRows = 1
+
+wb.Save();
+```
+
+### 读取冻结
+
+```csharp
+var sheet = XlsxReader.Read("frozen.xlsx", 0);
+Console.WriteLine($"冻结行数: {sheet.FreezeRows}");      // 0 表示未冻结
+Console.WriteLine($"冻结列数: {sheet.FreezeColumns}");   // 0 表示未冻结
+Console.WriteLine($"冻结表头: {sheet.FreezeHeader}");    // FreezeRows > 0 时 true
+```
+
+---
+
+## 14. 图片
+
+### 浮动图片
+
+图片仅支持 xlsx/xlsm 格式。通过 `Worksheet.AddImage` 添加浮动图片：
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+
+// 读取图片数据
+byte[] imageData = File.ReadAllBytes("logo.png");
+
+// 添加浮动图片到 A1 单元格位置
+ws.AddImage(imageData, row: 1, column: 1, widthPx: 200, heightPx: 100);
+
+wb.SaveAs("image.xlsx");
+```
+
+### 单元格内嵌图片（InCell）
+
+```csharp
+// 单元格内嵌模式（图片随单元格大小变化）
+ws.AddImage(imageData, row: 1, column: 1,
+    placement: ImagePlacement.InCell);
+```
+
+### ImagePlacement 枚举
+
+| 值 | 说明 |
+|---|---|
+| `Floating` | 浮动图片，可指定位置和尺寸（默认） |
+| `InCell` | 单元格内嵌，图片随单元格自适应 |
+
+### 坐标与尺寸
+
+- 坐标（row, column）为 **1-based**
+- 宽高单位为像素，缺省时按图片原始尺寸
+- 自动探测扩展名（png/jpg/gif/bmp）与像素尺寸
+
+```csharp
+// 省略宽高 → 使用原始图片尺寸
+ws.AddImage(imageData, row: 2, column: 3, placement: ImagePlacement.Floating);
+
+// 指定扩展名和名称
+ws.AddImage(imageData, row: 1, column: 1,
+    widthPx: 300, heightPx: 200,
+    extension: "png", name: "产品图");
+```
+
+### 多 Sheet 混合使用
+
+```csharp
+var ws1 = wb.Worksheets["Sheet1"];
+var ws2 = wb.Worksheets.Add("Sheet2");
+
+ws1.AddImage(logoData, row: 1, column: 1, widthPx: 100, heightPx: 50);
+ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
+```
+
+> 图片仅支持 xlsx/xlsm 格式，且仅支持**写回**（打开文件不会回填 `Images`，图片读取不在 2.4.0 范围）。xls/xlsb/csv 不支持图片。InCell 嵌入图片在 Excel 中单元格显示为 `#VALUE!`（与 Excel 原生真实样本一致）。
+
+---
+## 15. 数据验证（下拉列表）
 
 ### 写出数据验证
 
@@ -1112,7 +1328,7 @@ if (sheet.Validations is not null)
 
 ---
 
-## 13. 追加数据
+## 16. 追加数据
 
 ### 追加到已有文件
 
@@ -1177,7 +1393,7 @@ XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
 
 ---
 
-## 14. List&lt;T&gt; 映射（反射，不兼容 AOT）
+## 17. List&lt;T&gt; 映射（反射，不兼容 AOT）
 
 > **注意**：List&lt;T&gt; API 使用反射，不兼容 AOT/裁剪。AOT 项目请用 SheetData 或 DataTable。
 
@@ -1281,8 +1497,7 @@ var list = XlsxReader.Read<Person>("people.xlsx", 0, opt => opt.Map(mapping));
 自动转换：`int`/`long`/`double`/`float`/`decimal`/`DateTime`/`bool`/`string` 及其可空版本。
 
 ---
-
-## 15. DataTable 便利 API（AOT 安全）
+## 18. DataTable 便利 API（AOT 安全）
 
 > DataTable 自带 schema，无需反射，AOT 安全。
 
@@ -1316,7 +1531,7 @@ foreach (DataRow row in dt.Rows)
 
 ---
 
-## 16. Stream 读写
+## 19. Stream 读写
 
 所有读写 API 都有 Stream 重载，适合内存流/网络流场景。
 
@@ -1368,7 +1583,7 @@ var dt = XlsxReader.ReadAsDataTable(fs, 0);
 
 ---
 
-## 17. 流式读取与进度回调
+## 20. 流式读取与进度回调
 
 ### StreamRows（逐行回调）
 
@@ -1403,7 +1618,7 @@ var sheet = XlsxReader.ReadWithProgress("bigfile.xlsx", 0, (current, total) =>
 
 ---
 
-## 18. 文档属性（作者/时间/标题）
+## 21. 文档属性（作者/时间/标题）
 
 文件属性对话框里显示的信息（作者、最后保存者、创建时间、标题等）。
 
@@ -1461,8 +1676,70 @@ XlsxWriter.Write("output.xlsx", sheet);
 | `Application` | `string?` | app.xml Application |
 
 ---
+## 22. 文件级安全（打开密码 / 修改密码）
 
-## 19. 错误处理
+### 打开加密文件
+
+读取带打开密码的 xlsx/xlsm/xlsb 文件时，需通过 `ExcelReadOptions` 提供密码：
+
+```csharp
+var wb = Excel.Open("encrypted.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "1",           // 打开密码
+    ModifyPassword = "12",        // 修改密码（可选）
+});
+```
+
+> 仓库内加密样本（`files/` 目录下）的密码约定：打开密码 = `1`，修改密码 = `12`。例如 `打开修改都需要密码.xlsx`（打开=1、修改=12）、`12.*`（仅修改=12）、`*.`（仅打开=1）。
+
+### 读取安全状态
+
+打开后可通过 `Workbook.Security` 查询文件安全状态：
+
+```csharp
+var security = wb.Security;
+
+bool hasOpenPwd = security.HasOpenPassword;     // 是否有打开密码
+bool hasModPwd  = security.HasModifyPassword;   // 是否有修改密码（写保护）
+bool hasModAcc  = security.HasModifyAccess;     // 是否已获得修改授权（乐观授权）
+bool isReadOnly = security.IsReadOnly;          // 是否只读
+bool canSave    = security.CanSave;             // 当前能否保存
+```
+
+### 设置密码
+
+```csharp
+// 设置打开密码（保存时对文件加密）
+wb.Security.SetOpenPassword("mySecret");
+
+// 设置修改密码（写保护，fileSharing，非 zip 加密）
+wb.Security.SetModifyPassword("myModSecret");
+
+wb.SaveAs("protected.xlsx");
+```
+
+### 移除密码
+
+```csharp
+// 移除打开密码
+wb.Security.RemoveOpenPassword();
+
+// 移除修改密码（需已获得修改授权，即打开时提供了 ModifyPassword）
+wb.Security.RemoveModifyPassword();
+
+wb.SaveAs("plain.xlsx");
+```
+
+### 密码继承与授权规则
+
+- 打开加密文件后，`SaveAs` **默认继承打开密码**；如需移除，保存前调用 `Security.RemoveOpenPassword()`。
+- 修改密码是写保护（`<fileSharing>`），不是 zip 加密；读取时提供 `ModifyPassword` 即视为已授权（乐观授权，不校验样本值）。
+- 密码**绝不会**出现在异常消息、日志或测试输出中。
+- 仅支持 xlsx/xlsm/xlsb；csv/xls 不支持密码。
+
+---
+
+## 23. 错误处理
 
 ### LiteExcelException
 
@@ -1509,7 +1786,7 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 20. AOT 兼容性
+## 24. AOT 兼容性
 
 ### AOT 安全的 API（无反射）
 
@@ -1536,7 +1813,7 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 21. 完整 API 索引
+## 25. 完整 API 索引
 
 ### XlsxReader
 
@@ -1597,6 +1874,9 @@ catch (InvalidSheetNameException ex)
 | `CellRange` | 区域（合并单元格） |
 | `AutoFilter` / `FilterColumn` | 自动筛选 |
 | `DataValidation` | 数据验证 |
+| `Hyperlink` | 超链接（Target / Tooltip / IsInternal） |
+| `WorksheetImage` | 工作表图片 |
+| `WorkbookSecurity` | 文件安全状态（打开密码/修改密码/只读/可保存） |
 | `LiteExcelException` / `InvalidSheetNameException` | 异常 |
 | `LiteColumnAttribute` | List&lt;T&gt; 列特性 |
 | `WorkbookProperties` | 文档属性（作者/时间/标题/应用名） |
@@ -1612,3 +1892,4 @@ catch (InvalidSheetNameException ex)
 | `FilterType` | Equals, Compare, Contains, BeginsWith, EndsWith, Blank |
 | `FilterOperator` | GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual, Between |
 | `DataValidationType` | List, WholeNumber, Decimal, Date |
+| `ImagePlacement` | Floating, InCell |

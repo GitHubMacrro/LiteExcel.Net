@@ -1,5 +1,46 @@
 # Changelog
 
+## [2.4.0] - 2026-08-18
+
+### Added
+- **文件级安全（打开密码 / 修改密码）**：xlsx/xlsm/xlsb 三格式读写闭环。
+  - **打开密码读取**：`Excel.Open(path, new ExcelReadOptions { OpenPassword = "..." })` 现可读取 Agile Encryption（AES-256-CBC/SHA512/spinCount=100000）加密工作簿。内部 `Internal/Encryption/AgileDecryptor.cs` 实现与 Excel 兼容的迭代哈希 + blockKey 派生（net48 兼容，无 PBKDF2 依赖）。
+  - **修改密码识别**：识别 `<fileSharing>`（写保护），读取时**提供 ModifyPassword 即授权**（乐观授权；因 SHA-512 哈希跨 Excel 版本不稳定，不校验样本值）。读取后 `Workbook.Security.HasModifyPassword` 可判断写保护状态。
+  - **密码保存与加密写出**：`ExcelReadOptions.OpenPassword` 打开后 `SaveAs` 默认继承打开密码；`wb.Security.SetOpenPassword("...")` / `wb.Security.SetModifyPassword("...")` 显式设/移除密码后写出。内部 `Internal/Encryption/OoxmlEncryptor.cs`（与解密对称）+ `Internal/Cfb/EncryptedCfbWriter.cs`（绝对扇区 FAT）。
+  - `Workbook.Security`（`WorkbookSecurity`）：`HasOpenPassword` / `HasModifyPassword` / `HasModifyAccess` / `IsReadOnly` / `CanSave` / `ReadOnlyRecommended`。
+  - 修改密码 = `<fileSharing>`（写保护，非 zip 加密）；`ModifyPasswordTouched` 时不透传原 fileSharing。
+  - 密码**绝不**出现在异常/日志/测试输出。
+  - 验证：真实 Excel COM 打开（A1=Hello Encrypted / B2=123.45 / C3=中文测试）、msoffcrypto 独立工具交叉解密成功。43 个密码测试（SecurityState 18 + OpenPasswordRead 22 + ModifyPassword 14 - 重叠）。
+- **超链接（xlsx/xlsm/xlsb/xls 四格式）**：`Cell.Hyperlink`（`Hyperlink { Target, Tooltip, IsInternal }`）。
+  - xlsx/xlsm：写出 `<hyperlinks>` + sheet rels，读取解析回填；内部跳转用 `location`（不走 External rel），外部 URL/文件/mailto/UNC 均可读写。
+  - xlsb：BIFF12 `BrtHLink`（0x01EE）读写 + sheet `.bin.rels`（外部走 relId，内部走 location）。
+  - xls：BIFF8 `HLINK`（0x01B8）+ `HLinkTooltip`（0x0800）读写，支持 URL Moniker 与内部跳转。
+  - Excel COM 验证四格式超链接可点击、tooltip 正确、内部跳转 `SubAddress` 正确。
+- **冻结窗格增强**：`Worksheet.FreezeRows` / `FreezeColumns`（`SheetData.FreezeRows/FreezeColumns` 承载），xlsx/xlsb/xls 三格式一致支持任意行列冻结。`FreezeHeader` 兼容为 `FreezeRows=1`。写出 `pane`（ySplit/xSplit/topLeftCell/activePane）+ 读回。Excel COM 验证三格式 `FreezePanes=True`、`SplitRow/SplitColumn` 正确。
+- **图片写回（xlsx/xlsm）**：双模式——
+  - **Floating 浮动图片**：`ws.AddImage(byte[] data, row, col, widthPx, heightPx, ImagePlacement.Floating)`，生成 `xl/drawings/drawingN.xml`（oneCellAnchor）+ media + drawing rels。打开已有图片的工作簿再 AddImage 会**合并**进既有 drawing（追加锚点 + rel），不产生 zip 重名或重复 drawing rel。Excel COM 识别 1 shape。
+  - **InCell 嵌入图片**：`ws.AddImage(data, row, col, ImagePlacement.InCell)`，生成 richData 体系（metadata.xml + richValueRel + rdrichvalue + rdrichvaluestructure + rdRichValueTypes），单元格输出 `<c t="e" vm="n">`。Excel 无修复打开、值 = #VALUE!（与真实样本一致）。
+  - 自动探测图片扩展名（PNG/JPEG/GIF/BMP）与像素尺寸（`Internal/ImageHeaders.cs`）；支持多 sheet、多图片、混合模式。
+
+### Fixed（本轮 code review 清理）
+- **xlsb 修改密码读写闭环**：读取侧解析 `BrtFileSharingIso`/`BrtFileSharing`（0x02A4/0x0224）→ 识别写保护与只读状态；写出侧生成 `BrtFileSharingIso` 记录。此前 xlsb 修改密码读写缺失（双密码 xlsb 仅给打开密码即可写）。
+- **只读绕过修复**：`WorkbookSecurity.SetModifyPassword` / `ClearAll` 在未获得修改权限（`HasModifyAccess=false`）时抛异常，防止未授权剥离/替换写保护。
+- **内部超链接 OOXML 修正**：`IsInternal` 链接改为写 `location` 属性（不写 External rel），读取按 `location` 判定内部、scheme 判定外部（修复 `mailto:`/`file://`/UNC 误判）。
+- **解密正确性**：verifier 哈希按 `hashSize` 截断比对（支持 SHA-1/256/384 Agile）；解密结果按 `dataSize` 截断（去掉 AES 零填充）；校验 `dataIntegrity` HMAC（EncryptedPackage 被篡改时明确报错）。
+- **非加密文件误传 OpenPassword**：`Excel.Open` 提供 OpenPassword 时先判定是否加密工作簿，非加密文件给明确异常而非晦涩 CFB 错误。
+- **图片 zip 重名**：AddImage 到含既有 drawing/media 的文件时跳过保留序号、合并 drawing，避免 `ZipArchive` 重名异常与重复 drawing rel。
+- **Cell.CopyFrom 共享 Hyperlink 引用**：改为深拷贝（`Clone()`）。
+
+### Changed
+- `Worksheet.FreezeHeader` 语义：现为 `FreezeRows = 1` 的便捷别名，读取时若 ySplit=1 仍回填 `FreezeHeader=true`（向后兼容）。
+
+### Notes / 兼容性
+- 既有 API 无破坏性变更（新增均为增量属性/重载）。
+- **图片仅写回（xlsx/xlsm）**：打开文件不会回填 `Images`；图片读取不在 2.4.0 范围。
+- **已知限制**：xls/xlsb 图片不在 2.4.0 范围；xls 老格式密码（RC4 XOR）不支持。
+- 真实文件验证：加密样本（`files/打开修改都需要密码.xlsx` 等）解密/写出经 Excel COM + msoffcrypto 双验证；图片样本（`files/图片.xlsx`）结构对齐；超链接/冻结窗格四格式经 Excel COM 验证。
+- 全量 **423 测试通过**，net48+net8.0 干净。
+
 ## [2.3.0] - 2026-08-17
 
 ### Added
@@ -24,7 +65,7 @@
 ### Notes / 兼容性
 - 既有 API 无破坏性变更（`Date1904` 为 internal 属性，不暴露公开 API；`XlsWriter.Write`/`XlsbWriter.Write`/`XlsxWriter.Write` 的 `date1904` 均为带默认值的可选参数）。
 - 加密文件此前会误报为 zip 损坏；2.3.0 起抛明确 `LiteExcelException`。这是错误信息改善，非行为破坏。
-- **net48 兼容性修复**：Stream 打开加密文件时，错误信息中的显示名 `"<stream>"` 在 net48 下会被 `Path.GetFileName` 判定为非法路径字符而抛 `ArgumentException`（net8.0 不抛）。现改用 `SafeDisplayName` 兜底，net48 下正常抛 `LiteExcelException`（由 WindowsFormsApp5 真实外部验证发现并修复）。
+- **net48 兼容性修复**：Stream 打开加密文件时，错误信息中的显示名 `"<stream>"` 在 net48 下会被 `Path.GetFileName` 判定为非法路径字符而抛 `ArgumentException`（net8.0 不抛）。现改用 `SafeDisplayName` 兜底，net48 下正常抛 `LiteExcelException`（由外部 net48 验证程序发现并修复）。
 - 含宏工作簿保存为 `.xlsx` 此前可能生成包含 `vbaProject.bin` 但主文档类型为普通 xlsx 的不一致文件；2.3.0 起明确抛错。这是保护性变更。
 - 真实文件验证：Excel COM 打开 1904 xlsx/xlsb 无修复、日期正确；SheetJS 交叉验证 xlsb 大文件数据一致（10k/50k 行、中文、emoji、特殊字符、合并、冻结）。
 - 全量 **302 测试通过**（256 + 15 Stream Open + 17 加密 + 6 个 1904 + 8 个降级行为），net48+net8.0 干净。

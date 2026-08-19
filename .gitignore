@@ -26,10 +26,14 @@ model.json
 opencode.json
 .opencode/
 example/
-litexlsx开发计划.md
-AGENT_CONTRACT.md
 Thumbs.db
 Desktop.ini
 .DS_Store
-docs/AI_HANDOFF.md
 *.json
+*.md
+!README.md
+!README.en.md
+!README.zh-CN.md
+!docs/CHANGELOG.md
+!docs/USAGE.en.md
+!docs/USAGE.zh-CN.md

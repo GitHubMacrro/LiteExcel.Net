@@ -1,6 +1,6 @@
-# LiteExcel Usage Guide
+﻿# LiteExcel Usage Guide
 
-**Version**: 2.3.0  
+**Version**: 2.4.0  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -19,16 +19,20 @@
 9. [Auto Filter](#9-auto-filter)
 10. [Row Height & Column Width](#10-row-height--column-width)
 11. [Cell Comments](#11-cell-comments)
-12. [Data Validation (Dropdown List)](#12-data-validation-dropdown-list)
-13. [Appending Data](#13-appending-data)
-14. [List<T> Mapping (reflection, not AOT compatible)](#14-listt-mapping-reflection-not-aot-compatible)
-15. [DataTable Convenience API (AOT safe)](#15-datatable-convenience-api-aot-safe)
-16. [Stream Read/Write](#16-stream-readwrite)
-17. [Streaming Read & Progress Callback](#17-streaming-read--progress-callback)
-18. [Document Properties (Author/Time/Title)](#18-document-properties-authortimetitle)
-19. [Error Handling](#19-error-handling)
-20. [AOT Compatibility](#20-aot-compatibility)
-21. [Full API Reference](#21-full-api-reference)
+12. [Hyperlinks](#12-hyperlinks)
+13. [Freeze Panes](#13-freeze-panes)
+14. [Images](#14-images)
+15. [Data Validation (Dropdown List)](#15-data-validation-dropdown-list)
+16. [Appending Data](#16-appending-data)
+17. [List<T> Mapping (reflection, not AOT compatible)](#17-listt-mapping-reflection-not-aot-compatible)
+18. [DataTable Convenience API (AOT safe)](#18-datatable-convenience-api-aot-safe)
+19. [Stream Read/Write](#19-stream-readwrite)
+20. [Streaming Read & Progress Callback](#20-streaming-read--progress-callback)
+21. [Document Properties (Author/Time/Title)](#21-document-properties-authortimetitle)
+22. [File-Level Security (Open Password / Modify Password)](#22-file-level-security-open-password--modify-password)
+23. [Error Handling](#23-error-handling)
+24. [AOT Compatibility](#24-aot-compatibility)
+25. [Full API Reference](#25-full-api-reference)
 
 ---
 
@@ -44,7 +48,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.3.0" />
+  <PackageReference Include="LiteExcel" Version="2.4.0" />
 </ItemGroup>
 ```
 
@@ -107,6 +111,18 @@ var forced = Excel.Open("data.csv", ExcelFormat.Csv);
 ```
 
 `Excel.DetectFormat(path)` returns the detected format.
+
+Opening an encrypted file requires the password:
+
+```csharp
+var opened = Excel.Open("encrypted.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "your-password",            // open password
+    ModifyPassword = "your-modify-password",   // modify password (optional)
+});
+```
+
+> Full details of file-level security (open/modify password) can be found in [§22 File-Level Security](#22-file-level-security-open-password--modify-password).
 
 ### 2.3 Read and Write Cells
 
@@ -286,11 +302,11 @@ ws.Cell("A3").SetValue(Cell.FromFormula("SUM(A1:A2)"));  // write a formula stri
 bool isFormula = ws.Cell("A3").IsFormula;
 
 ws.Merge("A1:B1");                    // merge
-ws.FreezeHeader = true;               // freeze header
+ws.FreezeHeader = true;               // freeze header (equivalent to FreezeRows = 1)
 ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 ```
 
-Styles, merge, comments, data validation, auto filter, row height and column width are all available at the `Worksheet` level, mirroring the `SheetData` capabilities.
+Styles, merge, comments, data validation, auto filter, row height and column width, hyperlinks, freeze panes and images are all available at the `Worksheet` level, mirroring the `SheetData` capabilities.
 
 ### 2.12 Format Support Matrix
 
@@ -316,7 +332,7 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 
 > **1904 date system**: when `Excel.Open` reads a 1904-date-system workbook (`workbookPr@date1904` / `BrtWbProp` flags / `DATE1904` record), date cells are converted on the 1904 base (1904-01-01 = serial 0). `SaveAs` to xlsx/xlsb/xls writes back the 1904 flag and keeps serials consistent, so 1904 workbooks do not shift 4 years across format conversion.
 
-> **Encrypted file detection**: password-protected xlsx/xlsm/xlsb are actually OLE CFB containers (containing `EncryptionInfo`/`EncryptedPackage` streams). The current version **does not support decryption**, but it detects such files on open and throws `LiteExcelException` ("file is encrypted (has an open password)") instead of a misleading zip-corruption error. Encrypted `.xls` (BIFF8 `FILEPASS` record) is also detected with a clear error. Password read/write is planned for a future version.
+> **Encrypted file detection**: password-protected xlsx/xlsm/xlsb are actually OLE CFB containers (containing `EncryptionInfo`/`EncryptedPackage` streams). Since 2.4.0, open-password reading and password save are supported (see [§22 File-Level Security](#22-file-level-security-open-password--modify-password)); encrypted `.xls` (BIFF8 `FILEPASS` record) is detected with a clear error.
 
 > **Macros & degradation**: if a workbook contains VBA macros (captured from `vbaProject.bin` on open), `SaveAs` to `.xlsx` or `.xls` (which do not support macros) throws `LiteExcelException` to prevent silent loss, before the file is created. Save macro workbooks as `.xlsm` or `.xlsb`. Cell data values are never silently lost across any format conversion; metadata unsupported by xls (comments, data validation, auto filter) follows the documented degradation (ignored, no corrupt file produced).
 
@@ -586,6 +602,18 @@ var sheet = new SheetData
 };
 ```
 
+### Freeze Rows and Columns
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "A", "B", "C" },
+    Rows = ...,
+    FreezeRows = 2,       // freeze first 2 rows
+    FreezeColumns = 1,    // freeze first column
+};
+```
+
 ### Column Widths
 
 ```csharp
@@ -812,7 +840,7 @@ new FilterColumn
     Operator = FilterOperator.Between,
     MinValue = "60",
     MaxValue = "90",
-},
+};
 ```
 
 ---
@@ -883,7 +911,200 @@ wb.Save();
 
 ---
 
-## 12. Data Validation (Dropdown List)
+## 12. Hyperlinks
+
+### Writing a Hyperlink
+
+Hyperlinks are supported in xlsx/xlsm/xlsb/xls. Set them via the `Cell.Hyperlink` property:
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "Name", "Homepage" },
+    Rows = new()
+    {
+        new Cell[]
+        {
+            Cell.FromText("Zhang San"),
+            new Cell { Type = CellType.Text, Text = "Click to visit", Hyperlink = new Hyperlink
+            {
+                Target = "https://example.com",
+                Tooltip = "Zhang San's homepage",
+            }},
+        },
+    },
+};
+
+XlsxWriter.Write("links.xlsx", sheet);
+```
+
+### Hyperlink Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `Target` | `string` | link target URL (required) |
+| `Tooltip` | `string?` | hover tooltip text (optional) |
+| `IsInternal` | `bool` | whether it is an internal link (e.g. `Sheet1!A1`) |
+
+### Object-Model API: Set a Hyperlink
+
+```csharp
+var wb = Excel.Open("links.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// Set a hyperlink
+ws.Cell("B2").Hyperlink = new Hyperlink
+{
+    Target = "https://example.com",
+    Tooltip = "Click to visit",
+};
+
+wb.Save();
+```
+
+### Reading Hyperlinks
+
+```csharp
+var sheet = XlsxReader.Read("links.xlsx", 0);
+var cell = sheet.Rows[0][1];  // B2
+if (cell.Hyperlink is not null)
+{
+    Console.WriteLine($"Target: {cell.Hyperlink.Target}");
+    Console.WriteLine($"Tooltip: {cell.Hyperlink.Tooltip}");
+}
+```
+
+> Hyperlinks are read/write supported in xlsx/xlsm/xlsb/xls (external URL/file/mailto/UNC and internal `#Sheet!A1` jumps); csv does not support hyperlinks. When `IsInternal=true`, `Target` looks like `#Sheet1!A1`.
+
+---
+
+## 13. Freeze Panes
+
+### Freeze Rows / Columns
+
+Control via the `SheetData.FreezeRows` and `FreezeColumns` properties:
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "A", "B", "C", "D" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("data1"), Cell.FromText("x"), Cell.FromText("y"), Cell.FromText("z") },
+        new Cell[] { Cell.FromText("data2"), Cell.FromText("a"), Cell.FromText("b"), Cell.FromText("c") },
+    },
+    FreezeRows = 2,       // freeze first 2 rows
+    FreezeColumns = 1,    // freeze first column
+};
+```
+
+### FreezeHeader Compatibility
+
+`FreezeHeader = true` is equivalent to `FreezeRows = 1`:
+
+```csharp
+var sheet = new SheetData
+{
+    Headers = new() { "A", "B" },
+    Rows = ...,
+    FreezeHeader = true,   // equivalent to FreezeRows = 1
+};
+```
+
+### Object-Model API
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+var ws = wb.Worksheets["Sheet1"];
+
+// Freeze the first 2 rows
+ws.FreezeRows = 2;
+
+// Freeze the first column
+ws.FreezeColumns = 1;
+
+// Or use the FreezeHeader compatibility syntax
+ws.FreezeHeader = true;   // equivalent to FreezeRows = 1
+
+wb.Save();
+```
+
+### Reading the Freeze State
+
+```csharp
+var sheet = XlsxReader.Read("frozen.xlsx", 0);
+Console.WriteLine($"Frozen rows: {sheet.FreezeRows}");           // 0 = not frozen
+Console.WriteLine($"Frozen columns: {sheet.FreezeColumns}");     // 0 = not frozen
+Console.WriteLine($"Freeze header: {sheet.FreezeHeader}");       // true when FreezeRows > 0
+```
+
+---
+
+## 14. Images
+
+### Floating Image
+
+Images are only supported in xlsx/xlsm format. Add a floating image via `Worksheet.AddImage`:
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+
+// Read the image data
+byte[] imageData = File.ReadAllBytes("logo.png");
+
+// Add a floating image anchored at cell A1
+ws.AddImage(imageData, row: 1, column: 1, widthPx: 200, heightPx: 100);
+
+wb.SaveAs("image.xlsx");
+```
+
+### InCell Image
+
+```csharp
+// InCell mode (the image resizes with the cell)
+ws.AddImage(imageData, row: 1, column: 1,
+    placement: ImagePlacement.InCell);
+```
+
+### ImagePlacement Enum
+
+| Value | Description |
+|---|---|
+| `Floating` | floating image; position and size can be specified (default) |
+| `InCell` | InCell image; resizes with the cell |
+
+### Coordinates and Size
+
+- Coordinates (row, column) are **1-based**
+- Width/height are in pixels; when omitted, the image's original size is used
+- Image extension (png/jpg/gif/bmp) and pixel size are auto-detected
+
+```csharp
+// Omit width/height → use the original image size
+ws.AddImage(imageData, row: 2, column: 3, placement: ImagePlacement.Floating);
+
+// Specify extension and name
+ws.AddImage(imageData, row: 1, column: 1,
+    widthPx: 300, heightPx: 200,
+    extension: "png", name: "Product image");
+```
+
+### Multiple Sheets
+
+```csharp
+var ws1 = wb.Worksheets["Sheet1"];
+var ws2 = wb.Worksheets.Add("Sheet2");
+
+ws1.AddImage(logoData, row: 1, column: 1, widthPx: 100, heightPx: 50);
+ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
+```
+
+> Images are only supported in xlsx/xlsm format and are **write-only** (opening a file does not fill `Images`; reading images is out of scope for 2.4.0). xls/xlsb/csv do not support images. InCell images display as `#VALUE!` in Excel (consistent with natively produced Excel samples).
+
+---
+
+## 15. Data Validation (Dropdown List)
 
 ```csharp
 var sheet = new SheetData
@@ -926,7 +1147,7 @@ XlsxWriter.Write("validation.xlsx", sheet);
 
 ---
 
-## 13. Appending Data
+## 16. Appending Data
 
 ```csharp
 // Append 2 rows to existing sheet with same name; if name doesn't exist, add new sheet
@@ -954,7 +1175,7 @@ XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
 
 ---
 
-## 14. List&lt;T&gt; Mapping (reflection, not AOT compatible)
+## 17. List&lt;T&gt; Mapping (reflection, not AOT compatible)
 
 > For AOT projects, use the SheetData or DataTable overloads.
 
@@ -991,7 +1212,7 @@ XlsxWriter.Write("people.xlsx", list, opt => opt
 
 ---
 
-## 15. DataTable Convenience API (AOT safe)
+## 18. DataTable Convenience API (AOT safe)
 
 ```csharp
 var dt = new DataTable();
@@ -1005,7 +1226,7 @@ var read = XlsxReader.ReadAsDataTable("data.xlsx");
 
 ---
 
-## 16. Stream Read/Write
+## 19. Stream Read/Write
 
 All read/write APIs have Stream overloads:
 
@@ -1023,7 +1244,7 @@ var all = XlsxReader.ReadAll(fs);
 
 ---
 
-## 17. Streaming Read & Progress Callback
+## 20. Streaming Read & Progress Callback
 
 ```csharp
 // Stream rows, no memory residency
@@ -1041,7 +1262,7 @@ XlsxReader.ReadWithProgress("big.xlsx", 0, (current, total) =>
 
 ---
 
-## 18. Document Properties (Author/Time/Title)
+## 21. Document Properties (Author/Time/Title)
 
 ### Write with Properties
 
@@ -1098,7 +1319,70 @@ XlsxWriter.Write("output.xlsx", sheet);
 
 ---
 
-## 19. Error Handling
+## 22. File-Level Security (Open Password / Modify Password)
+
+### Opening an Encrypted File
+
+When reading an xlsx/xlsm/xlsb file that has an open password, provide the password via `ExcelReadOptions`:
+
+```csharp
+var wb = Excel.Open("encrypted.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "your-password",            // open password
+    ModifyPassword = "your-modify-password",   // modify password (optional)
+});
+```
+
+> The encrypted samples in the repo (`files/` directory) follow the password convention: open password = `1`, modify password = `12`. For example `打开修改都需要密码.xlsx` (open=1, modify=12), `12.*` (modify only=12), `*.` (open only=1). Use your own passwords for production data.
+
+### Reading the Security State
+
+After opening, query the file's security state via `Workbook.Security`:
+
+```csharp
+var security = wb.Security;
+
+bool hasOpenPwd = security.HasOpenPassword;     // has an open password
+bool hasModPwd  = security.HasModifyPassword;   // has a modify password (write protection)
+bool hasModAcc  = security.HasModifyAccess;     // modification authorized (optimistic authorization)
+bool isReadOnly = security.IsReadOnly;          // read-only
+bool canSave    = security.CanSave;             // can currently save
+```
+
+### Setting a Password
+
+```csharp
+// Set an open password (the file is encrypted on save)
+wb.Security.SetOpenPassword("your-password");
+
+// Set a modify password (write protection, fileSharing, not zip encryption)
+wb.Security.SetModifyPassword("your-modify-password");
+
+wb.SaveAs("protected.xlsx");
+```
+
+### Removing a Password
+
+```csharp
+// Remove the open password
+wb.Security.RemoveOpenPassword();
+
+// Remove the modify password (requires modify authorization, i.e. ModifyPassword was provided on open)
+wb.Security.RemoveModifyPassword();
+
+wb.SaveAs("plain.xlsx");
+```
+
+### Password Inheritance and Authorization Rules
+
+- After opening an encrypted file, `SaveAs` **inherits the open password by default**; call `Security.RemoveOpenPassword()` before saving to remove it.
+- A modify password is write protection (`<fileSharing>`), not zip encryption; providing `ModifyPassword` on read authorizes the modification (optimistic authorization, the sample value is not verified).
+- Passwords **never** appear in exception messages, logs, or test output.
+- Supported for xlsx/xlsm/xlsb only; csv/xls do not support passwords.
+
+---
+
+## 23. Error Handling
 
 ### LiteExcelException
 
@@ -1145,7 +1429,7 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 20. AOT Compatibility
+## 24. AOT Compatibility
 
 ### AOT-safe APIs (no reflection)
 
@@ -1172,7 +1456,7 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 21. Full API Reference
+## 25. Full API Reference
 
 ### XlsxReader
 
@@ -1195,6 +1479,7 @@ catch (InvalidSheetNameException ex)
 | `ReadAsDataTable(Stream stream, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | read by name from stream |
 | `Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null)` ⚠️ | `List<T>` | read as List<T> (reflection) |
 | `Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null)` ⚠️ | `List<T>` | read by name as List<T> |
+| `ReadProperties(string path)` / `ReadProperties(Stream stream)` | `WorkbookProperties` | read document properties (author/time/title) |
 
 > ⚠️ Marked `[RequiresUnreferencedCode]`, not AOT compatible.
 
@@ -1206,6 +1491,7 @@ catch (InvalidSheetNameException ex)
 | `Write(string path, IReadOnlyList<SheetData> sheets)` | write multiple sheets |
 | `Write(Stream stream, SheetData data)` | write single sheet to stream |
 | `Write(Stream stream, IReadOnlyList<SheetData> sheets)` | write multiple sheets to stream |
+| `Write(path/stream, sheets, WorkbookProperties? properties)` | write and carry document properties |
 | `Write(string path, DataTable table, string sheetName = "Sheet1")` | write from DataTable |
 | `Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)` ⚠️ | write from List<T> (reflection) |
 | `Append(string path, SheetData? newData, WorkbookProperties? updateProperties = null)` | append data and optionally update document properties |
@@ -1225,15 +1511,27 @@ catch (InvalidSheetNameException ex)
 | Class | Description |
 |---|---|
 | `SheetData` | worksheet data |
-| `Cell` | cell |
+| `Cell` | cell (including the `Hyperlink` property, see §12) |
 | `CellStyle` / `BorderStyle` / `BorderEdge` | styles |
 | `CellRange` | range (merged cells) |
 | `AutoFilter` / `FilterColumn` | auto filter |
 | `DataValidation` | data validation |
+| `Hyperlink` | cell hyperlink (`Target` / `Tooltip` / `IsInternal`) |
+| `WorksheetImage` | worksheet image (added via `ws.AddImage`, see §14) |
+| `WorkbookSecurity` | file security state (open password / modify password / read-only / can save) |
+| `ExcelReadOptions` | read options (`OpenPassword` / `ModifyPassword`) |
 | `WorkbookProperties` | document properties |
 | `LiteExcelException` / `InvalidSheetNameException` | exceptions |
 | `LiteColumnAttribute` | List<T> column attribute |
 | `WriteOptions<T>` / `ReadOptions<T>` | List<T> configuration |
+
+### Worksheet Members (hyperlinks / freeze panes / images)
+
+| Member | Description |
+|---|---|
+| `Cell.Hyperlink` | get/set a cell hyperlink (see §12) |
+| `Worksheet.FreezeRows` / `Worksheet.FreezeColumns` | freeze panes by rows/columns (see §13) |
+| `ws.AddImage(byte[] data, int row, int col, int widthPx, int heightPx, ImagePlacement placement, string? extension, string? name)` | add an image to the sheet (see §14) |
 
 ### Enums
 
@@ -1245,3 +1543,4 @@ catch (InvalidSheetNameException ex)
 | `FilterType` | Equals, Compare, Contains, BeginsWith, EndsWith, Blank |
 | `FilterOperator` | GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual, Between |
 | `DataValidationType` | List, WholeNumber, Decimal, Date |
+| `ImagePlacement` | Floating, InCell |

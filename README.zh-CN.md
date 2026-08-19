@@ -1,11 +1,11 @@
-# LiteExcel
+﻿# LiteExcel
 
 [![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![NuGet 下载](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.3.0**
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.0**
 
 > [English README](README.en.md)
 
@@ -17,6 +17,10 @@
 - **直觉化对象模型 API**：`Excel -> Workbook -> Worksheet -> Cell/Range/Cells` 自然层级，一行式读写
 - **格式可扩展**：xlsx/xlsm/csv 读写；xls 读写（公式降级为静态值）；xlsb 读写（公式降级为静态值）
 - **全功能**：读/写、样式、合并单元格、自动筛选、行高/列宽、批注、数据验证、追加、Stream、List\<T\>/DataTable 便利 API、流式读写大文件
+- **文件级安全**：打开密码（Agile 加密）+ 修改密码（写保护），支持 xlsx/xlsm/xlsb，通过 `Workbook.Security`（`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`）
+- **超链接**：xlsx/xlsm/xlsb/xls 四格式读写（外部 URL/文件/mailto/UNC + 内部 `#Sheet1!A1` 跳转，`Cell.Hyperlink`）
+- **冻结窗格**：`FreezeRows` / `FreezeColumns` 支持 xlsx/xlsb/xls 任意行列冻结，`FreezeHeader` 兼容
+- **图片写回**：xlsx/xlsm 浮动图片 + 单元格内嵌图片（`ws.AddImage`；图片读取不在 2.4.0 范围）
 - **真实文件兼容**：可正确读取 Excel/WPS 创建的 xlsx（含 Table/theme 等扩展部件）
 
 ## 安装
@@ -28,7 +32,7 @@ dotnet add package LiteExcel
 或本地 .nupkg 引用：
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.3.0" />
+<PackageReference Include="LiteExcel" Version="2.4.0" />
 ```
 
 ## 快速上手（推荐：对象模型 API）
@@ -159,6 +163,9 @@ foreach (var row in read.Rows)
 | `CellRange` | 区域（合并单元格） |
 | `AutoFilter` / `FilterColumn` | 自动筛选 |
 | `DataValidation` | 数据验证 |
+| `Hyperlink` / `Cell.Hyperlink` | 单元格超链接（外部 URL / 内部跳转） |
+| `WorksheetImage` / `ImagePlacement` | 图片（浮动 / 单元格内嵌） |
+| `WorkbookSecurity` / `Workbook.Security` | 文件级安全（打开密码 / 修改密码 / 只读状态） |
 | `WorkbookProperties` | 文档属性（作者/时间/标题/应用名） |
 | `LiteExcelException` / `InvalidSheetNameException` | 异常 |
 | `LiteColumnAttribute` | List\<T\> 列特性 |
