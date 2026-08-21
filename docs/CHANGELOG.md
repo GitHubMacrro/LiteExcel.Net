@@ -1,5 +1,52 @@
 # Changelog
 
+## [2.4.2] - 2026-08-21
+
+### Added
+
+- **统一降级报告机制（新公开 API）**：`ExcelWriteOptions.OnDegradation`（可选回调，默认 null，即历史行为不变）；新增 `DegradationInfo`（Capability / SheetName / TargetFormat / Message）与 `DegradationCapability` 枚举（16 项能力：批注/数据验证/筛选/图片/文档属性/命名区域/样式/合并/冻结/超链接/行高/列宽/公式/图表/透视表/InCell richData）。
+  - 写出目标格式不支持某能力时，逐项回调上报，不再静默丢弃。
+  - xls / xlsb：批注、数据验证、自动筛选、图片，以及完整单元格样式（仅保留数字格式，其余上报）。
+  - CSV：样式/行高/列宽/合并/冻结/筛选/批注/验证/超链接/公式/图片逐项上报。
+- **xlsb 保真透传**：打开时捕获保留部件（图表/主题/未知关系/内容类型声明），保存时原样透传；xlsb 打开-改-保存不再丢未知部件。
+- **xlsb 文档属性**：读取 docProps（core/app）并写回；`WorkbookProperties` 在 xlsb 读/写往返闭环。
+- **流式写入器补齐**（`Excel.CreateWriter`）：
+  - 支持单元格样式与数字格式（styles.xml 延迟到 Close 生成，`s` 属性正确引用）。
+  - 支持公式（`<f>` 元素 + 缓存值）。
+  - 支持超链接（外部 r:id rels + 内部 location，Close 时落超链接区与 sheet rels）。**注意**：超链接需缓冲到 Close，数量极大时内存不再恒定。
+  - 扩展名校验：仅允许 .xlsx/.xlsm；`.csv/.xls/.xlsb` 路径明确报错（不再静默写出内容）。
+- **CSV 解析器重写**（字符级状态机）：
+  - 引号字段内的换行不再错误拆行（读写对称）。
+  - 空行保留（行号不再错位）。
+  - LF / CRLF 均可。
+  - 转义双引号 `""` 正确还原。
+  - 未闭合引号抛出明确的 `FormatException`。
+- **Excel.StreamRows / XlsxWriter.Append 格式门禁**：对 xls / xlsb / csv 显式报错（"该格式不支持流式读取/追加"），不再误报"不是有效的 xlsx 文件"。
+
+### Fixed（打开-保存保真）
+
+- **改工作表名不再丢图表/图片关联**：sheet rels 按数量判断结构变化，与表名解耦。
+- **`XlsxWriter.Append` 保留全部部件**：xlsm 追加不再丢 VBA 宏与图表；xlsx 追加不再丢主题/表格/drawing。
+- **InCell 图片 + 已有 richData 的文件再保存不再 ZIP 重名**：跳过逻辑纳入 InCell richData 全部条目。
+- **命名区域与工作簿窗口视图保留**：`definedNames` / `bookViews` 原样回写 workbook.xml（schema 位序正确）。
+- **陈旧 `calcChain.xml` 不透传**，并写 `<calcPr fullCalcOnLoad="1"/>`，告别 Excel 修复提示。
+- **文本公式缓存值不再被覆盖**：`Cell.Formula` 独立承载公式串，`Text/Number/Date/Boolean` 恒为缓存值；旧写法（`IsFormula=true` + Text）由写入器兼容垫片继续支持。
+- **列宽打开-保存双向**：`<cols>` 读取回填 + 稀疏列宽索引错位修复，xlsx/xlsm/xlsb/xls 四格式往返一致。
+- **重复工作表名在低层 API 也显式报错**（与高层 `WorksheetCollection.Add` 行为一致）。
+
+### Known limitations（范围决策）
+
+- xls 的保真透传、xls 文档属性、xls/xlsb 图表读入读回：不实现。
+- xls / xlsb 完整单元格样式（字体/填充/边框/对齐）：本期仅数字格式保留，其余经 `OnDegradation` 显式上报；不构造可能破坏文件的二进制样式记录。
+- CSV 编码仅支持 UTF-8（含 BOM）；非 UTF-8 需调用方先转码（零依赖约束）。
+- 图片读取仍仅写回（打开文件不回填 `Images`）。
+
+### Notes
+
+- 无破坏性 API 变更。`OnDegradation` 默认 null，老调用方零感知。
+- 密码 / 加密 / 超链接 / 冻结窗格 / 图片行为与 2.4.1 一致。
+- 全量 **469 测试通过**，net48 + net8.0 构建干净。
+
 ## [2.4.1] - 2026-08-19
 
 ### Added

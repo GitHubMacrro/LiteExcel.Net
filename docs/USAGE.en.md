@@ -1,6 +1,6 @@
 ﻿# LiteExcel Usage Guide
 
-**Version**: 2.4.0  
+**Version**: 2.4.2  
 **Target Frameworks**: net48 + net8.0  
 **Dependencies**: Zero third-party dependencies, .NET BCL only
 
@@ -48,7 +48,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.4.0" />
+  <PackageReference Include="LiteExcel" Version="2.4.2" />
 </ItemGroup>
 ```
 
@@ -1482,7 +1482,52 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 25. Full API Reference
+## 25. Capability Degradation Callback (OnDegradation) (2.4.2+)
+
+When saving to a format that does not support a capability (xls/xlsb/csv), those capabilities are silently dropped by default. Register the callback to receive a per-item list, so nothing is lost in silence.
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets[0];
+ws.SetValue("A1", "x");
+ws.Filter = new AutoFilter { Range = "A1:A10" };
+ws.Comments = new Dictionary<string, string> { ["A1"] = "note" };
+ws.FreezeRows = 1;
+ws.Cell("B1").Style = new CellStyle { Bold = true };
+
+var options = new ExcelWriteOptions
+{
+    OnDegradation = d =>
+        Console.WriteLine($"[{d.Capability}] {d.SheetName} => {d.Message}")
+};
+Excel.Write("out.csv", wb, options);
+```
+
+Default `null`: behaves identically to previous versions (zero breakage).
+
+### DegradationCapability enum
+
+Comments, DataValidation, AutoFilter, Images, DocumentProperties, NamedRanges, Styles, MergedCells, FreezePanes, Hyperlinks, RowHeights, ColumnWidths, Formulas, Charts, PivotTables, RichData.
+
+### Per-format degradation matrix (2.4.2)
+
+| Capability | xlsx/xlsm | xlsb | xls | csv |
+|---|---|---|---|---|
+| Comments | supported | reported | reported | reported |
+| Data validation | supported | reported | reported | reported |
+| Auto filter | supported | reported | reported | reported |
+| Images | write-back only | reported | reported | reported |
+| Cell styles | supported | **NumberFormat only**, others reported | **NumberFormat only**, others reported | reported |
+| Hyperlinks | supported | supported | supported | reported |
+| Formulas | supported | cached value text | cached value text | reported (value text) |
+| Row heights / column widths / merge / freeze | supported | supported | supported | reported |
+| Charts / pivot tables / themes | round-trip preserved | round-trip preserved | not supported (never) | not supported |
+
+`TargetFormat` is `ExcelFormat`; the library never mutates `DegradationInfo`.
+
+---
+
+## 26. Full API Reference
 
 ### XlsxReader
 

@@ -1,6 +1,6 @@
 # LiteExcel 使用手册
 
-**版本**：2.4.0  
+**版本**：2.4.2  
 **目标框架**：net48 + net8.0  
 **依赖**：零第三方依赖，仅用 .NET BCL
 
@@ -47,7 +47,7 @@ dotnet add package LiteExcel
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.4.0" />
+  <PackageReference Include="LiteExcel" Version="2.4.2" />
 </ItemGroup>
 ```
 
@@ -1839,7 +1839,52 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 25. 完整 API 索引
+## 25. 能力降级回调（OnDegradation）（2.4.2+）
+
+保存到不支持某能力的格式时（如 xls/xlsb/csv），默认会静默丢弃这些能力。开启回调可直接收到被丢弃项的清单，不再沉默。
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets[0];
+ws.SetValue("A1", "x");
+ws.Filter = new AutoFilter { Range = "A1:A10" };   // 筛选
+ws.Comments = new Dictionary<string, string> { ["A1"] = "note" }; // 批注
+ws.FreezeRows = 1;                                  // 冻结
+ws.Cell("B1").Style = new CellStyle { Bold = true };
+
+var options = new ExcelWriteOptions
+{
+    OnDegradation = d =>
+        Console.WriteLine($"[{d.Capability}] {d.SheetName} => {d.Message}")
+};
+Excel.Write("out.csv", wb, options);
+```
+
+默认 `null`：与历史版本行为完全一致（零破坏）。
+
+### 降级能力枚举
+
+`DegradationCapability`：Comments、DataValidation、AutoFilter、Images、DocumentProperties、NamedRanges、Styles、MergedCells、FreezePanes、Hyperlinks、RowHeights、ColumnWidths、Formulas、Charts、PivotTables、RichData。
+
+### 各格式降级矩阵（2.4.2）
+
+| 能力 | xlsx/xlsm | xlsb | xls | csv |
+|---|---|---|---|---|
+| 批注 | 支持 | 降级上报 | 降级上报 | 降级上报 |
+| 数据验证 | 支持 | 降级上报 | 降级上报 | 降级上报 |
+| 自动筛选 | 支持 | 降级上报 | 降级上报 | 降级上报 |
+| 图片 | 支持（仅写回） | 降级上报 | 降级上报 | 降级上报 |
+| 单元格样式 | 支持 | **仅数字格式保留**，其余上报 | **仅数字格式保留**，其余上报 | 降级上报 |
+| 超链接 | 支持 | 支持 | 支持 | 降级上报 |
+| 公式 | 支持 | 仅缓存值文本 | 仅缓存值文本 | 降级上报（值文本） |
+| 行高/列宽/合并/冻结 | 支持 | 支持 | 支持 | 降级上报 |
+| 图表/透视表/主题 | 保真透传 | 保真透传 | 不支持（永不做） | 不支持 |
+
+`TargetFormat` 字段为 `ExcelFormat`；库内部不会修改 `DegradationInfo`。
+
+---
+
+## 26. 完整 API 索引
 
 ### XlsxReader
 

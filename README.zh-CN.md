@@ -6,7 +6,7 @@
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.1**
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.2**
 
 > [English README](README.en.md)
 
@@ -33,7 +33,7 @@ dotnet add package LiteExcel
 或本地 .nupkg 引用：
 
 ```xml
-<PackageReference Include="LiteExcel" Version="2.4.0" />
+<PackageReference Include="LiteExcel" Version="2.4.2" />
 ```
 
 ## 快速上手（推荐：对象模型 API）
