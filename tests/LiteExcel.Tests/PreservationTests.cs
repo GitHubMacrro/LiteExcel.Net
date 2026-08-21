@@ -179,9 +179,9 @@ public class PreservationTests
     }
 
     [Fact]
-    public void StructureChanged_DropsSheetRels_ButKeepsBlobs()
+    public void RenameSheet_PreservesDrawingRelation()
     {
-        // 注入 vbaProject.bin 的文件必须保存为 xlsm（xlsx 不支持宏）
+        // P0-3: 改表名不应丢弃 drawing/图片关联（表名与 sheet rels 无绑定关系）
         var file = GetTempFile(".xlsm");
         try
         {
@@ -191,18 +191,47 @@ public class PreservationTests
             InjectExtraParts(file);
 
             var opened = Excel.Open(file);
-            opened.Worksheets[0].Name = "改名"; // 结构变化
+            opened.Worksheets[0].Name = "改名"; // 仅改名，结构数量不变
             opened.Save();
 
             using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
-            // 结构变化时不再合并工作表级保留 rels
+            // drawing 部件保留
+            Assert.NotNull(zip.GetEntry("xl/drawings/drawing1.xml"));
+            // 工作表级保留 rels 合并：drawing 关联仍在
+            var sheetRels = zip.GetEntry("xl/worksheets/_rels/sheet1.xml.rels");
+            Assert.NotNull(sheetRels);
+            var text = ReadText(sheetRels!);
+            Assert.Contains("drawings/drawing1.xml", text);
+            // 宏仍保留
+            Assert.NotNull(zip.GetEntry("xl/vbaProject.bin"));
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void AddRemoveSheet_DropsSheetRels_ButKeepsBlobs()
+    {
+        // 数量变化（增/删 sheet）时不再合并工作表级保留 rels，但 blob 部件仍保留（无害孤儿）
+        var file = GetTempFile(".xlsm");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsm);
+            wb.Worksheets["Sheet1"].SetValue("A1", "v");
+            wb.SaveAs(file);
+            InjectExtraParts(file);
+
+            var opened = Excel.Open(file);
+            opened.Worksheets.Add("NewSheet");
+            opened.Save();
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            // 数量变化 → 丢弃 sheet1 的保留 drawing rel，但 drawing blob 仍保留
             var sheetRels = zip.GetEntry("xl/worksheets/_rels/sheet1.xml.rels");
             if (sheetRels is not null)
             {
                 var text = ReadText(sheetRels);
                 Assert.DoesNotContain("drawings/drawing1.xml", text);
             }
-            // 但 blob 部件仍保留（无害孤儿）
             Assert.NotNull(zip.GetEntry("xl/drawings/drawing1.xml"));
             Assert.NotNull(zip.GetEntry("xl/vbaProject.bin"));
         }
@@ -229,4 +258,108 @@ public class PreservationTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Fact]
+    public void Append_PreservesMacroAndChartParts()
+    {
+        // P0-25: Append 须透传保留部件，xlsm 追加数据不丢宏
+        var file = GetTempFile(".xlsm");
+        try
+        {
+            var orig = new SheetData
+            {
+                SheetName = "Sheet1",
+                Headers = new() { "Col" },
+                Rows = new() { new[] { Cell.FromText("v") } },
+            };
+            XlsxWriter.Write(file, orig);
+            InjectExtraParts(file);
+
+            var appendData = new SheetData
+            {
+                SheetName = "Sheet1",
+                Headers = new() { "Col" },
+                Rows = new() { new[] { Cell.FromText("追加") } },
+            };
+            XlsxWriter.Append(file, appendData);
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            // 宏部件与 theme/drawing 保留
+            var vba = zip.GetEntry("xl/vbaProject.bin");
+            Assert.NotNull(vba);
+            Assert.Equal(FakeVba, ReadBytes(vba!));
+            Assert.NotNull(zip.GetEntry("xl/theme/theme1.xml"));
+            Assert.NotNull(zip.GetEntry("xl/drawings/drawing1.xml"));
+
+            // workbook rels 合并：vbaProject + theme 关系保留
+            var wbRels = ReadText(zip.GetEntry("xl/_rels/workbook.xml.rels")!);
+            Assert.Contains("/vbaProject", wbRels);
+            Assert.Contains("theme/theme1.xml", wbRels);
+
+            // 追加的数据在（表头行 1，原数据行 2，追加行 3）
+            var reopened = Excel.Open(file);
+            Assert.Equal("追加", reopened.Worksheets[0].Cell("A3").GetString());
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void InCell_OpenThenAddImage_NoDuplicateZipEntry()
+    {
+        // P0-11: 打开含 InCell richData 的文件再加图，保存时保留部件不与其重建条目重名
+        var file = GetTempFile(".xlsx");
+        try
+        {
+            var wb = Excel.Create();
+            wb.Worksheets[0].Cell("A1").SetValue("InCell");
+            wb.Worksheets[0].AddImage(TestPng, 2, 1, placement: ImagePlacement.InCell);
+            wb.SaveAs(file);
+
+            var opened = Excel.Open(file);
+            opened.Worksheets[0].AddImage(TestPng, 5, 1, placement: ImagePlacement.InCell);
+            opened.Save();
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            Assert.NotNull(zip.GetEntry("xl/metadata.xml"));
+            Assert.NotNull(zip.GetEntry("xl/richData/richValueRel.xml"));
+            Assert.NotNull(zip.GetEntry("xl/richData/rdrichvalue.xml"));
+            Assert.NotNull(zip.GetEntry("xl/richData/rdrichvaluestructure.xml"));
+            Assert.NotNull(zip.GetEntry("xl/richData/rdRichValueTypes.xml"));
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void RealExcelFixture_RoundTrip_PreservesTableThemeCustom()
+    {
+        // P0-5: 用真实 Excel 样本（含表格/主题/自定义属性）做打开-修改-保存往返
+        var fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "excel-authored-compatibility.xlsx");
+        Assert.True(File.Exists(fixture), $"缺少真实样本: {fixture}");
+
+        var file = GetTempFile(".xlsx");
+        try
+        {
+            File.Copy(fixture, file, overwrite: true);
+            var opened = Excel.Open(file);
+            Assert.True(opened.Worksheets.Count >= 2);
+            opened.Worksheets[0].SetValue("B2", "改动");
+            opened.Save();
+
+            using var zip = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            // 真实部件保留：表格/主题/自定义属性
+            Assert.NotNull(zip.GetEntry("xl/tables/table1.xml"));
+            Assert.NotNull(zip.GetEntry("xl/theme/theme1.xml"));
+            Assert.NotNull(zip.GetEntry("docProps/custom.xml"));
+            // 陈旧 calcChain 不透传（P0-12 联动）
+            Assert.Null(zip.GetEntry("xl/calcChain.xml"));
+
+            // 数据仍可读
+            var reopened = Excel.Open(file);
+            Assert.Equal("改动", reopened.Worksheets[0].Cell("B2").GetString());
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    private static readonly byte[] TestPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
 }

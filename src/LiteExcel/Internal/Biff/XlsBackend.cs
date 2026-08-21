@@ -554,8 +554,9 @@ internal static class XlsBackend
                 var text = FormulaParser.Parse(rpn, biff12: false);
                 if (!string.IsNullOrEmpty(text))
                 {
+                    // P0-8: 公式串放入 Formula，不覆盖缓存值
                     cell.IsFormula = true;
-                    cell.Text = text;
+                    cell.Formula = text;
                 }
             }
         }

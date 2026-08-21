@@ -37,7 +37,8 @@ public class FormulaTests
         var s = Excel.Open(GetFixturePath("excel-authored.xls")).Worksheets[0];
         var cell = s.Cell("E2");
         Assert.True(cell.IsFormula);
-        Assert.Equal("B2*2", cell.Text);
+        // P0-8: 公式串在 Formula，缓存值在 Number/Text
+        Assert.Equal("B2*2", cell.Formula);
         Assert.Equal(50.0, cell.GetDouble());
     }
 
@@ -47,7 +48,7 @@ public class FormulaTests
         var s = Excel.Open(GetFixturePath("excel-authored.xlsb")).Worksheets[0];
         var cell = s.Cell("E2");
         Assert.True(cell.IsFormula);
-        Assert.Equal("B2*2", cell.Text);
+        Assert.Equal("B2*2", cell.Formula);
         Assert.Equal(50.0, cell.GetDouble());
     }
 
@@ -55,7 +56,7 @@ public class FormulaTests
     {
         var cell = s.Cell(row, col);
         Assert.True(cell.IsFormula, $"R{row}C{col} 应为公式");
-        Assert.Equal(expected, cell.Text);
+        Assert.Equal(expected, cell.Formula);
         if (cached is { } v)
             Assert.Equal(v, cell.GetDouble(), 9);
     }

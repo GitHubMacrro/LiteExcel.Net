@@ -9,8 +9,10 @@ namespace LiteExcel;
 /// <summary>
 /// 流式写入器：逐行写入大文件，不驻留内存。
 /// 采用内联字符串（inlineStr），避免共享字符串表预扫描。
-/// 仅支持单工作表；样式/合并/筛选等高级能力不支持（与大文件场景定位一致）。
+/// 支持单工作表；样式/公式/超链接随行写入（styles.xml 与 sheet rels 在 Close 时统一写出）。
+/// 合并/筛选/图片等高级能力不支持。
 /// 使用后必须调用 <see cref="Dispose"/> 或 <see cref="Close"/> 完成文件。
+/// 注意：超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
 /// </summary>
 public sealed class XlsxStreamWriter : IDisposable
 {
@@ -24,6 +26,8 @@ public sealed class XlsxStreamWriter : IDisposable
     private readonly Stream _sheetStream;
     private readonly XmlWriter _sheetWriter;
     private readonly bool _macroEnabled;
+    private readonly Internal.Stylesheet _stylesheet = new();
+    private readonly List<(string Ref, string Target, string? Tooltip, bool IsInternal)> _hyperlinks = new();
     private int _currentRow;
     private bool _closed;
 
@@ -109,12 +113,37 @@ public sealed class XlsxStreamWriter : IDisposable
         if (cell is null || cell.IsEmpty) return;
 
         var reference = CellRef.ToString(_currentRow - 1, col - 1);
+        var styleId = _stylesheet.GetOrCreateXfId(cell.Style, cell.NumberFormat);
+        if (cell.Hyperlink is not null)
+            _hyperlinks.Add((reference, cell.Hyperlink.Target, cell.Hyperlink.Tooltip, cell.Hyperlink.IsInternal));
+        var styleAttr = styleId > 0 ? styleId.ToString(CultureInfo.InvariantCulture) : null;
+        var formula = cell.Formula ?? (cell.IsFormula ? cell.Text : null);
+        if (!string.IsNullOrEmpty(formula))
+        {
+            _sheetWriter.WriteStartElement("c");
+            _sheetWriter.WriteAttributeString("r", reference);
+            if (styleAttr is not null) _sheetWriter.WriteAttributeString("s", styleAttr);
+            if (cell.Type == CellType.Boolean) _sheetWriter.WriteAttributeString("t", "b");
+            _sheetWriter.WriteStartElement("f");
+            _sheetWriter.WriteString(formula);
+            _sheetWriter.WriteEndElement();
+            if (cell.Type is CellType.Number or CellType.Date or CellType.Boolean)
+            {
+                _sheetWriter.WriteStartElement("v");
+                _sheetWriter.WriteString(cell.Type == CellType.Number ? cell.Number.ToString(CultureInfo.InvariantCulture) :
+                    cell.Type == CellType.Date ? cell.Date.ToOADate().ToString(CultureInfo.InvariantCulture) : cell.Boolean ? "1" : "0");
+                _sheetWriter.WriteEndElement();
+            }
+            _sheetWriter.WriteEndElement();
+            return;
+        }
 
         switch (cell.Type)
         {
             case CellType.Text:
                 _sheetWriter.WriteStartElement("c");
                 _sheetWriter.WriteAttributeString("r", reference);
+                if (styleAttr is not null) _sheetWriter.WriteAttributeString("s", styleAttr);
                 _sheetWriter.WriteAttributeString("t", "inlineStr");
                 _sheetWriter.WriteStartElement("is");
                 _sheetWriter.WriteStartElement("t");
@@ -129,6 +158,7 @@ public sealed class XlsxStreamWriter : IDisposable
             case CellType.Number:
                 _sheetWriter.WriteStartElement("c");
                 _sheetWriter.WriteAttributeString("r", reference);
+                if (styleAttr is not null) _sheetWriter.WriteAttributeString("s", styleAttr);
                 _sheetWriter.WriteStartElement("v");
                 _sheetWriter.WriteString(cell.Number.ToString(CultureInfo.InvariantCulture));
                 _sheetWriter.WriteEndElement();
@@ -138,6 +168,7 @@ public sealed class XlsxStreamWriter : IDisposable
             case CellType.Date:
                 _sheetWriter.WriteStartElement("c");
                 _sheetWriter.WriteAttributeString("r", reference);
+                if (styleAttr is not null) _sheetWriter.WriteAttributeString("s", styleAttr);
                 _sheetWriter.WriteStartElement("v");
                 _sheetWriter.WriteString(cell.Date.ToOADate().ToString(CultureInfo.InvariantCulture));
                 _sheetWriter.WriteEndElement();
@@ -147,6 +178,7 @@ public sealed class XlsxStreamWriter : IDisposable
             case CellType.Boolean:
                 _sheetWriter.WriteStartElement("c");
                 _sheetWriter.WriteAttributeString("r", reference);
+                if (styleAttr is not null) _sheetWriter.WriteAttributeString("s", styleAttr);
                 _sheetWriter.WriteAttributeString("t", "b");
                 _sheetWriter.WriteStartElement("v");
                 _sheetWriter.WriteString(cell.Boolean ? "1" : "0");
@@ -191,15 +223,6 @@ public sealed class XlsxStreamWriter : IDisposable
             $"<Relationship Id=\"rId2\" Type=\"{OfficeRelNs}/styles\" Target=\"styles.xml\"/>" +
             "</Relationships>");
 
-        WriteEntry("xl/styles.xml",
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
-            $"<styleSheet xmlns=\"{MainNs}\">" +
-            "<fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>" +
-            "<fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>" +
-            "<borders count=\"1\"><border/></borders>" +
-            "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>" +
-            "<cellXfs count=\"1\"><xf/></cellXfs>" +
-            "</styleSheet>");
     }
 
     private void WriteEntry(string name, string xml)
@@ -210,6 +233,9 @@ public sealed class XlsxStreamWriter : IDisposable
         stream.Write(bytes, 0, bytes.Length);
     }
 
+    private static string XmlEscape(string value) =>
+        System.Security.SecurityElement.Escape(value) ?? string.Empty;
+
     /// <summary>关闭写入器并完成文件。写入后文件才能被正常读取 </summary>
     public void Close()
     {
@@ -217,11 +243,43 @@ public sealed class XlsxStreamWriter : IDisposable
         _closed = true;
 
         _sheetWriter.WriteEndElement(); // sheetData
+        if (_hyperlinks.Count > 0)
+        {
+            _sheetWriter.WriteStartElement("hyperlinks");
+            int external = 0;
+            foreach (var link in _hyperlinks)
+            {
+                _sheetWriter.WriteStartElement("hyperlink");
+                _sheetWriter.WriteAttributeString("ref", link.Ref);
+                if (link.IsInternal)
+                    _sheetWriter.WriteAttributeString("location", link.Target.TrimStart('#'));
+                else
+                {
+                    external++;
+                    _sheetWriter.WriteAttributeString("r", "id", OfficeRelNs, $"rIdH{external}");
+                }
+                if (!string.IsNullOrEmpty(link.Tooltip)) _sheetWriter.WriteAttributeString("tooltip", link.Tooltip);
+                _sheetWriter.WriteEndElement();
+            }
+            _sheetWriter.WriteEndElement();
+        }
         _sheetWriter.WriteEndElement(); // worksheet
         _sheetWriter.WriteEndDocument();
         _sheetWriter.Flush();
         _sheetWriter.Dispose();
         _sheetStream.Dispose();
+
+        if (_hyperlinks.Any(h => !h.IsInternal))
+        {
+            var rels = new StringBuilder($"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"{RelNs}\">");
+            int external = 0;
+            foreach (var link in _hyperlinks)
+                if (!link.IsInternal)
+                    rels.Append($"<Relationship Id=\"rIdH{++external}\" Type=\"{OfficeRelNs}/hyperlink\" Target=\"{XmlEscape(link.Target)}\" TargetMode=\"External\"/>");
+            rels.Append("</Relationships>");
+            WriteEntry("xl/worksheets/_rels/sheet1.xml.rels", rels.ToString());
+        }
+        WriteEntry("xl/styles.xml", _stylesheet.BuildStylesXml());
 
         _zip.Dispose();
         if (_ownsStream)

@@ -374,6 +374,10 @@ public static partial class XlsxReader
             }
         }
 
+        // P0-6: 捕获 bookViews / definedNames 原始 XML（保存时原样回写，避免静默丢失命名区域与窗口视图）
+        s_bookViewsXml = workbook.Element(ns + "bookViews")?.ToString();
+        s_definedNamesXml = workbook.Element(ns + "definedNames")?.ToString();
+
         // 读取 sheet 列表
         var sheetsEl = workbook.Element(ns + "sheets");
         if (sheetsEl is null) return result;
@@ -429,6 +433,13 @@ public static partial class XlsxReader
     [ThreadStatic]
     private static Internal.Encryption.FileSharingInfo? s_fileSharingHash;
 
+    // P0-6: workbook.xml 中 bookViews / definedNames 的原始 XML 快照
+    [ThreadStatic]
+    private static string? s_bookViewsXml;
+
+    [ThreadStatic]
+    private static string? s_definedNamesXml;
+
     /// <summary>最近一次 ReadWorkbook 捕获的工作簿 codeName（同线程、单次打开内有效，供 OpenCore 取用） </summary>
     internal static string? WorkbookCodeNameSnapshot => s_workbookCodeName;
 
@@ -437,6 +448,12 @@ public static partial class XlsxReader
 
     /// <summary>最近一次 ReadWorkbook 捕获的 fileSharing（修改密码）信息 </summary>
     internal static Internal.Encryption.FileSharingInfo? FileSharingSnapshot => s_fileSharingHash;
+
+    /// <summary>P0-6: 最近一次 ReadWorkbook 捕获的 bookViews 原始 XML </summary>
+    internal static string? BookViewsXmlSnapshot => s_bookViewsXml;
+
+    /// <summary>P0-6: 最近一次 ReadWorkbook 捕获的 definedNames 原始 XML </summary>
+    internal static string? DefinedNamesXmlSnapshot => s_definedNamesXml;
 
     private static SheetData ReadWorksheet(ZipArchive zip, string sheetPath, string sheetName,
         List<string> shared, StylesheetInfo styles, bool firstRowIsHeader)
@@ -458,6 +475,28 @@ public static partial class XlsxReader
                 var codeNameAttr = reader.GetAttribute("codeName");
                 if (!string.IsNullOrEmpty(codeNameAttr))
                     sheet.CodeName = codeNameAttr;
+            }
+            else if (reader.LocalName == "col")
+            {
+                // P0-1: 回填列宽。仅记录带 customWidth 的用户自定义列，跳过默认宽度的 catch-all 条目。
+                // 0 哨兵表示"无自定义列宽"，与各写入器（跳过 <=0）的既有约定一致。
+                var minAttr = reader.GetAttribute("min");
+                var maxAttr = reader.GetAttribute("max");
+                var widthAttr = reader.GetAttribute("width");
+                var customAttr = reader.GetAttribute("customWidth");
+                bool isCustom = customAttr == "1" || string.Equals(customAttr, "true", StringComparison.OrdinalIgnoreCase);
+                if (isCustom && minAttr is not null && maxAttr is not null && widthAttr is not null
+                    && int.TryParse(minAttr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var minC)
+                    && int.TryParse(maxAttr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var maxC)
+                    && double.TryParse(widthAttr, NumberStyles.Float, CultureInfo.InvariantCulture, out var w)
+                    && maxC >= minC && minC >= 1)
+                {
+                    sheet.ColumnWidths ??= new List<double>();
+                    while (sheet.ColumnWidths.Count < maxC)
+                        sheet.ColumnWidths.Add(0);
+                    for (int c = minC; c <= maxC; c++)
+                        sheet.ColumnWidths[c - 1] = w;
+                }
             }
             else if (reader.LocalName == "row")
             {
@@ -890,7 +929,7 @@ public static partial class XlsxReader
                 if (hasFormula)
                 {
                     cell.Type = CellType.Text;
-                    cell.Text = formula;
+                    cell.Formula = formula;
                     cell.IsFormula = true;
                 }
                 ApplyStyle(cell, sAttr, styles);
@@ -901,8 +940,9 @@ public static partial class XlsxReader
                 var cell = ConvertCellValue(raw, t, sAttr, shared, styles);
                 if (hasFormula)
                 {
+                    // P0-8: 公式串放入 Formula，不覆盖缓存值（Text/Number/Date/Boolean）
                     cell.IsFormula = true;
-                    cell.Text = formula;
+                    cell.Formula = formula;
                 }
                 cells.Add((col, cell));
             }

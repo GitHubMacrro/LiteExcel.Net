@@ -529,7 +529,8 @@ public class HighLevelApiTests
             var opened = Excel.Open(file);
             var formulaCell = opened.Worksheets[0].Cell("A3");
             Assert.True(formulaCell.IsFormula);
-            Assert.Equal("SUM(A1:A2)", formulaCell.Text);
+            // P0-8: 公式串在 Formula（Text 类型公式不写缓存值，属既有写入器限制，此处只验公式往返）
+            Assert.Equal("SUM(A1:A2)", formulaCell.Formula);
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }

@@ -51,6 +51,13 @@ public sealed class Cell
     /// </summary>
     public bool IsFormula { get; set; }
 
+    /// <summary>
+    /// 公式表达式（如 "SUM(A1:A3)"）。与缓存值字段（<see cref="Text"/>/<see cref="Number"/> 等）分离。
+    /// P0-8：公式串不再占用 <see cref="Text"/>，避免覆盖文本公式的缓存结果值。
+    /// 兼容：旧代码设 <see cref="IsFormula"/>=true 并把公式写入 <see cref="Text"/>，写入器兼容垫片仍能读出。
+    /// </summary>
+    public string? Formula { get; set; }
+
     /// <summary>单元格超链接（可选） </summary>
     public Hyperlink? Hyperlink
     {
@@ -103,7 +110,7 @@ public sealed class Cell
     /// <summary>创建公式单元格（仅写公式字符串，不计算结果） </summary>
     public static Cell FromFormula(string formula)
     {
-        return new Cell { Type = CellType.Text, Text = formula, IsFormula = true };
+        return new Cell { Type = CellType.Text, Formula = formula, IsFormula = true };
     }
 
     public static Cell Empty => new() { Type = CellType.Empty };
@@ -174,6 +181,7 @@ public sealed class Cell
         Style = other.Style;
         NumberFormat = other.NumberFormat;
         IsFormula = other.IsFormula;
+        Formula = other.Formula;
         Hyperlink = other.Hyperlink?.Clone();
     }
     /// <summary>以字符串读取值。Empty 返回 null，Number/Date/Boolean 按惯例格式化 </summary>

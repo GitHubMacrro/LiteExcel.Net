@@ -307,7 +307,7 @@ public sealed class Worksheet
             RowStyles = RowStyles,
             ColumnStyles = ColumnStyles,
             RowHeights = RowHeights,
-            ColumnWidths = ColumnWidths?.Select(kv => kv.Value).ToList(),
+            ColumnWidths = ToColumnWidthsList(ColumnWidths),
             Comments = Comments,
             Validations = Validations,
             Filter = Filter,
@@ -329,6 +329,25 @@ public sealed class Worksheet
         }
 
         return sheet;
+    }
+
+    /// <summary>
+    /// P0-2: 把高层稀疏字典（key=0-based 列索引）转为低层 List&lt;double&gt;，按下标补齐，
+    /// 未设置的列填 0（哨兵=无自定义列宽，与各写入器跳过 &lt;=0 的约定一致）。
+    /// 旧实现 <c>.Select(kv =&gt; kv.Value).ToList()</c> 丢弃 key 且枚举顺序无保证，导致稀疏列宽错位。
+    /// </summary>
+    private static List<double>? ToColumnWidthsList(Dictionary<int, double>? widths)
+    {
+        if (widths is null || widths.Count == 0) return null;
+        int maxKey = -1;
+        foreach (var k in widths.Keys)
+            if (k > maxKey) maxKey = k;
+        if (maxKey < 0) return null;
+        var list = new List<double>(maxKey + 1);
+        for (int i = 0; i <= maxKey; i++) list.Add(0);
+        foreach (var kv in widths)
+            list[kv.Key] = kv.Value;
+        return list;
     }
 
     /// <summary>从低层 SheetData 构建 Worksheet（读取时复用） </summary>

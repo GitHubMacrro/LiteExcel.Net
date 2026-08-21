@@ -29,11 +29,18 @@ internal sealed class OoxmlPreservedParts
     /// <summary>工作簿宿主的 VBA 代码名（workbookPr@codeName），保存时写回重建的 workbook.xml，保持与保留的 vbaProject 绑定 </summary>
     public string? WorkbookCodeName { get; set; }
 
-    /// <summary>捕获 zip 中写入器不重建的部件与 rels。sheetCount 用于排除所有工作表/批注重建条目 </summary>
-    public static OoxmlPreservedParts Capture(ZipArchive zip, int sheetCount)
+    /// <summary>P0-6: 打开时捕获的 workbook.xml 中 bookViews 元素原始 XML，保存时原样回写（schema 位于 sheets 之前） </summary>
+    public string? BookViewsXml { get; set; }
+
+    /// <summary>P0-6: 打开时捕获的 workbook.xml 中 definedNames 元素原始 XML，保存时原样回写（schema 位于 sheets 之后） </summary>
+    public string? DefinedNamesXml { get; set; }
+
+    /// <summary>捕获 zip 中写入器不重建的部件与 rels。sheetCount 用于排除所有工作表/批注重建条目。
+    /// <paramref name="binary"/> = true 时按 xlsb 容器布局排除（.bin 工作表/工作簿/styles 等）</summary>
+    public static OoxmlPreservedParts Capture(ZipArchive zip, int sheetCount, bool binary = false)
     {
         var preserved = new OoxmlPreservedParts();
-        var rebuilt = BuildRebuiltEntries(sheetCount);
+        var rebuilt = BuildRebuiltEntries(sheetCount, binary);
 
         foreach (var entry in zip.Entries)
         {
@@ -46,7 +53,7 @@ internal sealed class OoxmlPreservedParts
             }
 
             // 需要合并的 rels（含重建的根/工作簿/工作表 rels）先捕获，供保存时合并
-            if (IsMergeRelsPath(name))
+            if (IsMergeRelsPath(name, binary))
             {
                 preserved.Rels[name] = ReadText(entry);
                 continue;
@@ -66,8 +73,29 @@ internal sealed class OoxmlPreservedParts
     }
 
     /// <summary>写入器会整体重建（不保留）的包条目 </summary>
-    internal static HashSet<string> BuildRebuiltEntries(int sheetCount)
+    internal static HashSet<string> BuildRebuiltEntries(int sheetCount, bool binary = false)
     {
+        if (binary)
+        {
+            var setB = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "[Content_Types].xml",
+                "_rels/.rels",
+                "xl/workbook.bin",
+                "xl/_rels/workbook.bin.rels",
+                "xl/sharedStrings.bin",
+                "xl/styles.bin",
+                "docProps/core.xml",
+                "docProps/app.xml",
+            };
+            for (int i = 1; i <= sheetCount; i++)
+            {
+                setB.Add($"xl/worksheets/sheet{i}.bin");
+                setB.Add($"xl/worksheets/_rels/sheet{i}.bin.rels");
+            }
+            return setB;
+        }
+
         var set = new HashSet<string>(StringComparer.Ordinal)
         {
             "[Content_Types].xml",
@@ -76,6 +104,7 @@ internal sealed class OoxmlPreservedParts
             "xl/_rels/workbook.xml.rels",
             "xl/sharedStrings.xml",
             "xl/styles.xml",
+            "xl/calcChain.xml",  // P0-12: 陈旧 calcChain 不透传，由 Excel 重建（配合 fullCalcOnLoad）
             "docProps/core.xml",
             "docProps/app.xml",
         };
@@ -88,10 +117,10 @@ internal sealed class OoxmlPreservedParts
         return set;
     }
 
-    private static bool IsMergeRelsPath(string name)
+    private static bool IsMergeRelsPath(string name, bool binary)
     {
         if (name == "_rels/.rels") return true;
-        if (name == "xl/_rels/workbook.xml.rels") return true;
+        if (name == "xl/_rels/workbook.xml.rels" || name == "xl/_rels/workbook.bin.rels") return true;
         if (name.StartsWith("xl/worksheets/_rels/", StringComparison.Ordinal) && name.EndsWith(".rels", StringComparison.Ordinal))
             return true;
         return false;

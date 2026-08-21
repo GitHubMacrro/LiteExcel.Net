@@ -64,4 +64,11 @@ public sealed class ExcelWriteOptions
     /// 写入完成后是否保持输出流打开（仅 Stream 重载有效）。默认 false
     /// </summary>
     public bool LeaveOpen { get; set; }
+
+    /// <summary>
+    /// 能力降级回调（可选，默认 null）。
+    /// 写出到不支持某能力的格式（如 xls/xlsb/csv）时，对被静默丢弃的能力逐项回调。
+    /// 默认关闭：不注册则行为与历史版本完全一致（无破坏性）。
+    /// </summary>
+    public Action<DegradationInfo>? OnDegradation { get; set; }
 }

@@ -79,6 +79,13 @@ public static class Excel
                         var decrypted = DecryptWithPasswordCheck(fs, path, options.OpenPassword!);
                         var sheets = XlsbBackend.ReadAll(decrypted);
                         var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
+                        // P0-14/18: 捕获保留部件与文档属性（与读取同一解密快照）
+                        decrypted.Position = 0;
+                        using (var zipB = new ZipArchive(decrypted, ZipArchiveMode.Read, leaveOpen: true))
+                        {
+                            wbB.PreservedParts = OoxmlPreservedParts.Capture(zipB, sheets.Count, binary: true);
+                            wbB.Properties.CopyFrom(XlsxReader.ReadProperties(zipB));
+                        }
                         decrypted.Position = 0;
                         wbB.VbaProjectBytes = XlsbBackend.ReadVbaProject(decrypted);
                         decrypted.Position = 0;
@@ -102,6 +109,13 @@ public static class Excel
                 }
                 var sheetsX = XlsbBackend.ReadAll(path);
                 var wbXB = Workbook.FromSheetData(sheetsX, null, ExcelFormat.Xlsb, path);
+                // P0-14/18: 捕获保留部件与文档属性（图表/透视表/主题/绘图不再随保存丢失）
+                using (var capFs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var capZip = new ZipArchive(capFs, ZipArchiveMode.Read))
+                {
+                    wbXB.PreservedParts = OoxmlPreservedParts.Capture(capZip, sheetsX.Count, binary: true);
+                    wbXB.Properties.CopyFrom(XlsxReader.ReadProperties(capZip));
+                }
                 wbXB.VbaProjectBytes = XlsbBackend.ReadVbaProject(path);
                 wbXB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(path);
                 wbXB.Date1904 = XlsbBackend.ReadDate1904(path);
@@ -129,6 +143,9 @@ public static class Excel
             var props = XlsxReader.ReadProperties(zip);
             preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
             preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot; // ReadWorkbook 刚捕获
+            // P0-6: 命名区域与窗口视图原样回写
+            preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
+            preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
             wb = Workbook.FromSheetData(sheets, props, format, path);
             if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
                 wb.VbaProjectBytes = vbaBytes;
@@ -188,6 +205,12 @@ public static class Excel
                     var sheetsB = XlsbBackend.ReadAll(decrypted);
                     var wbDB = Workbook.FromSheetData(sheetsB, null, ExcelFormat.Xlsb, null);
                     decrypted.Position = 0;
+                    using (var zipDB = new ZipArchive(decrypted, ZipArchiveMode.Read, leaveOpen: true))
+                    {
+                        wbDB.PreservedParts = OoxmlPreservedParts.Capture(zipDB, sheetsB.Count, binary: true);
+                        wbDB.Properties.CopyFrom(XlsxReader.ReadProperties(zipDB));
+                    }
+                    decrypted.Position = 0;
                     wbDB.VbaProjectBytes = XlsbBackend.ReadVbaProject(decrypted);
                     decrypted.Position = 0;
                     wbDB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(decrypted);
@@ -210,6 +233,12 @@ public static class Excel
                 ms.Position = 0;
                 var sheets = XlsbBackend.ReadAll(ms);
                 var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, null);
+                ms.Position = 0;
+                using (var zipB = new ZipArchive(ms, ZipArchiveMode.Read, leaveOpen: true))
+                {
+                    wbB.PreservedParts = OoxmlPreservedParts.Capture(zipB, sheets.Count, binary: true);
+                    wbB.Properties.CopyFrom(XlsxReader.ReadProperties(zipB));
+                }
                 ms.Position = 0;
                 wbB.VbaProjectBytes = XlsbBackend.ReadVbaProject(ms);
                 ms.Position = 0;
@@ -236,6 +265,9 @@ public static class Excel
                 var propsD = XlsxReader.ReadProperties(zipD);
                 preserved = OoxmlPreservedParts.Capture(zipD, sheetsD.Count);
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
+                // P0-6: 命名区域与窗口视图原样回写
+                preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
+                preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheetsD, propsD, format, null);
                 if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
                     wb.VbaProjectBytes = vbaBytes;
@@ -251,6 +283,9 @@ public static class Excel
                 var props = XlsxReader.ReadProperties(zip);
                 preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
+                // P0-6: 命名区域与窗口视图原样回写
+                preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
+                preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheets, props, format, null);
                 if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
                     wb.VbaProjectBytes = vbaBytes;
@@ -381,6 +416,8 @@ public static class Excel
         format = extFormat;
 
         ApplyWriteOptions(workbook, options);
+        // 批次 0：注入能力降级回调（默认 null，不注册则行为与历史一致）
+        workbook.DegradationCallback = options.OnDegradation;
         workbook.SaveAs(path, format);
     }
 
@@ -459,6 +496,7 @@ public static class Excel
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
         if (onRow is null) throw new ArgumentNullException(nameof(onRow));
+        EnsureXlsxStreamingFormat(path, "流式读取");
         XlsxReader.StreamRows(path, sheetName, onRow);
     }
 
@@ -467,6 +505,9 @@ public static class Excel
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
+        var format = DetectFormat(path);
+        if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm)
+            throw new LiteExcelException($"该格式不支持流式写入：{format}。请使用 .xlsx 或 .xlsm 扩展名。");
         return XlsxStreamWriter.Create(path);
     }
 
@@ -475,6 +516,13 @@ public static class Excel
     {
         if (stream is null) throw new ArgumentNullException(nameof(stream));
         return XlsxStreamWriter.Create(stream);
+    }
+
+    private static void EnsureXlsxStreamingFormat(string path, string operation)
+    {
+        var format = DetectFormat(path);
+        if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm)
+            throw new LiteExcelException($"该格式不支持{operation}：{format}。仅支持 xlsx/xlsm。");
     }
 
     // ── 内部辅助 ──

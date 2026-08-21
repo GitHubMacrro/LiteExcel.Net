@@ -78,6 +78,16 @@ public static partial class XlsxWriter
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
 
         // 0. Sheet 名校验（入口拦截，不影响写出逻辑）
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sheet in sheets)
+        {
+            ValidateSheetName(sheet?.SheetName);
+            // P0-13: 低层 API 也校验重复表名，与高层 WorksheetCollection.Add 行为一致
+            if (!seenNames.Add(sheet!.SheetName!))
+                throw new LiteExcelException($"工作表名重复：{sheet.SheetName}");
+        }
+
+        // 0. Sheet 名校验（入口拦截，不影响写出逻辑）
         foreach (var sheet in sheets)
         {
             ValidateSheetName(sheet?.SheetName);
@@ -121,11 +131,13 @@ public static partial class XlsxWriter
         var imagePlan = ImagePlan.Create(sheets, preserved);
 
         // 先写保留部件（blob），再写重建部件，避免重名时重建优先
-        // 浮动图片 drawing 部件会在后续整体合并/新建，若与保留部件重名则跳过保留（避免 zip 重名异常）
+        // 浮动图片 drawing 与 InCell richData 部件会在后续整体合并/新建，若与保留部件重名则跳过保留（避免 zip 重名异常，P0-11）
         if (preserved is not null)
         {
             var imageEntries = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
             foreach (var (entry, _) in imagePlan.FloatingDrawingParts(preserved))
+                imageEntries.Add(entry);
+            foreach (var (entry, _) in imagePlan.InCellEntries())
                 imageEntries.Add(entry);
             foreach (var kv in preserved.Parts)
             {
@@ -195,6 +207,11 @@ public static partial class XlsxWriter
         if (newData is null || newData.Rows is null || newData.Rows.Count == 0)
             return;
 
+        // P0-24: 仅 xlsx/xlsm 支持追加，其他格式显式报错而非误导的 zip 解析异常
+        var format = Excel.DetectFormat(path);
+        if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm)
+            throw new LiteExcelException($"该格式不支持追加：{format}。仅支持 xlsx/xlsm。");
+
         if (!File.Exists(path))
         {
             Write(path, newData, updateProperties);
@@ -203,6 +220,16 @@ public static partial class XlsxWriter
 
         var allSheets = XlsxReader.ReadAll(path);
         var properties = XlsxReader.ReadProperties(path);
+
+        // P0-25: 捕获保留部件（宏/主题/绘图/图表/表格等），追加时透传，避免 xlsm 丢宏、xlsx 丢图表
+        OoxmlPreservedParts preserved;
+        using (var readFs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (var zip = new ZipArchive(readFs, ZipArchiveMode.Read))
+        {
+            preserved = OoxmlPreservedParts.Capture(zip, allSheets.Count);
+            preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
+        }
+
         ApplyPropertyUpdates(properties, updateProperties);
         // Preserve existing metadata while recording this append operation.
         properties.Modified = DateTime.Now;
@@ -219,7 +246,9 @@ public static partial class XlsxWriter
             allSheets.Add(newData);
         }
 
-        Write(path, allSheets, properties);
+        // 追加不改变既有 sheet 顺序，工作表级保留 rels 可继续复用
+        using var outFs = new FileStream(path, FileMode.Create, FileAccess.Write);
+        Write(outFs, allSheets, properties, preserved, true, macroEnabled: IsXlsmPath(path));
     }
 
     private static void ApplyPropertyUpdates(WorkbookProperties target, WorkbookProperties? updates)
@@ -677,9 +706,11 @@ public static partial class XlsxWriter
         var styleAttr = styleId > 0 ? $" s=\"{styleId}\"" : "";
 
         // 公式单元格：写 <f> 公式文本 + <v> 缓存值（不做公式计算）
-        if (cell.IsFormula && !string.IsNullOrEmpty(cell.Text))
+        // P0-8 兼容垫片：优先读 Cell.Formula；旧代码（IsFormula=true 且公式存于 Text）仍可用
+        var formulaText = cell.Formula ?? (cell.IsFormula ? cell.Text : null);
+        if (!string.IsNullOrEmpty(formulaText))
         {
-            var fEsc = XmlEscape(cell.Text);
+            var fEsc = XmlEscape(formulaText);
             switch (cell.Type)
             {
                 case CellType.Number:
@@ -835,7 +866,7 @@ public static partial class XlsxWriter
 
     // ── rels 合并（保留部件） ──
 
-    private sealed class RelInfo
+    internal sealed class RelInfo
     {
         public string Id = "";
         public string Type = "";
@@ -917,7 +948,7 @@ public static partial class XlsxWriter
     }
 
     /// <summary>把 rel 列表序列化为完整 &lt;Relationships&gt; XML </summary>
-    private static string RelsXml(List<RelInfo> rels)
+    internal static string RelsXml(List<RelInfo> rels)
     {
         if (rels.Count == 0) return "";
         var sb = new StringBuilder(256);
@@ -939,7 +970,7 @@ public static partial class XlsxWriter
     /// 追加写入器生成的重建 rels。保留条目的 rId 重新编号以避免冲突。
     /// 全部为空时返回 null。
     /// </summary>
-    private static string? MergeRelsXml(string originalRelsXml, string baseDir, HashSet<string> rebuiltTargets, string rebuiltRelsXml)
+    internal static string? MergeRelsXml(string originalRelsXml, string baseDir, HashSet<string> rebuiltTargets, string rebuiltRelsXml)
     {
         var kept = new List<RelInfo>();
         if (!string.IsNullOrEmpty(originalRelsXml))
@@ -984,7 +1015,7 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static List<RelInfo> ParseRels(string xml)
+    internal static List<RelInfo> ParseRels(string xml)
     {
         var list = new List<RelInfo>();
         if (string.IsNullOrEmpty(xml)) return list;
@@ -1004,7 +1035,7 @@ public static partial class XlsxWriter
         return list;
     }
 
-    private static string ResolveRelsTarget(string baseDir, string target)
+    internal static string ResolveRelsTarget(string baseDir, string target)
     {
         target = target.Replace('\\', '/');
         if (target.StartsWith("/")) return target.TrimStart('/');
@@ -1080,7 +1111,7 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string CorePropsXml(WorkbookProperties props)
+    internal static string CorePropsXml(WorkbookProperties props)
     {
         var now = DateTime.UtcNow;
         var created = props.Created ?? now;
@@ -1106,7 +1137,7 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    private static string AppPropsXml(WorkbookProperties props, IReadOnlyList<SheetData> sheets)
+    internal static string AppPropsXml(WorkbookProperties props, IReadOnlyList<SheetData> sheets)
     {
         // Application 默认取宿主程序集名；显式设置则优先
         string application = !string.IsNullOrEmpty(props.Application)
@@ -1162,6 +1193,9 @@ public static partial class XlsxWriter
                       $"hashValue=\"{fileSharingHash}\" saltValue=\"{fileSharingSalt ?? ""}\" " +
                       $"spinCount=\"{fileSharingSpin ?? 100000}\"/>");
         }
+        // P0-6: bookViews 原样回写（schema 位于 sheets 之前，保留窗口视图/活动表）
+        if (preserved?.BookViewsXml is { Length: > 0 })
+            sb.Append(preserved.BookViewsXml);
         sb.Append("<sheets>");
         for (int i = 0; i < sheets.Count; i++)
         {
@@ -1170,6 +1204,11 @@ public static partial class XlsxWriter
             sb.Append($"<sheet name=\"{name}\" sheetId=\"{i + 1}\" r:id=\"rId{i + 1}\"/>");
         }
         sb.Append("</sheets>");
+        // P0-6: definedNames 原样回写（schema 位于 sheets 之后，保留命名区域）
+        if (preserved?.DefinedNamesXml is { Length: > 0 })
+            sb.Append(preserved.DefinedNamesXml);
+        // P0-12: 陈旧 calcChain 不透传，写 fullCalcOnLoad 让 Excel 保存时重建计算链
+        sb.Append("<calcPr fullCalcOnLoad=\"1\"/>");
         sb.Append("</workbook>");
         return sb.ToString();
     }
@@ -1183,6 +1222,7 @@ public static partial class XlsxWriter
         }
         rebuiltTargets.Add("xl/sharedStrings.xml");
         rebuiltTargets.Add("xl/styles.xml");
+        rebuiltTargets.Add("xl/calcChain.xml"); // P0-12: 陈旧 calcChain 不透传，其 rel 一并丢弃
         if (imagePlan is { HasInCell: true })
         {
             rebuiltTargets.Add("xl/metadata.xml");

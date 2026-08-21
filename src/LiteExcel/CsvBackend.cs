@@ -29,17 +29,96 @@ internal static class CsvBackend
     internal static SheetData Read(TextReader reader, string sheetName)
     {
         var sheet = new SheetData { SheetName = sheetName };
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
+        foreach (var fields in ReadRecords(reader))
         {
-            if (string.IsNullOrEmpty(line)) continue;
-            var fields = ParseLine(line);
             var cells = new List<Cell>(fields.Count);
             foreach (var f in fields)
                 cells.Add(Cell.FromText(f));
             sheet.Rows.Add(cells);
         }
         return sheet;
+    }
+
+    private static IEnumerable<List<string>> ReadRecords(TextReader reader)
+    {
+        var fields = new List<string>();
+        var field = new StringBuilder();
+        bool inQuotes = false;
+        bool fieldStarted = false;
+        bool recordHasCharacters = false;
+
+        while (true)
+        {
+            int value = reader.Read();
+            if (value < 0)
+            {
+                if (inQuotes)
+                    throw new FormatException("CSV 字段缺少结束引号。");
+                if (recordHasCharacters || fields.Count > 0 || field.Length > 0)
+                {
+                    fields.Add(field.ToString());
+                    yield return fields;
+                }
+                yield break;
+            }
+
+            char ch = (char)value;
+            recordHasCharacters = true;
+
+            if (inQuotes)
+            {
+                if (ch == '"')
+                {
+                    int next = reader.Peek();
+                    if (next == '"')
+                    {
+                        reader.Read();
+                        field.Append('"');
+                    }
+                    else
+                    {
+                        inQuotes = false;
+                    }
+                }
+                else if (ch == '\r' || ch == '\n')
+                {
+                    if (ch == '\r' && reader.Peek() == '\n') reader.Read();
+                    field.Append('\n');
+                }
+                else
+                {
+                    field.Append(ch);
+                }
+                continue;
+            }
+
+            if (ch == '"' && !fieldStarted)
+            {
+                inQuotes = true;
+                fieldStarted = true;
+            }
+            else if (ch == ',')
+            {
+                fields.Add(field.ToString());
+                field.Clear();
+                fieldStarted = false;
+            }
+            else if (ch == '\r' || ch == '\n')
+            {
+                if (ch == '\r' && reader.Peek() == '\n') reader.Read();
+                fields.Add(field.ToString());
+                yield return fields;
+                fields = new List<string>();
+                field.Clear();
+                fieldStarted = false;
+                recordHasCharacters = false;
+            }
+            else
+            {
+                field.Append(ch);
+                fieldStarted = true;
+            }
+        }
     }
 
     /// <summary>写入 CSV 文件 </summary>
@@ -49,8 +128,10 @@ internal static class CsvBackend
         Write(fs, sheet);
     }
 
-    internal static void Write(Stream stream, SheetData sheet)
+    internal static void Write(Stream stream, SheetData sheet, Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Csv)
     {
+        ReportDegradations(sheet, onDegradation, targetFormat);
+
         var sb = new StringBuilder();
 
         if (sheet.Headers is { Count: > 0 })
@@ -70,6 +151,65 @@ internal static class CsvBackend
         var text = sb.ToString();
         var data = bytes.GetBytes(text);
         stream.Write(data, 0, data.Length);
+    }
+
+    /// <summary>写出 CSV 时对静默丢弃的 Excel 专有能力逐项上报（P0-19 显式化） </summary>
+    private static void ReportDegradations(SheetData sheet, Action<DegradationInfo>? onDegradation, ExcelFormat targetFormat)
+    {
+        if (onDegradation is null) return;
+
+        void Report(DegradationCapability cap, string msg)
+            => onDegradation(new DegradationInfo
+            {
+                Capability = cap,
+                SheetName = sheet.SheetName,
+                TargetFormat = targetFormat,
+                Message = msg,
+            });
+
+        bool sheetHasStyles = sheet.DefaultStyle is not null
+            || sheet.HeaderStyle is not null
+            || (sheet.RowStyles is { Count: > 0 })
+            || (sheet.ColumnStyles is { Count: > 0 });
+        if (sheetHasStyles)
+            Report(DegradationCapability.Styles, $"CSV 不支持样式，工作表 '{sheet.SheetName}' 的行/列/默认/表头样式已丢弃。");
+        if (sheet.RowHeights is { Count: > 0 })
+            Report(DegradationCapability.RowHeights, $"CSV 不支持行高，工作表 '{sheet.SheetName}' 的行高已丢弃。");
+        if (sheet.ColumnWidths is { Count: > 0 })
+            Report(DegradationCapability.ColumnWidths, $"CSV 不支持列宽，工作表 '{sheet.SheetName}' 的列宽已丢弃。");
+        if (sheet.MergedRanges is { Count: > 0 })
+            Report(DegradationCapability.MergedCells, $"CSV 不支持合并单元格，工作表 '{sheet.SheetName}' 的合并已丢弃。");
+        if (sheet.FreezeRows > 0 || sheet.FreezeColumns > 0)
+            Report(DegradationCapability.FreezePanes, $"CSV 不支持冻结窗格，工作表 '{sheet.SheetName}' 的冻结已丢弃。");
+        if (sheet.Filter is not null)
+            Report(DegradationCapability.AutoFilter, $"CSV 不支持自动筛选，工作表 '{sheet.SheetName}' 的筛选已丢弃。");
+        if (sheet.Comments is { Count: > 0 })
+            Report(DegradationCapability.Comments, $"CSV 不支持批注，工作表 '{sheet.SheetName}' 的批注已丢弃。");
+        if (sheet.Validations is { Count: > 0 })
+            Report(DegradationCapability.DataValidation, $"CSV 不支持数据验证，工作表 '{sheet.SheetName}' 的数据验证已丢弃。");
+        if (sheet.Images is { Count: > 0 })
+        {
+            Report(DegradationCapability.Images, $"CSV 不支持图片，工作表 '{sheet.SheetName}' 的图片已丢弃。");
+            if (sheet.Images.Any(i => i.Placement == ImagePlacement.InCell))
+                Report(DegradationCapability.RichData, $"CSV 不支持 InCell 图片，工作表 '{sheet.SheetName}' 的 InCell 图片已丢弃。");
+        }
+
+        foreach (var row in sheet.Rows)
+        {
+            foreach (var cell in row)
+            {
+                if (cell.Style is not null || !string.IsNullOrEmpty(cell.NumberFormat))
+                {
+                    if (!sheetHasStyles)
+                        Report(DegradationCapability.Styles, $"CSV 不支持单元格样式，工作表 '{sheet.SheetName}' 的样式已丢弃。");
+                    sheetHasStyles = true;
+                }
+                if (cell.Hyperlink is not null)
+                    Report(DegradationCapability.Hyperlinks, $"CSV 不支持超链接，工作表 '{sheet.SheetName}' 的超链接已丢弃。");
+                if (cell.IsFormula || !string.IsNullOrEmpty(cell.Formula))
+                    Report(DegradationCapability.Formulas, $"CSV 不支持公式，工作表 '{sheet.SheetName}' 的公式以文本值写出。");
+            }
+        }
     }
 
     private static void AppendRow(StringBuilder sb, IReadOnlyList<string> fields)
@@ -93,60 +233,6 @@ internal static class CsvBackend
         sb.Append('"');
         sb.Append(field.Replace("\"", "\"\""));
         sb.Append('"');
-    }
-
-    private static List<string> ParseLine(string line)
-    {
-        var fields = new List<string>();
-        var sb = new StringBuilder();
-        bool inQuotes = false;
-        bool fieldStarted = false;
-
-        for (int i = 0; i < line.Length; i++)
-        {
-            char ch = line[i];
-            if (inQuotes)
-            {
-                if (ch == '"')
-                {
-                    if (i + 1 < line.Length && line[i + 1] == '"')
-                    {
-                        sb.Append('"');
-                        i++;
-                    }
-                    else
-                    {
-                        inQuotes = false;
-                    }
-                }
-                else
-                {
-                    sb.Append(ch);
-                }
-            }
-            else
-            {
-                if (ch == '"' && !fieldStarted)
-                {
-                    inQuotes = true;
-                    fieldStarted = true;
-                }
-                else if (ch == ',')
-                {
-                    fields.Add(sb.ToString());
-                    sb.Clear();
-                    fieldStarted = false;
-                }
-                else
-                {
-                    sb.Append(ch);
-                    fieldStarted = true;
-                }
-            }
-        }
-
-        fields.Add(sb.ToString());
-        return fields;
     }
 
     private static Encoding? DetectEncoding(Stream fs)

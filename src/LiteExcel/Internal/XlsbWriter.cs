@@ -17,6 +17,9 @@ namespace LiteExcel.Internal;
 /// </summary>
 internal static class XlsbWriter
 {
+    private const string OfficeRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    private const string RelNs = "http://schemas.openxmlformats.org/package/2006/relationships";
+
     // workbook.bin
     private const int BrtBeginBook = 0x0083;
     private const int BrtFileVersion = 0x0080;
@@ -104,12 +107,18 @@ internal static class XlsbWriter
     private const int BuiltinDateFmtId = 14;
     private const int FirstCustomFmtId = 164;
 
-    /// <summary>写出 .xlsb 工作簿到流。vbaProject 为源工作簿捕获的宏工程字节（可为 null）；workbookCodeName 为宿主代码名（可为 null）</summary>
+    /// <summary>写出 .xlsb 工作簿到流。vbaProject 为源工作簿捕获的宏工程字节（可为 null）；workbookCodeName 为宿主代码名（可为 null）。
+    /// <paramref name="preserved"/> 为打开时捕获的未重建 OOXML 部件（图表/透视表/主题/绘图等），保存时透传；
+    /// <paramref name="properties"/> 为文档属性，非 null 时写出 docProps。</summary>
     public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null, bool date1904 = false,
-        string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false)
+        string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false,
+        Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Xlsb,
+        OoxmlPreservedParts? preserved = null, WorkbookProperties? properties = null)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
+
+        ReportSheetDegradations(sheets, onDegradation, targetFormat);
 
         var sst = new List<string>();
         var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -153,25 +162,89 @@ internal static class XlsbWriter
 
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
+        // P0-14(xlsb): 先写保留部件（blob），写入器重建的条目在 rebuilt 集合中，避免重名
+        if (preserved is not null)
+        {
+            var rebuilt = OoxmlPreservedParts.BuildRebuiltEntries(sheets.Count, binary: true);
+            foreach (var kv in preserved.Parts)
+            {
+                if (rebuilt.Contains(kv.Key)) continue;
+                WriteEntry(zip, kv.Key, kv.Value);
+            }
+        }
+
         // 包结构
-        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null));
-        WriteEntry(zip, "_rels/.rels", RootRelsXml());
+        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null, properties is not null, preserved));
+        WriteEntry(zip, "_rels/.rels", RootRelsXml(properties is not null));
         WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended));
-        WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null));
+        WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null, preserved));
         WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs));
         if (vbaProject is not null && vbaProject.Length > 0)
             WriteEntry(zip, "xl/vbaProject.bin", vbaProject);
         if (sst.Count > 0)
             WriteEntry(zip, "xl/sharedStrings.bin", BuildSharedStringsBin(sst, sstIndex));
+        if (properties is not null)
+        {
+            WriteEntry(zip, "docProps/core.xml", XlsxWriter.CorePropsXml(properties));
+            WriteEntry(zip, "docProps/app.xml", XlsxWriter.AppPropsXml(properties, sheets));
+        }
 
         for (int i = 0; i < sheets.Count; i++)
         {
             var extLinks = CollectExternalHyperlinks(sheets[i]);
             WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf, date1904, extLinks));
-            if (extLinks.Count > 0)
+            var sheetRels = BuildSheetRelsXml(i + 1, extLinks, preserved);
+            if (!string.IsNullOrEmpty(sheetRels))
+                WriteEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.bin.rels", sheetRels);
+        }
+    }
+
+    /// <summary>合并工作表级保留 rels（图表/透视表等）与重建的超链接 rels </summary>
+    private static string? BuildSheetRelsXml(int sheetNumber, List<string> extLinks, OoxmlPreservedParts? preserved)
+    {
+        var relParts = new List<XlsxWriter.RelInfo>();
+        for (int k = 0; k < extLinks.Count; k++)
+        {
+            relParts.Add(new XlsxWriter.RelInfo
             {
-                WriteEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.bin.rels", SheetRelsXml(extLinks));
-            }
+                Id = $"rIdH{k + 1}",
+                Type = $"{OfficeRelNs}/hyperlink",
+                Target = extLinks[k],
+                TargetMode = "External",
+            });
+        }
+        string rebuilt = XlsxWriter.RelsXml(relParts);
+        string original = "";
+        if (preserved is not null && preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetNumber}.bin.rels", out var r))
+            original = r;
+        return XlsxWriter.MergeRelsXml(original, "xl/worksheets", new HashSet<string>(StringComparer.Ordinal), rebuilt);
+    }
+
+    /// <summary>写出 xlsb 时对静默丢弃的 sheet 级能力逐项上报（P0-4/15/16 显式化） </summary>
+    private static void ReportSheetDegradations(IReadOnlyList<SheetData> sheets,
+        Action<DegradationInfo>? onDegradation, ExcelFormat targetFormat)
+    {
+        if (onDegradation is null) return;
+        foreach (var sheet in sheets)
+        {
+            void Report(DegradationCapability cap, string msg)
+                => onDegradation(new DegradationInfo
+                {
+                    Capability = cap,
+                    SheetName = sheet.SheetName,
+                    TargetFormat = targetFormat,
+                    Message = msg,
+                });
+            if (sheet.Comments is { Count: > 0 })
+                Report(DegradationCapability.Comments, $"xlsb 不支持批注，工作表 '{sheet.SheetName}' 的批注已丢弃。");
+            if (sheet.Validations is { Count: > 0 })
+                Report(DegradationCapability.DataValidation, $"xlsb 不支持数据验证，工作表 '{sheet.SheetName}' 的数据验证已丢弃。");
+            if (sheet.Filter is not null)
+                Report(DegradationCapability.AutoFilter, $"xlsb 不支持自动筛选，工作表 '{sheet.SheetName}' 的筛选已丢弃。");
+            if (sheet.Images is { Count: > 0 })
+                Report(DegradationCapability.Images, $"xlsb 不支持图片，工作表 '{sheet.SheetName}' 的图片已丢弃。");
+            if (DegradationDetector.HasNonNumberFormatStyles(sheet))
+                Report(DegradationCapability.Styles, $"xlsb 仅支持数字格式，工作表 '{sheet.SheetName}' 的完整样式（字体/颜色/边框/对齐/换行）已降级。");
         }
     }
 
@@ -191,20 +264,6 @@ internal static class XlsbWriter
         return list;
     }
 
-    /// <summary>工作表级 rels：外部超链接（rIdH1 起） </summary>
-    private static string SheetRelsXml(List<string> extTargets)
-    {
-        var sb = new StringBuilder(256);
-        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
-        sb.Append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
-        for (int i = 0; i < extTargets.Count; i++)
-        {
-            sb.Append($"<Relationship Id=\"rIdH{i + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"{XmlEscape(extTargets[i])}\" TargetMode=\"External\"/>");
-        }
-        sb.Append("</Relationships>");
-        return sb.ToString();
-    }
-
     private static string XmlEscape(string s)
     {
         if (string.IsNullOrEmpty(s)) return s ?? "";
@@ -213,7 +272,7 @@ internal static class XlsbWriter
 
     // ── 包 XML 部件 ──
 
-    private static string ContentTypesXml(int sheetCount, bool hasSst, bool hasVba)
+    private static string ContentTypesXml(int sheetCount, bool hasSst, bool hasVba, bool hasProps, OoxmlPreservedParts? preserved)
     {
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -228,32 +287,87 @@ internal static class XlsbWriter
             sb.Append("<Override PartName=\"/xl/sharedStrings.bin\" ContentType=\"application/vnd.ms-excel.sharedStrings\"/>");
         if (hasVba)
             sb.Append("<Override PartName=\"/xl/vbaProject.bin\" ContentType=\"application/vnd.ms-office.vbaProject\"/>");
+        if (hasProps)
+        {
+            sb.Append("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
+            sb.Append("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
+        }
+        // P0-14(xlsb): 合并保留的 content types 声明（图表/透视表/主题等）
+        if (preserved is not null)
+        {
+            foreach (var (ext, ct) in preserved.DefaultTypes)
+                if (ext != "bin" && ext != "rels" && ext != "xml" && !sb.ToString().Contains($"Extension=\"{ext}\""))
+                    sb.Append($"<Default Extension=\"{ext}\" ContentType=\"{ct}\"/>");
+            foreach (var (part, ct) in preserved.OverrideTypes)
+                if (!part.StartsWith("/xl/worksheets/") && !part.StartsWith("/xl/workbook") && !part.StartsWith("/xl/styles")
+                    && !part.StartsWith("/xl/sharedStrings") && part != "/xl/vbaProject.bin"
+                    && !sb.ToString().Contains($"PartName=\"{part}\""))
+                    sb.Append($"<Override PartName=\"{part}\" ContentType=\"{ct}\"/>");
+        }
         sb.Append("</Types>");
         return sb.ToString();
     }
 
-    private static string RootRelsXml()
-    {
-        return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
-            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
-            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.bin\"/>" +
-            "</Relationships>";
-    }
-
-    private static string WorkbookRelsXml(int sheetCount, bool hasSst, bool hasVba)
+    private static string RootRelsXml(bool hasProps)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
-        for (int i = 1; i <= sheetCount; i++)
-            sb.Append($"<Relationship Id=\"rId{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i}.bin\"/>");
-        sb.Append($"<Relationship Id=\"rId{sheetCount + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.bin\"/>");
-        if (hasSst)
-            sb.Append($"<Relationship Id=\"rId{sheetCount + 2}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.bin\"/>");
-        if (hasVba)
-            sb.Append($"<Relationship Id=\"rId{sheetCount + 3}\" Type=\"http://schemas.microsoft.com/office/2006/relationships/vbaProject\" Target=\"vbaProject.bin\"/>");
+        sb.Append("<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.bin\"/>");
+        if (hasProps)
+        {
+            sb.Append("<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/>");
+            sb.Append("<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/>");
+        }
         sb.Append("</Relationships>");
         return sb.ToString();
+    }
+
+    private static string WorkbookRelsXml(int sheetCount, bool hasSst, bool hasVba, OoxmlPreservedParts? preserved)
+    {
+        var relParts = new List<XlsxWriter.RelInfo>();
+        for (int i = 1; i <= sheetCount; i++)
+            relParts.Add(new XlsxWriter.RelInfo
+            {
+                Id = $"rId{i}",
+                Type = $"{OfficeRelNs}/worksheet",
+                Target = $"worksheets/sheet{i}.bin",
+            });
+        relParts.Add(new XlsxWriter.RelInfo
+        {
+            Id = $"rId{sheetCount + 1}",
+            Type = $"{OfficeRelNs}/styles",
+            Target = "styles.bin",
+        });
+        if (hasSst)
+            relParts.Add(new XlsxWriter.RelInfo
+            {
+                Id = $"rId{sheetCount + 2}",
+                Type = $"{OfficeRelNs}/sharedStrings",
+                Target = "sharedStrings.bin",
+            });
+        if (hasVba)
+            relParts.Add(new XlsxWriter.RelInfo
+            {
+                Id = $"rId{sheetCount + 3}",
+                Type = "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+                Target = "vbaProject.bin",
+            });
+        string rebuilt = XlsxWriter.RelsXml(relParts);
+        string original = "";
+        if (preserved is not null && preserved.Rels.TryGetValue("xl/_rels/workbook.bin.rels", out var r))
+            original = r;
+        var rebuiltTargets = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 1; i <= sheetCount; i++)
+        {
+            rebuiltTargets.Add($"xl/worksheets/sheet{i}.bin");
+            rebuiltTargets.Add($"xl/worksheets/_rels/sheet{i}.bin.rels");
+        }
+        rebuiltTargets.Add("xl/styles.bin");
+        rebuiltTargets.Add("xl/sharedStrings.bin");
+        rebuiltTargets.Add("xl/vbaProject.bin");
+        rebuiltTargets.Add("xl/workbook.bin");
+        return XlsxWriter.MergeRelsXml(original, "xl", rebuiltTargets, rebuilt) ?? rebuilt;
     }
 
     private static void WriteEntry(ZipArchive zip, string name, byte[] data)

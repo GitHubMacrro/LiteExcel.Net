@@ -73,11 +73,41 @@ internal static class XlsWriter
         (31, "m/d/yy h:mm"),
     };
 
-    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, bool date1904 = false)
+    public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, bool date1904 = false,
+        Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Xls)
     {
+        ReportSheetDegradations(sheets, onDegradation, targetFormat);
         var workbook = BuildWorkbookStream(sheets, date1904);
         var cfb = CfbWriter.Build("Workbook", workbook);
         stream.Write(cfb, 0, cfb.Length);
+    }
+
+    /// <summary>写出 xls 时对静默丢弃的 sheet 级能力逐项上报（P0-4/15/16 显式化） </summary>
+    private static void ReportSheetDegradations(IReadOnlyList<SheetData> sheets,
+        Action<DegradationInfo>? onDegradation, ExcelFormat targetFormat)
+    {
+        if (onDegradation is null) return;
+        foreach (var sheet in sheets)
+        {
+            void Report(DegradationCapability cap, string msg)
+                => onDegradation(new DegradationInfo
+                {
+                    Capability = cap,
+                    SheetName = sheet.SheetName,
+                    TargetFormat = targetFormat,
+                    Message = msg,
+                });
+            if (sheet.Comments is { Count: > 0 })
+                Report(DegradationCapability.Comments, $"xls 不支持批注，工作表 '{sheet.SheetName}' 的批注已丢弃。");
+            if (sheet.Validations is { Count: > 0 })
+                Report(DegradationCapability.DataValidation, $"xls 不支持数据验证，工作表 '{sheet.SheetName}' 的数据验证已丢弃。");
+            if (sheet.Filter is not null)
+                Report(DegradationCapability.AutoFilter, $"xls 不支持自动筛选，工作表 '{sheet.SheetName}' 的筛选已丢弃。");
+            if (sheet.Images is { Count: > 0 })
+                Report(DegradationCapability.Images, $"xls 不支持图片，工作表 '{sheet.SheetName}' 的图片已丢弃。");
+            if (DegradationDetector.HasNonNumberFormatStyles(sheet))
+                Report(DegradationCapability.Styles, $"xls 仅支持数字格式，工作表 '{sheet.SheetName}' 的完整样式（字体/颜色/边框/对齐/换行）已降级。");
+        }
     }
 
     private static byte[] BuildWorkbookStream(IReadOnlyList<SheetData> sheets, bool date1904)

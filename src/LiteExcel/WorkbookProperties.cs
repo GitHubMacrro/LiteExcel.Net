@@ -29,4 +29,17 @@ public sealed class WorkbookProperties
     /// 为 null 时写出默认取宿主程序集名（Assembly.GetEntryAssembly()） 
     /// </summary>
     public string? Application { get; set; }
+
+    /// <summary>从另一属性对象复制全部字段（不替换引用） </summary>
+    internal void CopyFrom(WorkbookProperties other)
+    {
+        if (other is null) return;
+        Creator = other.Creator;
+        LastModifiedBy = other.LastModifiedBy;
+        Created = other.Created;
+        Modified = other.Modified;
+        Title = other.Title;
+        Subject = other.Subject;
+        Application = other.Application;
+    }
 }

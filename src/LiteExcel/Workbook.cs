@@ -15,6 +15,9 @@ public sealed class Workbook
     private string? _currentPath;
     private List<string>? _openedSheetNames;
 
+    /// <summary>能力降级回调（由 Excel.Write 注入 options.OnDegradation；直接 SaveAs 时为 null，行为与历史一致） </summary>
+    internal Action<DegradationInfo>? DegradationCallback { get; set; }
+
     /// <summary>工作表集合 </summary>
     public WorksheetCollection Worksheets { get; }
 
@@ -209,12 +212,12 @@ public sealed class Workbook
             case ExcelFormat.Csv:
                 if (Worksheets.Count != 1)
                     throw new NotSupportedException("CSV 仅支持单工作表工作簿");
-                CsvBackend.Write(stream, Worksheets[0].ToSheetData());
+                CsvBackend.Write(stream, Worksheets[0].ToSheetData(), DegradationCallback, ExcelFormat.Csv);
                 break;
             case ExcelFormat.Xls:
             {
                 var xlsSheets = BuildSheetDataList();
-                XlsWriter.Write(stream, xlsSheets, Date1904);
+                XlsWriter.Write(stream, xlsSheets, Date1904, DegradationCallback, ExcelFormat.Xls);
                 break;
             }
             case ExcelFormat.Xlsb:
@@ -226,7 +229,8 @@ public sealed class Workbook
                 {
                     using var zipMs = new MemoryStream();
                     XlsbWriter.Write(zipMs, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
-                        fsHashB, fsSaltB, fsSpinB, fsRoB);
+                        fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
+                        PreservedParts, Properties);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwdB);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -234,7 +238,8 @@ public sealed class Workbook
                 else
                 {
                     XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
-                        fsHashB, fsSaltB, fsSpinB, fsRoB);
+                        fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
+                        PreservedParts, Properties);
                 }
                 break;
             }
@@ -304,17 +309,15 @@ public sealed class Workbook
         return list;
     }
 
-    /// <summary>工作表数量与顺序相对打开时是否未变（决定能否复用工作表级保留 rels） </summary>
+    /// <summary>
+    /// 工作表数量相对打开时是否未变（决定能否复用工作表级保留 rels）。
+    /// 只比较数量而非表名：表名仅存在于 workbook.xml，不影响 sheet{i}.xml 与其 rels 的绑定；
+    /// 改表名不应导致 drawing/图表关联被丢弃（P0-3）。
+    /// 注意：重排（Move）后同位置 sheet rels 可能错配，属低频场景，保留比删除更安全。
+    /// </summary>
     private bool StructureUnchanged(List<SheetData> sheets)
     {
-        if (_openedSheetNames is null || sheets.Count != _openedSheetNames.Count)
-            return false;
-        for (int i = 0; i < sheets.Count; i++)
-        {
-            if (sheets[i].SheetName != _openedSheetNames[i])
-                return false;
-        }
-        return true;
+        return _openedSheetNames is not null && sheets.Count == _openedSheetNames.Count;
     }
 
     // ── 集合回调 ──
