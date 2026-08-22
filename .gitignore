@@ -4,6 +4,8 @@ files/
 !tests/LiteExcel.Tests/Fixtures/protected.xlsx
 !tests/LiteExcel.Tests/Fixtures/excel-authored-cf.xlsx
 !tests/LiteExcel.Tests/Fixtures/excel-authored-image-chart.xlsx
+!tests/LiteExcel.Tests/Fixtures/excel-authored-validation.xlsx
+!tests/LiteExcel.Tests/Fixtures/excel-authored-comments-filter.xlsx
 *.xlsm
 !tests/LiteExcel.Tests/Fixtures/protected.xlsm
 *.xlsb
