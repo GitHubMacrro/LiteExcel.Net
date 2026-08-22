@@ -499,6 +499,29 @@ public static partial class XlsxReader
     [ThreadStatic]
     private static Internal.Encryption.FileSharingInfo? s_fileSharingHash;
 
+    /// <summary>
+    /// 从 workbook.xml 解析 definedNames → NamedRange 列表。
+    /// rawXml 应为 `<definedNames>` 元素内容字符串； null/空返回空列表。
+    /// </summary>
+    internal static List<NamedRange> ParseDefinedNames(string? rawXml)
+    {
+        var result = new List<NamedRange>();
+        if (string.IsNullOrEmpty(rawXml)) return result;
+        var doc = XElement.Parse(rawXml);
+        var ns = doc.GetDefaultNamespace();
+        foreach (var el in doc.Elements(ns + "definedName"))
+        {
+            result.Add(new NamedRange
+            {
+                Name = el.Attribute("name")?.Value ?? "",
+                Reference = el.Value.Trim(),
+                LocalSheetId = int.TryParse(el.Attribute("localSheetId")?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var lid)
+                    ? lid : -1,
+            });
+        }
+        return result;
+    }
+
     // P0-6: workbook.xml 中 bookViews / definedNames 的原始 XML 快照
     [ThreadStatic]
     private static string? s_bookViewsXml;

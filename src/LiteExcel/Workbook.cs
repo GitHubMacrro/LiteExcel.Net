@@ -51,6 +51,9 @@ public sealed class Workbook
     /// <summary>文件级安全状态（打开密码 / 修改密码 / 只读与保存权限） </summary>
     public WorkbookSecurity Security { get; }
 
+    /// <summary>命名区域（definedNames，全局 + sheet-local）。读取打开文件时自动填充。 </summary>
+    public List<NamedRange> Names { get; } = new();
+
     /// <summary>打开时捕获的原 fileSharing（修改密码哈希），保存时透传保留。用户显式设置新修改密码时失效 </summary>
     internal Internal.Encryption.FileSharingInfo? FileSharingToPreserve { get; set; }
 

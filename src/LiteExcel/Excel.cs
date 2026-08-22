@@ -143,10 +143,12 @@ public static class Excel
             var props = XlsxReader.ReadProperties(zip);
             preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
             preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot; // ReadWorkbook 刚捕获
-            // P0-6: 命名区域与窗口视图原样回写
+            // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
             preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
             preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
             wb = Workbook.FromSheetData(sheets, props, format, path);
+            foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
+                wb.Names.Add(nr);
             if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
                 wb.VbaProjectBytes = vbaBytes;
             wb.WorkbookCodeName = preserved.WorkbookCodeName;
@@ -265,10 +267,12 @@ public static class Excel
                 var propsD = XlsxReader.ReadProperties(zipD);
                 preserved = OoxmlPreservedParts.Capture(zipD, sheetsD.Count);
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
-                // P0-6: 命名区域与窗口视图原样回写
+                // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
                 preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
                 preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheetsD, propsD, format, null);
+                foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
+                    wb.Names.Add(nr);
                 if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
                     wb.VbaProjectBytes = vbaBytes;
                 wb.WorkbookCodeName = preserved.WorkbookCodeName;
@@ -283,10 +287,12 @@ public static class Excel
                 var props = XlsxReader.ReadProperties(zip);
                 preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
-                // P0-6: 命名区域与窗口视图原样回写
+                // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
                 preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
                 preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheets, props, format, null);
+                foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
+                    wb.Names.Add(nr);
                 if (preserved.Parts.TryGetValue("xl/vbaProject.bin", out var vbaBytes))
                     wb.VbaProjectBytes = vbaBytes;
                 wb.WorkbookCodeName = preserved.WorkbookCodeName;
