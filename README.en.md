@@ -6,7 +6,7 @@
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.4.2**
+A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.4.3**
 
 > [中文 README](README.zh-CN.md)
 

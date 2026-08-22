@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.4.3] - 2026-08-22
+
+### Added
+
+- **CSV 分隔符选项**：`ExcelReadOptions.Separator` / `ExcelWriteOptions.Separator`（char?）。逗号 / 分号 / Tab 均可读写。
+  - 读取默认 **null → 自动探测**：统计首段内容引号外的 `,`、`;`、Tab 频率取最多；三者均未出现回退逗号。显式指定则始终使用。
+  - 写出默认 **null → 逗号**（与历史一致，零破坏）；含分隔符的字段自动引号包裹。
+- **浮动图片读回**（xlsx/xlsm）：打开含 `oneCellAnchor`/`twoCellAnchor` 图片的工作簿，`Worksheet.Images` 自动回填 `WorksheetImage`（Row/Column/Placement=Floating/Name/AltText/Anchor/MoveMode/Data）。
+  - 读回保持：img 字节往返、锚点位置、图片描述；写回不清除既有图片。
+  - InCell richData 图片读回将随 2.4.4 一起提供。
+- **条件格式**（xlsx/xlsm）：支持 `cellIs` / `expression` / `colorScale` / `dataBar` 四类规则的读写；`SheetData.ConditionalFormats` / `Worksheet.ConditionalFormats` 承载；xls/xlsb/csv 按降级回调上报。
+  - `ConditionalFormat`（Sqref/Type/Formula/Formula2/Operator/Style/ColorScale/DataBar/Priority）
+  - `ColorScaleInfo`（低/中高三色）
+  - `DataBarInfo`（颜色/是否显示值/长度范围）
+
+### Notes
+
+- 本版为 P1 全部并入（CSV 分隔符 + 图片读回 + 条件格式四类）。
+- 全量 **486 测试通过**，net48 + net8.0 构建干净。
+
 ## [2.4.2] - 2026-08-21
 
 ### Added

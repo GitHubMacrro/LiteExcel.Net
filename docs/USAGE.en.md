@@ -658,6 +658,21 @@ catch (InvalidSheetNameException ex)
 
 ---
 
+### CSV Write Separator (2.4.3+)
+
+CSV output uses comma by default. To switch to semicolon (common in Chinese-locale Excel) or Tab:
+
+```csharp
+Excel.Write("out.csv", wb, new ExcelWriteOptions { Separator = ';' });
+```
+
+The setting takes effect for that write only.
+
+> CSV supports only configurable separators. Other formats ignore this.
+> Other Excel-only capabilities (comments, merges, filters, images, styles, etc.) are reported via the degradation callback. See [§25 Capability Degradation Callback](#25-capability-degradation-callback-ondegradation-242).
+
+---
+
 ## 7. Styling
 
 ### Style Priority (Override)
@@ -1100,7 +1115,25 @@ ws1.AddImage(logoData, row: 1, column: 1, widthPx: 100, heightPx: 50);
 ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
 ```
 
-> Images are only supported in xlsx/xlsm format and are **write-only** (opening a file does not fill `Images`; reading images is out of scope for 2.4.0). xls/xlsb/csv do not support images. InCell images display as `#VALUE!` in Excel (consistent with natively produced Excel samples).
+> Images are only supported in xlsx/xlsm format. xls/xlsb/csv do not support images. InCell images display as `#VALUE!` in Excel (consistent with natively produced Excel samples).
+> Reading: **Floating images support read-back** (2.4.3+; opening xlsx/xlsm now fills `Images`). InCell image read-back will follow in a later version.
+
+### Image Read-Back (2.4.3+)
+
+After opening an xlsx/xlsm that contains floating images, `Worksheet.Images` is populated:
+
+```csharp
+var wb = Excel.Open("hasImage.xlsx");
+foreach (var img in wb.Worksheets[0].Images)
+{
+    Console.WriteLine($"pos: {img.Row},{img.Column}  placement: {img.Placement}  size: {img.Anchor?.WidthPixels}x{img.Anchor?.HeightPixels}");
+    Console.WriteLine($"altText: {img.AltText}  name: {img.Name}  bytes: {img.Data.Length}");
+}
+```
+
+Supported fields: Row / Column (1-based), Placement (Floating only for now), Name, AltText, Anchor (TopLeftCell / offsets / size / MoveMode), Extension (png/jpg/gif/bmp auto), Data (bytes).
+
+InCell image read-back is scheduled for a later version. Existing images are not removed on write-back.
 
 ### Image Anchor and Move Mode (2.4.1+)
 
@@ -1482,7 +1515,76 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 25. Capability Degradation Callback (OnDegradation) (2.4.2+)
+## 25. Conditional Formatting (2.4.3+)
+
+Supports four rule types: cell comparison, expression, color scale, and data bar.
+
+### Cell Comparison
+
+```csharp
+var ws = wb.Worksheets[0];
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.CellIs,
+    Sqref = "B2:B100",
+    Operator = ConditionalOperator.GreaterThan,
+    Formula = "60",
+    Style = new CellStyle { FontColor = "#FF0000" }, // red warning
+});
+```
+
+### Expression (Formula)
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.Expression,
+    Sqref = "A2:E100",
+    Formula = "MOD(ROW(),2)=0",
+    Style = new CellStyle { FillColor = "#F2F2F2" },
+});
+```
+
+### Color Scale (2–3 colors)
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.ColorScale,
+    Sqref = "D2:D100",
+    ColorScale = new ColorScaleInfo
+    {
+        LowColor = "#FF0000",
+        MidColor = "#FFFF00",
+        HighColor = "#00FF00",
+    },
+});
+```
+
+### Data Bar
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.DataBar,
+    Sqref = "E2:E100",
+    DataBar = new DataBarInfo
+    {
+        Color = "#63C384",
+        ShowValue = true,
+        MinLengthPercent = 0,
+        MaxLengthPercent = 100,
+    },
+});
+```
+
+### Reading
+
+Opening an xlsx/xlsm file with conditional formats now populates `Worksheet.ConditionalFormats`. **xls/xlsb/csv do not support conditional formatting** — writes will report degradations via [§26 Capability Degradation Callback](#26-capability-degradation-callback-ondegradation-242). Additional rule types (`containsText`, `top10`, etc.) will follow in later versions.
+
+---
+
+## 26. Capability Degradation Callback (OnDegradation) (2.4.2+)
 
 When saving to a format that does not support a capability (xls/xlsb/csv), those capabilities are silently dropped by default. Register the callback to receive a per-item list, so nothing is lost in silence.
 

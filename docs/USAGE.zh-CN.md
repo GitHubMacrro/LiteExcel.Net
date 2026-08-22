@@ -658,6 +658,21 @@ catch (InvalidSheetNameException ex)
 
 ---
 
+### CSV 写出分隔符（2.4.3+）
+
+默认 CSV 写出使用逗号分隔。切换到分号或 Tab（国内中文 Excel 常见分号）：
+
+```csharp
+Excel.Write("out.csv", wb, new ExcelWriteOptions { Separator = ';' });
+```
+
+指定后在该工作簿生命周期内永久生效（若次存仍如需保持同一选项，需在同一次 `Excel.Write` 传参）。
+
+> 仅 CSV 支持自定义分隔符。其他格式忽略该项。
+> 其他 Excel 专有能力（批注/合并/筛选/图片/样式等）在 CSV 写出会被降级上报，见 [§25 能力降级回调](#25-capability-degradation-callback-ondegradation-242)。
+
+---
+
 ## 7. 样式
 
 ### 样式优先级（覆盖式）
@@ -1262,7 +1277,25 @@ ws1.AddImage(logoData, row: 1, column: 1, widthPx: 100, heightPx: 50);
 ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
 ```
 
-> 图片仅支持 xlsx/xlsm 格式，且仅支持**写回**（打开文件不会回填 `Images`，图片读取不在 2.4.0 范围）。xls/xlsb/csv 不支持图片。InCell 嵌入图片在 Excel 中单元格显示为 `#VALUE!`（与 Excel 原生真实样本一致）。
+> 图片仅支持 xlsx/xlsm 格式。xls/xlsb/csv 不支持图片。InCell 嵌入图片在 Excel 中单元格显示为 `#VALUE!`（与 Excel 原生真实样本一致）。
+> 读取：**浮动图片支持读回**（2.4.3+，xlsx/xlsm 打开后 `Images` 自动填充）；InCell 图片读回将在后续版本提供。
+
+### 图片读回（2.4.3+）
+
+打开含浮动图片的 xlsx/xlsm 后，`Worksheet.Images` 已回填：
+
+```csharp
+var wb = Excel.Open("hasImage.xlsx");
+foreach (var img in wb.Worksheets[0].Images)
+{
+    Console.WriteLine($"位置: {img.Row},{img.Column}  类型: {img.Placement}  尺寸: {img.Anchor?.WidthPixels}x{img.Anchor?.HeightPixels}");
+    Console.WriteLine($"altText: {img.AltText}  name: {img.Name}  bytes: {img.Data.Length}");
+}
+```
+
+支持字段：Row / Column（1-based）、Placement（目前仅读回 Floating）、Name、AltText、Anchor（TopLeftCell/偏移/尺寸/MoveMode）、Extension（png/jpg/gif/bmp 自动）、Data（byte[]）。
+
+InCell 图片读回后续版本（2.4.4）。写回保持原能力不清除已有图片。
 
 ### 图片锚点与移动方式（2.4.1+）
 
@@ -1839,7 +1872,76 @@ catch (InvalidSheetNameException ex)
 
 ---
 
-## 25. 能力降级回调（OnDegradation）（2.4.2+）
+## 25. 条件格式（2.4.3+）
+
+条件格式支持四类：单元格比较 / 公式 / 色阶 / 数据条。
+
+### 单元格比较
+
+```csharp
+var ws = wb.Worksheets[0];
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.CellIs,
+    Sqref = "B2:B100",
+    Operator = ConditionalOperator.GreaterThan,
+    Formula = "60",
+    Style = new CellStyle { FontColor = "#FF0000" }, // 预警红
+});
+```
+
+### 公式条件
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.Expression,
+    Sqref = "A2:E100",
+    Formula = "MOD(ROW(),2)=0",
+    Style = new CellStyle { FillColor = "#F2F2F2" },
+});
+```
+
+### 色阶（低/中/高 2~3 色）
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.ColorScale,
+    Sqref = "D2:D100",
+    ColorScale = new ColorScaleInfo
+    {
+        LowColor = "#FF0000",
+        MidColor = "#FFFF00",
+        HighColor = "#00FF00",
+    },
+});
+```
+
+### 数据条
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.DataBar,
+    Sqref = "E2:E100",
+    DataBar = new DataBarInfo
+    {
+        Color = "#63C384",
+        ShowValue = true,
+        MinLengthPercent = 0,
+        MaxLengthPercent = 100,
+    },
+});
+```
+
+### 读取
+
+xlsx/xlsm 打开含条件格式的工作簿，`Worksheet.ConditionalFormats` 已回填：**xls/xlsb/csv 不支持条件格式**，写出那会按 [§25 能力降级回调](#25-capability-degradation-callback-ondegradation-242) 上报。晊续版本将补齐 `containsText`/`top10` 等更多类型。
+
+---
+
+## 26. 能力降级回调（OnDegradation）（2.4.2+）
 
 保存到不支持某能力的格式时（如 xls/xlsb/csv），默认会静默丢弃这些能力。开启回调可直接收到被丢弃项的清单，不再沉默。
 
@@ -1884,7 +1986,7 @@ Excel.Write("out.csv", wb, options);
 
 ---
 
-## 26. 完整 API 索引
+## 27. 完整 API 索引
 
 ### XlsxReader
 

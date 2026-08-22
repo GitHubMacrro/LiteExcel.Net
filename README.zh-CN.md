@@ -6,7 +6,7 @@
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.2**
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.3**
 
 > [English README](README.en.md)
 
