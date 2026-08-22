@@ -15,10 +15,14 @@
   - `ColorScaleInfo`（低/中高三色）
   - `DataBarInfo`（颜色/是否显示值/长度范围）
 
+### Fixed
+
+- **条件格式 cfvo 类型非法导致 Excel 修复提示**：dataBar 的 `<cfvo type="auto">` 不是 `ST_CfvoType` 合法值，colorScale 三色误用 `num 0/1/2` 阈值，Excel 打开会提示「已修复的部件 / XML 错误 / sheet1.xml」并丢弃规则。现改为 schema 合法的 `min` / `max`（dataBar）与 `min` / `percent 50` / `max`（三色色阶）。
+
 ### Notes
 
 - 本版为 P1 全部并入（CSV 分隔符 + 图片读回 + 条件格式四类）。
-- 全量 **486 测试通过**，net48 + net8.0 构建干净。
+- 全量 **487 测试通过**，net48 + net8.0 构建干净。
 
 ## [2.4.2] - 2026-08-21
 
