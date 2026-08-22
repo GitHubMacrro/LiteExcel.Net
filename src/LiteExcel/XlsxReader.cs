@@ -198,7 +198,73 @@ public static partial class XlsxReader
         {
             result.Add(ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader: true));
         }
+        ReadInCellImages(zip, sheets, result);
         return result;
+    }
+
+    /// <summary>
+    /// 读取所有工作表的 InCell（richData）图片。
+    /// vm 索引为工作簿级全局连续编号（写侧 InCellVmBySheet 按 sheet 顺序累加）；
+    /// richValueRel.xml.rels 第 i 条 image 关系即对应 vm = i+1 的图片 media。
+    /// </summary>
+    private static void ReadInCellImages(ZipArchive zip, List<SheetInfo> infos, List<SheetData> sheets)
+    {
+        var relsEntry = zip.GetEntry("xl/richData/_rels/richValueRel.xml.rels");
+        if (relsEntry is null) return;
+
+        // 按顺序收集 image 关系：mediaByVm[vm-1] = media 包路径
+        var mediaByVm = new List<string>();
+        using (var r = XmlReader.Create(relsEntry.Open(), XmlSettings))
+        {
+            while (r.Read())
+            {
+                if (r.NodeType != XmlNodeType.Element || r.LocalName != "Relationship") continue;
+                var type = r.GetAttribute("Type") ?? "";
+                if (!type.EndsWith("/image", StringComparison.OrdinalIgnoreCase)) continue;
+                var target = r.GetAttribute("Target") ?? "";
+                if (target.Length == 0) continue;
+                mediaByVm.Add(ResolveRelativePath("xl/richData/richValueRel.xml", target));
+            }
+        }
+        if (mediaByVm.Count == 0) return;
+
+        for (int s = 0; s < infos.Count; s++)
+        {
+            var sheetEntry = zip.GetEntry(infos[s].Path);
+            if (sheetEntry is null) continue;
+
+            using var reader = XmlReader.Create(sheetEntry.Open(), XmlSettings);
+            while (reader.Read())
+            {
+                if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "c") continue;
+                var vmAttr = reader.GetAttribute("vm");
+                if (vmAttr is null || !int.TryParse(vmAttr, out int vm) || vm < 1 || vm > mediaByVm.Count) continue;
+                var refAttr = reader.GetAttribute("r");
+                if (refAttr is null) continue;
+                var (row0, col0) = CellRef.Parse(refAttr);
+
+                var mediaEntry = zip.GetEntry(mediaByVm[vm - 1]);
+                if (mediaEntry is null) continue;
+
+                byte[] data;
+                using (var ms = new MemoryStream())
+                {
+                    using var me = mediaEntry.Open();
+                    me.CopyTo(ms);
+                    data = ms.ToArray();
+                }
+
+                sheets[s].Images ??= new List<WorksheetImage>();
+                sheets[s].Images.Add(new WorksheetImage
+                {
+                    Data = data,
+                    Extension = System.IO.Path.GetExtension(mediaByVm[vm - 1]).TrimStart('.'),
+                    Row = row0 + 1,
+                    Column = col0 + 1,
+                    Placement = ImagePlacement.InCell,
+                });
+            }
+        }
     }
 
     /// <summary>流式读取，逐行回调，不驻留内存 </summary>
@@ -1410,6 +1476,98 @@ public static partial class XlsxReader
                 {
                     cf.Type = ConditionalFormatType.DataBar;
                     ReadDataBar(sub, cf);
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                // ── 2.4.4 长尾类型 ──
+                case "containsText":
+                case "beginsWith":
+                case "endsWith":
+                case "notContainsText":
+                {
+                    cf.Type = typeAttr switch
+                    {
+                        "beginsWith" => ConditionalFormatType.BeginsWith,
+                        "endsWith" => ConditionalFormatType.EndsWith,
+                        "notContainsText" => ConditionalFormatType.NotContainsText,
+                        _ => ConditionalFormatType.ContainsText,
+                    };
+                    cf.Text = sub.GetAttribute("text");
+                    ReadCfFormulas(sub, out var tf, out _);
+                    cf.Formula = tf;
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "lengthIs":
+                {
+                    cf.Type = ConditionalFormatType.TextLength;
+                    cf.Operator = sub.GetAttribute("operator") switch
+                    {
+                        "lessThan" => ConditionalOperator.LessThan,
+                        "lessThanOrEqual" => ConditionalOperator.LessThanOrEqual,
+                        "equal" => ConditionalOperator.Equal,
+                        "notEqual" => ConditionalOperator.NotEqual,
+                        "greaterThanOrEqual" => ConditionalOperator.GreaterThanOrEqual,
+                        "between" => ConditionalOperator.Between,
+                        "notBetween" => ConditionalOperator.NotBetween,
+                        _ => ConditionalOperator.GreaterThan,
+                    };
+                    ReadCfFormulas(sub, out var lf1, out var lf2);
+                    cf.Formula = lf1; cf.Formula2 = lf2;
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "timePeriod":
+                {
+                    cf.Type = ConditionalFormatType.TimePeriod;
+                    cf.TimePeriod = sub.GetAttribute("timePeriod");
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "containsBlanks":
+                case "notContainsBlanks":
+                case "containsErrors":
+                case "notContainsErrors":
+                case "uniqueValues":
+                case "duplicateValues":
+                {
+                    cf.Type = typeAttr switch
+                    {
+                        "notContainsBlanks" => ConditionalFormatType.NoBlanks,
+                        "containsErrors" => ConditionalFormatType.Errors,
+                        "notContainsErrors" => ConditionalFormatType.NoErrors,
+                        "uniqueValues" => ConditionalFormatType.Unique,
+                        "duplicateValues" => ConditionalFormatType.Duplicate,
+                        _ => ConditionalFormatType.Blanks,
+                    };
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "top10":
+                {
+                    cf.Type = ConditionalFormatType.Top10;
+                    var rankAttr = sub.GetAttribute("rank");
+                    if (rankAttr is not null)
+                    {
+                        if (int.TryParse(rankAttr.TrimEnd('%'), out int rank)) cf.Rank = rank;
+                        cf.Percent = rankAttr.EndsWith("%", StringComparison.Ordinal);
+                    }
+                    var pctAttr = sub.GetAttribute("percent");
+                    if (pctAttr is not null) cf.Percent = pctAttr == "1";
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "aboveAverage":
+                case "belowAverage":
+                {
+                    var ab = sub.GetAttribute("aboveAverage");
+                    cf.Type = ab == "0" ? ConditionalFormatType.BelowAverage : ConditionalFormatType.AboveAverage;
                     if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
                         cf.Style = styles.Dxfs[dxfId.Value].Clone();
                     break;

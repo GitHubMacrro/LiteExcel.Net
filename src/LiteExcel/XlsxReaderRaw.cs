@@ -32,6 +32,7 @@ public static partial class XlsxReader
         var result = new List<SheetData>(sheets.Count);
         foreach (var info in sheets)
             result.Add(ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader: false));
+        ReadInCellImages(zip, sheets, result);
         return result;
     }
 }

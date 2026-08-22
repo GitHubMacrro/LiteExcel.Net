@@ -1,7 +1,8 @@
 namespace LiteExcel;
 
 /// <summary>
-/// 条件格式规则类型（2.4.3 仅支持 cellIs / expression / colorScale / dataBar）。
+/// 条件格式规则类型（2.4.3 支持 cellIs / expression / colorScale / dataBar；
+/// 2.4.4 扩展文本/空值/错误/重复/前 N/平均线类）。
 /// </summary>
 public enum ConditionalFormatType
 {
@@ -16,6 +17,51 @@ public enum ConditionalFormatType
 
     /// <summary>数据条（单元格内条形图） </summary>
     DataBar,
+
+    /// <summary>包含指定文本（containsText；写 <cfRule type="containsText" text="…"><formula>NOT(ISERROR(SEARCH("…",ref)))</formula>） </summary>
+    ContainsText,
+
+    /// <summary>以指定文本开头 </summary>
+    BeginsWith,
+
+    /// <summary>以指定文本结尾 </summary>
+    EndsWith,
+
+    /// <summary>不包含指定文本 </summary>
+    NotContainsText,
+
+    /// <summary>文本长度比较（lengthIs；operator + formula 为长度阈值） </summary>
+    TextLength,
+
+    /// <summary>时间周期（yesterday/today/tomorrow/lastWeek/thisMonth 等） </summary>
+    TimePeriod,
+
+    /// <summary>空单元格（blanks） </summary>
+    Blanks,
+
+    /// <summary>非空单元格（noBlanks） </summary>
+    NoBlanks,
+
+    /// <summary>错误单元格（errors） </summary>
+    Errors,
+
+    /// <summary>非错误单元格（noErrors） </summary>
+    NoErrors,
+
+    /// <summary>唯一值（unique） </summary>
+    Unique,
+
+    /// <summary>重复值（duplicate） </summary>
+    Duplicate,
+
+    /// <summary>前 N 项 / 前 N% （top10；TopBottomInfo 控制 rank/percent） </summary>
+    Top10,
+
+    /// <summary>高于平均（aboveAverage） </summary>
+    AboveAverage,
+
+    /// <summary>低于平均（belowAverage） </summary>
+    BelowAverage,
 }
 
 /// <summary>
@@ -99,6 +145,18 @@ public sealed class ConditionalFormat
 
     /// <summary>DataBar 专用参数 </summary>
     public DataBarInfo? DataBar { get; set; }
+
+    /// <summary>文本条件（ContainsText/BeginsWith/EndsWith/NotContainsText 的目标文本） </summary>
+    public string? Text { get; set; }
+
+    /// <summary>TimePeriod 条件的时间段值（yesterday/today/tomorrow/lastWeek/thisWeek/nextWeek/lastMonth/thisMonth/nextMonth） </summary>
+    public string? TimePeriod { get; set; }
+
+    /// <summary>Top10 的 N（默认 10）；AboveAverage/BelowAverage 忽略 </summary>
+    public int Rank { get; set; } = 10;
+
+    /// <summary>Top10 是否按百分比（true = 前 N%；默认 false = 前 N 项） </summary>
+    public bool Percent { get; set; }
 
     /// <summary>优先级（各工作区域 cn 唯一；默认按注册顺序自动编号） </summary>
     public int Priority { get; set; }

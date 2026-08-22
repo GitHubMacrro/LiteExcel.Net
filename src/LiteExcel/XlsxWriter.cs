@@ -660,6 +660,68 @@ public static partial class XlsxWriter
                         sb.Append("</cfRule>");
                         break;
                     }
+                    // ── 2.4.4 长尾类型（文本/时间周期/空值/错误/唯一重复/前N/平均线） ──
+                    case ConditionalFormatType.ContainsText:
+                    case ConditionalFormatType.BeginsWith:
+                    case ConditionalFormatType.EndsWith:
+                    case ConditionalFormatType.NotContainsText:
+                    {
+                        var text = XmlEscape(cf.Text ?? "");
+                        sb.Append($"<cfRule type=\"{CfTypeToExcel(cf.Type)}\"{dxfAttr} priority=\"{prio}\" text=\"{text}\">");
+                        AppendCfFormula(sb, TextCfFormula(cf));
+                        sb.Append("</cfRule>");
+                        break;
+                    }
+                    case ConditionalFormatType.TextLength:
+                    {
+                        sb.Append($"<cfRule type=\"lengthIs\"{dxfAttr} priority=\"{prio}\" operator=\"{OperatorToString(cf.Operator)}\">");
+                        AppendCfFormula(sb, cf.Formula);
+                        if (cf.Operator is ConditionalOperator.Between or ConditionalOperator.NotBetween)
+                            AppendCfFormula(sb, cf.Formula2);
+                        sb.Append("</cfRule>");
+                        break;
+                    }
+                    case ConditionalFormatType.TimePeriod:
+                    {
+                        string tp = string.IsNullOrEmpty(cf.TimePeriod) ? "thisMonth" : cf.TimePeriod;
+                        sb.Append($"<cfRule type=\"timePeriod\"{dxfAttr} priority=\"{prio}\" timePeriod=\"{tp}\">");
+                        AppendCfFormula(sb, "TODAY()");
+                        sb.Append("</cfRule>");
+                        break;
+                    }
+                    case ConditionalFormatType.Blanks:
+                    case ConditionalFormatType.NoBlanks:
+                    case ConditionalFormatType.Errors:
+                    case ConditionalFormatType.NoErrors:
+                    case ConditionalFormatType.Unique:
+                    case ConditionalFormatType.Duplicate:
+                    {
+                        // ST_CfType 合法值：uniqueValues/duplicateValues/containsBlanks/notContainsBlanks/containsErrors/notContainsErrors
+                        string excelType = cf.Type switch
+                        {
+                            ConditionalFormatType.Blanks => "containsBlanks",
+                            ConditionalFormatType.NoBlanks => "notContainsBlanks",
+                            ConditionalFormatType.Errors => "containsErrors",
+                            ConditionalFormatType.NoErrors => "notContainsErrors",
+                            ConditionalFormatType.Unique => "uniqueValues",
+                            _ => "duplicateValues",
+                        };
+                        sb.Append($"<cfRule type=\"{excelType}\"{dxfAttr} priority=\"{prio}\"/>");
+                        break;
+                    }
+                    case ConditionalFormatType.Top10:
+                    {
+                        sb.Append($"<cfRule type=\"top10\"{dxfAttr} priority=\"{prio}\" rank=\"{cf.Rank}\" percent=\"{(cf.Percent ? 1 : 0)}\"/>");
+                        break;
+                    }
+                    case ConditionalFormatType.AboveAverage:
+                    case ConditionalFormatType.BelowAverage:
+                    {
+                        // 合格分两种：type="aboveAverage" + aboveAverage="1|0"（无 belowAverage 枚举）
+                        string excelType = "aboveAverage";
+                        sb.Append($"<cfRule type=\"{excelType}\"{dxfAttr} priority=\"{prio}\" aboveAverage=\"{(cf.Type == ConditionalFormatType.AboveAverage ? 1 : 0)}\"/>");
+                        break;
+                    }
                 }
                 sb.Append("</conditionalFormatting>");
             }
@@ -770,6 +832,42 @@ public static partial class XlsxWriter
     {
         if (color.StartsWith("#")) return color.Substring(1).ToUpperInvariant();
         return color.ToUpperInvariant();
+    }
+
+    /// <summary>长尾文本类条件格式的 cfRule type 属性值 </summary>
+    private static string CfTypeToExcel(ConditionalFormatType t) => t switch
+    {
+        ConditionalFormatType.ContainsText => "containsText",
+        ConditionalFormatType.BeginsWith => "beginsWith",
+        ConditionalFormatType.EndsWith => "endsWith",
+        ConditionalFormatType.NotContainsText => "notContainsText",
+        _ => "containsText",
+    };
+
+    /// <summary>长尾文本类条件格式的 <formula> 内容（Excel 约定，ref 指范围左上角） </summary>
+    private static string TextCfFormula(ConditionalFormat cf)
+    {
+        var text = XmlEscape(cf.Text ?? "");
+        // 若用户显式提供 Formula 则直接用；否则按类型生成标准 Excel 公式
+        if (!string.IsNullOrEmpty(cf.Formula)) return cf.Formula;
+        string refCell = FirstCellOfSqref(cf.Sqref);
+        return cf.Type switch
+        {
+            ConditionalFormatType.ContainsText => $"NOT(ISERROR(SEARCH(\"{text}\",{refCell})))",
+            ConditionalFormatType.BeginsWith => $"LEFT({refCell},LEN(\"{text}\"))=\"{text}\"",
+            ConditionalFormatType.EndsWith => $"RIGHT({refCell},LEN(\"{text}\"))=\"{text}\"",
+            ConditionalFormatType.NotContainsText => $"ISERROR(SEARCH(\"{text}\",{refCell}))",
+            _ => $"NOT(ISERROR(SEARCH(\"{text}\",{refCell})))",
+        };
+    }
+
+    /// <summary>从 sqref 取第一个单元格（如 "A1:A10" → "A1"），无则回退 "A1" </summary>
+    private static string FirstCellOfSqref(string sqref)
+    {
+        var first = sqref.Split(' ', ';')[0];
+        var colon = first.IndexOf(':');
+        if (colon > 0) first = first.Substring(0, colon);
+        return string.IsNullOrEmpty(first) ? "A1" : first;
     }
 
     private static void WriteTextCell(StringBuilder sb, int row1Based, int col, string text,

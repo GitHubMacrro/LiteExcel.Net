@@ -904,6 +904,36 @@ Demo22_ConditionalFormatting(outDir);
             DataBar = new DataBarInfo { Color = "#63C384" },
         });
 
+        // ── 2.4.4 长尾类型 ──
+        ws.SetValue("B2", "urgent");
+        ws.SetValue("B3", "normal");
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.ContainsText,
+            Sqref = "B2:B10",
+            Text = "urgent",
+            Style = new CellStyle { FontColor = "#FF0000" },
+        });
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.Duplicate,
+            Sqref = "A2:A10",
+            Style = new CellStyle { FillColor = "#FFF2CC" },
+        });
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.Top10,
+            Sqref = "A2:A10",
+            Rank = 3,
+            Style = new CellStyle { Bold = true },
+        });
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.AboveAverage,
+            Sqref = "A2:A10",
+            Style = new CellStyle { FontColor = "#006100" },
+        });
+
         var file = Path.Combine(dir, "22_conditional.xlsx");
         wb.SaveAs(file);
         Console.WriteLine($"  Written: {file}");
