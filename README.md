@@ -63,7 +63,10 @@ var read = XlsxReader.Read("output2.xlsx", 0);
 - File-level security: open password (Agile Encryption) + modify password (write protection) on xlsx/xlsm/xlsb, via `Workbook.Security` (`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`) / 文件级安全：打开密码（Agile 加密）+ 修改密码（写保护），支持 xlsx/xlsm/xlsb
 - Hyperlinks: read + write on all 4 formats (xlsx/xlsm/xlsb/xls; external URLs + internal `#Sheet1!A1` jumps via `Cell.Hyperlink`) / 超链接：xlsx/xlsm/xlsb/xls 四格式读写（外部链接 + 内部跳转）
 - Freeze panes: `FreezeRows` / `FreezeColumns` on xlsx/xlsb/xls (arbitrary rows/columns), `FreezeHeader` compatible / 冻结窗格：xlsx/xlsb/xls 任意行列冻结，`FreezeHeader` 兼容
-- Images: write-only on xlsx/xlsm — Floating drawing + InCell richData, with anchor/move-mode/AltText (`ws.AddImage`, `ImageAnchor`, `ImageMoveMode`) / 图片：仅写回 xlsx/xlsm（浮动图 + 单元格内嵌，支持锚点/移动方式/AltText）
+- Images: floating image read-back (2.4.3+) + write Floating/InCell on xlsx/xlsm, with anchor/move-mode/AltText (`ws.AddImage`, `ImageAnchor`, `ImageMoveMode`, `Worksheet.Images`) / 图片：xlsx/xlsm 浮动图片读回（2.4.3+）与浮动/内嵌写回（锚点/移动方式/AltText）
+- Conditional formatting (2.4.3+): `cellIs` / `expression` / `colorScale` / `dataBar` read+write on xlsx/xlsm (`Worksheet.ConditionalFormats`) / 条件格式（2.4.3+）：cellIs / expression / colorScale / dataBar 四类 xlsx/xlsm 读写
+- CSV separator options + auto-detect (2.4.3+): `ExcelReadOptions.Separator` / `ExcelWriteOptions.Separator` (comma/semicolon/tab) / CSV 分隔符选项与自动探测（逗号/分号/Tab）
+- Capability degradation reporting (2.4.2+): `ExcelWriteOptions.OnDegradation` for explicit drops on xls/xlsb/csv / 能力降级回调：写出到 xls/xlsb/csv 时的显式降级上报
 
 ## Docs / 文档
 

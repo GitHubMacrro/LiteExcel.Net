@@ -32,7 +32,9 @@
 22. [File-Level Security (Open Password / Modify Password)](#22-file-level-security-open-password--modify-password)
 23. [Error Handling](#23-error-handling)
 24. [AOT Compatibility](#24-aot-compatibility)
-25. [Full API Reference](#25-full-api-reference)
+25. [Conditional Formatting (2.4.3+)](#25-conditional-formatting-243)
+26. [Capability Degradation Callback (OnDegradation) (2.4.2+)](#26-capability-degradation-callback-ondegradation-242)
+27. [Full API Reference](#27-full-api-reference)
 
 ---
 
