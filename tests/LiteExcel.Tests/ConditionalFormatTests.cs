@@ -153,4 +153,43 @@ public class ConditionalFormatTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Fact]
+    public void SheetXml_NoInvalidCfvoTypes()
+    {
+        // 回归保护：Excel 对 ST_CfvoType 严格校验，type="auto"/"num 0/1/2" 会触发修复提示
+        var file = GetTempFile();
+        try
+        {
+            var wb = Excel.Create();
+            var ws = wb.Worksheets[0];
+            ws.ConditionalFormats.Add(new ConditionalFormat
+            {
+                Type = ConditionalFormatType.ColorScale,
+                Sqref = "A1:A10",
+                ColorScale = new ColorScaleInfo { LowColor = "#FF0000", MidColor = "#FFFF00", HighColor = "#00FF00" },
+            });
+            ws.ConditionalFormats.Add(new ConditionalFormat
+            {
+                Type = ConditionalFormatType.DataBar,
+                Sqref = "A1:A10",
+                DataBar = new DataBarInfo { Color = "#63C384" },
+            });
+            wb.SaveAs(file);
+
+            string sheetXml;
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(file))
+            using (var s = zip.GetEntry("xl/worksheets/sheet1.xml")!.Open())
+            using (var r = new System.IO.StreamReader(s))
+                sheetXml = r.ReadToEnd();
+
+            // dataBar cfvo 必须是 min/max
+            Assert.DoesNotContain("type=\"auto\"", sheetXml);
+            Assert.Contains("<cfvo type=\"min\"/>", sheetXml);
+            Assert.Contains("<cfvo type=\"max\"/>", sheetXml);
+            // 三色色阶：min / percent 50 / max
+            Assert.Contains("<cfvo type=\"percent\" val=\"50\"/>", sheetXml);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

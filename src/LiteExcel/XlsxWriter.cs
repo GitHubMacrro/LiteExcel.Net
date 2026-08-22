@@ -632,8 +632,9 @@ public static partial class XlsxWriter
                         var cs = cf.ColorScale ?? new ColorScaleInfo();
                         sb.Append($"<cfRule type=\"colorScale\" priority=\"{prio}\">");
                         sb.Append("<colorScale>");
+                        // cfvo 类型须为 ST_CfvoType 合法值：min/max/num/percent/percentile/formula
                         sb.Append(cs.MidColor is not null
-                            ? "<cfvo type=\"num\" val=\"0\"/><cfvo type=\"num\" val=\"1\"/><cfvo type=\"num\" val=\"2\"/>"
+                            ? "<cfvo type=\"min\"/><cfvo type=\"percent\" val=\"50\"/><cfvo type=\"max\"/>"
                             : "<cfvo type=\"min\"/><cfvo type=\"max\"/>");
                         if (cs.MidColor is null)
                         {
@@ -652,7 +653,8 @@ public static partial class XlsxWriter
                         var db = cf.DataBar ?? new DataBarInfo();
                         sb.Append($"<cfRule type=\"dataBar\" priority=\"{prio}\">");
                         sb.Append($"<dataBar minLength=\"{db.MinLengthPercent}\" maxLength=\"{db.MaxLengthPercent}\" showValue=\"{(db.ShowValue ? 1 : 0)}\">");
-                        sb.Append("<cfvo type=\"auto\" val=\"0\"/><cfvo type=\"auto\" val=\"0\"/>");
+                        // dataBar 的 cfvo 必须为 min/max（ST_CfvoType 无 "auto"，否则 Excel 报 XML 错误并丢弃规则）
+                        sb.Append("<cfvo type=\"min\"/><cfvo type=\"max\"/>");
                         sb.Append($"<color rgb=\"FF{NormalizeColorRgb(db.Color)}\"/>");
                         sb.Append("</dataBar>");
                         sb.Append("</cfRule>");
