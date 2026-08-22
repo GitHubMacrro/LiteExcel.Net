@@ -245,6 +245,8 @@ internal static class XlsbWriter
                 Report(DegradationCapability.Images, $"xlsb 不支持图片，工作表 '{sheet.SheetName}' 的图片已丢弃。");
             if (DegradationDetector.HasNonNumberFormatStyles(sheet))
                 Report(DegradationCapability.Styles, $"xlsb 仅支持数字格式，工作表 '{sheet.SheetName}' 的完整样式（字体/颜色/边框/对齐/换行）已降级。");
+            if (sheet.ConditionalFormats is { Count: > 0 })
+                Report(DegradationCapability.ConditionalFormatting, $"xlsb 不支持条件格式，工作表 '{sheet.SheetName}' 的条件格式已丢弃。");
         }
     }
 

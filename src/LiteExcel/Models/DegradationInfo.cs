@@ -52,6 +52,9 @@ public enum DegradationCapability
 
     /// <summary>InCell 图片（richData） </summary>
     RichData,
+
+    /// <summary>条件格式（条件格式规则 + dxf 样式） </summary>
+    ConditionalFormatting,
 }
 
 /// <summary>

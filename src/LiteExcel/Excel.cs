@@ -59,7 +59,7 @@ public static class Excel
                 break;
             case ExcelFormat.Csv:
             {
-                var csvSheet = CsvBackend.Read(path);
+                var csvSheet = CsvBackend.Read(path, options.Separator);
                 return Workbook.FromSheetData(new[] { csvSheet }, null, ExcelFormat.Csv, path);
             }
             case ExcelFormat.Xls:
@@ -185,7 +185,7 @@ public static class Excel
                 break;
             case ExcelFormat.Csv:
             {
-                var csvSheet = CsvBackend.Read(ms);
+                var csvSheet = CsvBackend.Read(ms, "Sheet1", options.Separator);
                 return FinishOpen(new[] { csvSheet }, null, ExcelFormat.Csv, null, options);
             }
             case ExcelFormat.Xls:
@@ -418,6 +418,8 @@ public static class Excel
         ApplyWriteOptions(workbook, options);
         // 批次 0：注入能力降级回调（默认 null，不注册则行为与历史一致）
         workbook.DegradationCallback = options.OnDegradation;
+        // 批次 P1-A：注入 CSV 写出分隔符（默认 null → 逗号）
+        workbook.WriteSeparator = options.Separator;
         workbook.SaveAs(path, format);
     }
 

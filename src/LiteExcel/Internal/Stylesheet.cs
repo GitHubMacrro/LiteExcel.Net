@@ -30,6 +30,10 @@ internal sealed class Stylesheet
     private readonly Dictionary<string, int> _numFmtIndex = new();
     private int _nextNumFmtId = 164;
 
+    // dxf dedup（条件格式样式，去重缓存）
+    private readonly List<CellStyle> _dxfs = new();
+    private readonly Dictionary<CellStyle, int> _dxfIndex = new();
+
     // cellXf dedup
     private readonly List<XfDef> _xfs = new();
     private readonly Dictionary<XfDef, int> _xfIndex = new();
@@ -58,6 +62,20 @@ internal sealed class Stylesheet
     }
 
     // -- Write: register styles --
+
+    /// <summary>注册条件格式样式（fontColor/fillColor/border/bold/italic 等），返回 dxfId（从 0 起） </summary>
+    public int GetOrCreateDxfId(CellStyle style)
+    {
+        if (style is null) return -1;
+        if (_dxfIndex.TryGetValue(style, out var id)) return id;
+        id = _dxfs.Count;
+        _dxfs.Add(style);
+        _dxfIndex[style] = id;
+        return id;
+    }
+
+    /// <summary>是否已注册 dxf 样式 </summary>
+    public bool HasDxfs => _dxfs.Count > 0;
 
     public int GetOrCreateNumFmt(string? format)
     {
@@ -299,6 +317,43 @@ internal sealed class Stylesheet
         sb.Append("</cellXfs>");
 
         sb.Append("<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>");
+
+        // dxfs：条件格式样式
+        if (_dxfs.Count > 0)
+        {
+            sb.Append($"<dxfs count=\"{_dxfs.Count}\">");
+            foreach (var d in _dxfs)
+            {
+                sb.Append("<dxf>");
+                bool anyFont = d.Bold || d.Italic || d.Underline || d.Strikeout
+                    || !string.IsNullOrEmpty(d.FontColor);
+                if (anyFont)
+                {
+                    sb.Append("<font>");
+                    if (d.Bold) sb.Append("<b/>");
+                    if (d.Italic) sb.Append("<i/>");
+                    if (d.Underline) sb.Append("<u/>");
+                    if (d.Strikeout) sb.Append("<strike/>");
+                    if (!string.IsNullOrEmpty(d.FontColor))
+                        sb.Append($"<color rgb=\"FF{NormalizeColor(d.FontColor)}\"/>");
+                    sb.Append("</font>");
+                }
+                if (!string.IsNullOrEmpty(d.FillColor))
+                    sb.Append($"<fill><patternFill><bgColor rgb=\"FF{NormalizeColor(d.FillColor)}\"/></patternFill></fill>");
+                if (d.Border is not null)
+                {
+                    sb.Append("<border>");
+                    sb.Append(d.Border.Left is not null ? $"<left style=\"{d.Border.Left.Style}\">" + (d.Border.Left.Color is not null ? $"<color rgb=\"FF{NormalizeColor(d.Border.Left.Color)}\"/>" : "") + "</left>" : "<left/>");
+                    sb.Append(d.Border.Right is not null ? $"<right style=\"{d.Border.Right.Style}\">" + (d.Border.Right.Color is not null ? $"<color rgb=\"FF{NormalizeColor(d.Border.Right.Color)}\"/>" : "") + "</right>" : "<right/>");
+                    sb.Append(d.Border.Top is not null ? $"<top style=\"{d.Border.Top.Style}\">" + (d.Border.Top.Color is not null ? $"<color rgb=\"FF{NormalizeColor(d.Border.Top.Color)}\"/>" : "") + "</top>" : "<top/>");
+                    sb.Append(d.Border.Bottom is not null ? $"<bottom style=\"{d.Border.Bottom.Style}\">" + (d.Border.Bottom.Color is not null ? $"<color rgb=\"FF{NormalizeColor(d.Border.Bottom.Color)}\"/>" : "") + "</bottom>" : "<bottom/>");
+                    sb.Append("</border>");
+                }
+                sb.Append("</dxf>");
+            }
+            sb.Append("</dxfs>");
+        }
+
         sb.Append("</styleSheet>");
         return sb.ToString();
     }
@@ -430,7 +485,55 @@ internal sealed class Stylesheet
             }
         }
 
+        // dxfs——条件格式样式（条件格式读回使用）
+        info.Dxfs = ParseDxfs(stylesDoc);
+
         return info;
+    }
+
+    /// <summary>解析 dxfs（条件格式样样子式）。 </summary>
+    internal static List<CellStyle> ParseDxfs(XElement? stylesDoc)
+    {
+        var list = new List<CellStyle>();
+        if (stylesDoc is null) return list;
+        var ns = stylesDoc.GetDefaultNamespace();
+        var dxfsEl = stylesDoc.Element(ns + "dxfs");
+        if (dxfsEl is null) return list;
+
+        foreach (var d in dxfsEl.Elements(ns + "dxf"))
+        {
+            var style = new CellStyle();
+
+            var font = d.Element(ns + "font");
+            if (font is not null)
+            {
+                style.Bold = font.Element(ns + "b") is not null;
+                style.Italic = font.Element(ns + "i") is not null;
+                style.Underline = font.Element(ns + "u") is not null;
+                style.Strikeout = font.Element(ns + "strike") is not null;
+                var fc = font.Element(ns + "color");
+                if (fc?.Attribute("rgb") is not null) style.FontColor = ColorFromRgb(fc.Attribute("rgb")?.Value);
+            }
+
+            var fill = d.Element(ns + "fill");
+            var bg = fill?.Element(ns + "patternFill")?.Element(ns + "bgColor");
+            if (bg?.Attribute("rgb") is { } bgRaw) style.FillColor = ColorFromRgb(bgRaw.Value);
+
+            var border = d.Element(ns + "border");
+            if (border is not null)
+            {
+                style.Border = new BorderStyle
+                {
+                    Top = ParseEdge(border.Element(ns + "top"), ns),
+                    Bottom = ParseEdge(border.Element(ns + "bottom"), ns),
+                    Left = ParseEdge(border.Element(ns + "left"), ns),
+                    Right = ParseEdge(border.Element(ns + "right"), ns),
+                };
+            }
+
+            list.Add(style);
+        }
+        return list;
     }
 
     private static BorderEdge? ParseEdge(XElement? el, XNamespace ns)
@@ -634,6 +737,8 @@ internal sealed class StylesheetInfo
     public List<string?> Fills = new();
     public List<BorderStyle> Borders = new();
     public List<XfInfo> CellXfs = new();
+    /// <summary>条件格式样式（dxfs，按 dxfId 索引） </summary>
+    public List<CellStyle> Dxfs = new();
 }
 
 internal sealed class XfInfo

@@ -30,6 +30,9 @@ Demo16_ProgressCallback(outDir);
 Demo17_PublicApi(outDir);
 Demo18_Security(outDir);
 Demo19_Images(outDir);
+Demo20_CsvSeparator(outDir);
+Demo21_ImageReadBack(outDir);
+Demo22_ConditionalFormatting(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -797,6 +800,116 @@ Demo19_Images(outDir);
         var file = Path.Combine(dir, "19_images.xlsx");
         wb.SaveAs(file);
         Console.WriteLine($"  Written: {file} (floating on Sheet1, InCell on InCell sheet)");
+        Console.WriteLine();
+    }
+
+    // 20. CSV 分隔符（自动探测 + 显式指定）
+    private static void Demo20_CsvSeparator(string dir)
+    {
+        Console.WriteLine("[20] CSV Separator (auto-detect + explicit)");
+
+        // 逗号默认
+        var wb = Excel.Create();
+        wb.Worksheets["Sheet1"].SetValue("A1", "name");
+        wb.Worksheets["Sheet1"].SetValue("B1", "age");
+        wb.Worksheets["Sheet1"].SetValue("A2", "Alice");
+        wb.Worksheets["Sheet1"].SetValue("B2", 30);
+        Excel.Write(Path.Combine(dir, "20_comma.csv"), wb);
+
+        // 分号写出（中文 Excel 常见）
+        Excel.Write(Path.Combine(dir, "20_semicolon.csv"), wb,
+            new ExcelWriteOptions { Separator = ';' });
+
+        // Tab 写出 + 读回
+        Excel.Write(Path.Combine(dir, "20_tab.csv"), wb,
+            new ExcelWriteOptions { Separator = '\t' });
+        var back = Excel.Open(Path.Combine(dir, "20_tab.csv"),
+            new ExcelReadOptions { Separator = '\t' });
+        Console.WriteLine($"  tab round-trip A2={back.Worksheets[0].Cell("A2").GetString()}");
+
+        // 自动探测：打开分号结尾文件不显式指定，仍能读对
+        var auto = Excel.Open(Path.Combine(dir, "20_semicolon.csv"),
+            new ExcelReadOptions { Separator = null });
+        Console.WriteLine($"  auto-detect semicolon A2={auto.Worksheets[0].Cell("A2").GetString()}");
+
+        Console.WriteLine();
+    }
+
+    // 21. 图片读回（Floating）
+    private static void Demo21_ImageReadBack(string dir)
+    {
+        Console.WriteLine("[21] Image Read-Back (Floating)");
+        byte[] png = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+        var wb = Excel.Create();
+        wb.Worksheets["Sheet1"].AddImage(png, new ImageAnchor
+        {
+            TopLeftCell = "C5",
+            WidthPixels = 64,
+            HeightPixels = 64,
+            MoveMode = ImageMoveMode.MoveButDontSizeWithCells,
+        }, extension: "png", name: "logo", altText: "公司 Logo");
+        var file = Path.Combine(dir, "21_readback.xlsx");
+        wb.SaveAs(file);
+
+        var rb = Excel.Open(file);
+        foreach (var img in rb.Worksheets[0].Images)
+        {
+            Console.WriteLine($"  Read: pos(C5)={img.Anchor!.TopLeftCell} size={img.Anchor.WidthPixels}x{img.Anchor.HeightPixels} " +
+                $"alt={img.AltText} name={img.Name} bytes={img.Data.Length}");
+        }
+        Console.WriteLine();
+    }
+
+    // 22. 条件格式（cellIs / expression / colorScale / dataBar）
+    private static void Demo22_ConditionalFormatting(string dir)
+    {
+        Console.WriteLine("[22] Conditional Formatting");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        ws.SetValue("A1", "分数");
+        for (int i = 2; i <= 10; i++)
+            ws.SetValue($"A{i}", i * 9);
+
+        // 高于 60 红字
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.CellIs,
+            Sqref = "A2:A10",
+            Operator = ConditionalOperator.GreaterThan,
+            Formula = "60",
+            Style = new CellStyle { FontColor = "#FF0000", Bold = true },
+        });
+        // 偶数行柱底
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.Expression,
+            Sqref = "A2:A10",
+            Formula = "MOD(ROW(),2)=0",
+            Style = new CellStyle { FillColor = "#F2F2F2" },
+        });
+        // 色阶（低→高：红→黄）
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.ColorScale,
+            Sqref = "A2:A10",
+            ColorScale = new ColorScaleInfo { LowColor = "#F8696B", HighColor = "#63BE7B" },
+        });
+        // 数据条
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.DataBar,
+            Sqref = "A2:A10",
+            DataBar = new DataBarInfo { Color = "#63C384" },
+        });
+
+        var file = Path.Combine(dir, "22_conditional.xlsx");
+        wb.SaveAs(file);
+        Console.WriteLine($"  Written: {file}");
+
+        var rb = Excel.Open(file);
+        Console.WriteLine($"  rules read back: {rb.Worksheets[0].ConditionalFormats.Count}");
         Console.WriteLine();
     }
 }

@@ -18,6 +18,9 @@ public sealed class Workbook
     /// <summary>能力降级回调（由 Excel.Write 注入 options.OnDegradation；直接 SaveAs 时为 null，行为与历史一致） </summary>
     internal Action<DegradationInfo>? DegradationCallback { get; set; }
 
+    /// <summary>CSV 写出分隔符（由 Excel.Write 注入；为 null 时使用逗号） </summary>
+    internal char? WriteSeparator { get; set; }
+
     /// <summary>工作表集合 </summary>
     public WorksheetCollection Worksheets { get; }
 
@@ -212,7 +215,7 @@ public sealed class Workbook
             case ExcelFormat.Csv:
                 if (Worksheets.Count != 1)
                     throw new NotSupportedException("CSV 仅支持单工作表工作簿");
-                CsvBackend.Write(stream, Worksheets[0].ToSheetData(), DegradationCallback, ExcelFormat.Csv);
+                CsvBackend.Write(stream, Worksheets[0].ToSheetData(), DegradationCallback, ExcelFormat.Csv, WriteSeparator);
                 break;
             case ExcelFormat.Xls:
             {

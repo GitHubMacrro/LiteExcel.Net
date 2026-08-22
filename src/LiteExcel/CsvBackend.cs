@@ -9,27 +9,30 @@ namespace LiteExcel;
 /// </summary>
 internal static class CsvBackend
 {
-    /// <summary>读取 CSV 文件为单张工作表的原始数据（首行不拆分为表头） </summary>
-    public static SheetData Read(string path)
+    /// <summary>读取 CSV 文件为单张工作表的原始数据（首行不拆分为表头）。separator 为 null 时自动探测逗号/分号/Tab。</summary>
+    public static SheetData Read(string path, char? separator = null)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return Read(fs, Path.GetFileNameWithoutExtension(path));
+        return Read(fs, Path.GetFileNameWithoutExtension(path), separator);
     }
 
-    /// <summary>从流读取 CSV 为单张工作表的原始数据。sheetName 用于工作表命名 </summary>
-    public static SheetData Read(Stream stream, string sheetName = "Sheet1")
+    /// <summary>从流读取 CSV 为单张工作表的原始数据。sheetName 用于工作表命名，separator 为 null 时自动探测。</summary>
+    public static SheetData Read(Stream stream, string sheetName = "Sheet1", char? separator = null)
     {
         var ms = new MemoryStream();
         stream.CopyTo(ms);
+        var encoding = DetectEncoding(ms) ?? Encoding.UTF8;
+        var probe = new string(encoding.GetString(ms.ToArray()).Take(8192).ToArray());
+        char actual = separator ?? DetectSeparator(probe);
         ms.Position = 0;
-        using var reader = new StreamReader(ms, DetectEncoding(ms) ?? Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return Read(reader, sheetName);
+        using var reader = new StreamReader(ms, encoding, detectEncodingFromByteOrderMarks: true);
+        return Read(reader, sheetName, actual);
     }
 
-    internal static SheetData Read(TextReader reader, string sheetName)
+    internal static SheetData Read(TextReader reader, string sheetName, char separator)
     {
         var sheet = new SheetData { SheetName = sheetName };
-        foreach (var fields in ReadRecords(reader))
+        foreach (var fields in ReadRecords(reader, separator))
         {
             var cells = new List<Cell>(fields.Count);
             foreach (var f in fields)
@@ -39,7 +42,30 @@ internal static class CsvBackend
         return sheet;
     }
 
-    private static IEnumerable<List<string>> ReadRecords(TextReader reader)
+    /// <summary>
+    /// 探测 CSV 分隔符（仅统计引号之外的分隔符频率，引号内不算）。
+    /// 候选按 逗号 &gt; 分号 &gt; Tab 考察，取最多；三个候选都为零时回退逗号。
+    /// </summary>
+    internal static char DetectSeparator(string preview)
+    {
+        int comma = 0, semicolon = 0, tab = 0;
+        bool inQuotes = false;
+        foreach (char c in preview)
+        {
+            if (c == '"') inQuotes = !inQuotes;
+            else if (!inQuotes)
+            {
+                if (c == ',') comma++;
+                else if (c == ';') semicolon++;
+                else if (c == '\t') tab++;
+            }
+        }
+        if (semicolon > comma && semicolon >= tab) return ';';
+        if (tab > comma && tab > semicolon) return '\t';
+        return ',';
+    }
+
+    private static IEnumerable<List<string>> ReadRecords(TextReader reader, char separator)
     {
         var fields = new List<string>();
         var field = new StringBuilder();
@@ -97,7 +123,7 @@ internal static class CsvBackend
                 inQuotes = true;
                 fieldStarted = true;
             }
-            else if (ch == ',')
+            else if (ch == separator)
             {
                 fields.Add(field.ToString());
                 field.Clear();
@@ -122,21 +148,22 @@ internal static class CsvBackend
     }
 
     /// <summary>写入 CSV 文件 </summary>
-    public static void Write(string path, SheetData sheet)
+    public static void Write(string path, SheetData sheet, char? separator = null)
     {
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
-        Write(fs, sheet);
+        Write(fs, sheet, onDegradation: null, targetFormat: ExcelFormat.Csv, separator: separator);
     }
 
-    internal static void Write(Stream stream, SheetData sheet, Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Csv)
+    internal static void Write(Stream stream, SheetData sheet, Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Csv, char? separator = null)
     {
+        char sep = separator ?? ',';
         ReportDegradations(sheet, onDegradation, targetFormat);
 
         var sb = new StringBuilder();
 
         if (sheet.Headers is { Count: > 0 })
         {
-            AppendRow(sb, sheet.Headers);
+            AppendRow(sb, sheet.Headers, sep);
         }
 
         foreach (var row in sheet.Rows)
@@ -144,7 +171,7 @@ internal static class CsvBackend
             var fields = new List<string>(row.Count);
             foreach (var cell in row)
                 fields.Add(cell.GetString() ?? "");
-            AppendRow(sb, fields);
+            AppendRow(sb, fields, sep);
         }
 
         var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
@@ -210,21 +237,24 @@ internal static class CsvBackend
                     Report(DegradationCapability.Formulas, $"CSV 不支持公式，工作表 '{sheet.SheetName}' 的公式以文本值写出。");
             }
         }
+        if (sheet.ConditionalFormats is { Count: > 0 })
+            Report(DegradationCapability.ConditionalFormatting, $"CSV 不支持条件格式，工作表 '{sheet.SheetName}' 的条件格式已丢弃。");
     }
 
-    private static void AppendRow(StringBuilder sb, IReadOnlyList<string> fields)
+    private static void AppendRow(StringBuilder sb, IReadOnlyList<string> fields, char separator)
     {
         for (int i = 0; i < fields.Count; i++)
         {
-            if (i > 0) sb.Append(',');
-            AppendField(sb, fields[i]);
+            if (i > 0) sb.Append(separator);
+            AppendField(sb, fields[i], separator);
         }
         sb.Append('\n');
     }
 
-    private static void AppendField(StringBuilder sb, string field)
+    private static void AppendField(StringBuilder sb, string field, char separator)
     {
-        bool needQuote = field.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0;
+        bool needQuote = field.IndexOf(separator) >= 0
+            || field.IndexOfAny(new[] { '"', '\n', '\r' }) >= 0;
         if (!needQuote)
         {
             sb.Append(field);

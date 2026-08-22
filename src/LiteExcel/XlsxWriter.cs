@@ -597,6 +597,72 @@ public static partial class XlsxWriter
             sb.Append("</mergeCells>");
         }
 
+        // 条件格式（2.4.3：cellIs/expression/colorScale/dataBar）
+        if (sheet.ConditionalFormats is { Count: > 0 })
+        {
+            int priority = 1;
+            foreach (var cf in sheet.ConditionalFormats)
+            {
+                if (string.IsNullOrEmpty(cf.Sqref)) continue;
+                int dxfId = cf.Style is not null ? stylesheet.GetOrCreateDxfId(cf.Style) : -1;
+                string dxfAttr = dxfId >= 0 ? $" dxfId=\"{dxfId}\"" : "";
+                int prio = cf.Priority > 0 ? cf.Priority : priority++;
+
+                sb.Append($"<conditionalFormatting sqref=\"{XmlEscape(cf.Sqref)}\">");
+                switch (cf.Type)
+                {
+                    case ConditionalFormatType.CellIs:
+                    {
+                        sb.Append($"<cfRule type=\"cellIs\"{dxfAttr} priority=\"{prio}\" operator=\"{OperatorToString(cf.Operator)}\">");
+                        AppendCfFormula(sb, cf.Formula);
+                        if (cf.Operator is ConditionalOperator.Between or ConditionalOperator.NotBetween)
+                            AppendCfFormula(sb, cf.Formula2);
+                        sb.Append("</cfRule>");
+                        break;
+                    }
+                    case ConditionalFormatType.Expression:
+                    {
+                        sb.Append($"<cfRule type=\"expression\"{dxfAttr} priority=\"{prio}\">");
+                        AppendCfFormula(sb, cf.Formula);
+                        sb.Append("</cfRule>");
+                        break;
+                    }
+                    case ConditionalFormatType.ColorScale:
+                    {
+                        var cs = cf.ColorScale ?? new ColorScaleInfo();
+                        sb.Append($"<cfRule type=\"colorScale\" priority=\"{prio}\">");
+                        sb.Append("<colorScale>");
+                        sb.Append(cs.MidColor is not null
+                            ? "<cfvo type=\"num\" val=\"0\"/><cfvo type=\"num\" val=\"1\"/><cfvo type=\"num\" val=\"2\"/>"
+                            : "<cfvo type=\"min\"/><cfvo type=\"max\"/>");
+                        if (cs.MidColor is null)
+                        {
+                            sb.Append($"<color rgb=\"FF{NormalizeColorRgb(cs.LowColor)}\"/><color rgb=\"FF{NormalizeColorRgb(cs.HighColor)}\"/>");
+                        }
+                        else
+                        {
+                            sb.Append($"<color rgb=\"FF{NormalizeColorRgb(cs.LowColor)}\"/><color rgb=\"FF{NormalizeColorRgb(cs.MidColor)}\"/><color rgb=\"FF{NormalizeColorRgb(cs.HighColor)}\"/>");
+                        }
+                        sb.Append("</colorScale>");
+                        sb.Append("</cfRule>");
+                        break;
+                    }
+                    case ConditionalFormatType.DataBar:
+                    {
+                        var db = cf.DataBar ?? new DataBarInfo();
+                        sb.Append($"<cfRule type=\"dataBar\" priority=\"{prio}\">");
+                        sb.Append($"<dataBar minLength=\"{db.MinLengthPercent}\" maxLength=\"{db.MaxLengthPercent}\" showValue=\"{(db.ShowValue ? 1 : 0)}\">");
+                        sb.Append("<cfvo type=\"auto\" val=\"0\"/><cfvo type=\"auto\" val=\"0\"/>");
+                        sb.Append($"<color rgb=\"FF{NormalizeColorRgb(db.Color)}\"/>");
+                        sb.Append("</dataBar>");
+                        sb.Append("</cfRule>");
+                        break;
+                    }
+                }
+                sb.Append("</conditionalFormatting>");
+            }
+        }
+
         // 浮动图片 drawing 引用
         if (hasDrawing)
         {
@@ -675,6 +741,33 @@ public static partial class XlsxWriter
                 break;
         }
         return sb.ToString();
+    }
+
+    // ── 条件格式辅助 ──
+
+    private static void AppendCfFormula(StringBuilder sb, string? formula)
+    {
+        if (string.IsNullOrEmpty(formula)) return;
+        sb.Append($"<formula>{XmlEscape(formula)}</formula>");
+    }
+
+    private static string OperatorToString(ConditionalOperator op) => op switch
+    {
+        ConditionalOperator.LessThan => "lessThan",
+        ConditionalOperator.LessThanOrEqual => "lessThanOrEqual",
+        ConditionalOperator.Equal => "equal",
+        ConditionalOperator.NotEqual => "notEqual",
+        ConditionalOperator.GreaterThan => "greaterThan",
+        ConditionalOperator.GreaterThanOrEqual => "greaterThanOrEqual",
+        ConditionalOperator.Between => "between",
+        ConditionalOperator.NotBetween => "notBetween",
+        _ => "greaterThan",
+    };
+
+    private static string NormalizeColorRgb(string color)
+    {
+        if (color.StartsWith("#")) return color.Substring(1).ToUpperInvariant();
+        return color.ToUpperInvariant();
     }
 
     private static void WriteTextCell(StringBuilder sb, int row1Based, int col, string text,

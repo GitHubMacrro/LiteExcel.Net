@@ -557,6 +557,10 @@ public static partial class XlsxReader
             {
                 sheet.Filter = ParseAutoFilter(reader);
             }
+            else if (reader.LocalName == "conditionalFormatting")
+            {
+                ParseConditionalFormatting(reader, sheet, styles);
+            }
             else if (reader.LocalName == "pane")
             {
                 // 冻结窗格：ySplit/xSplit 任意值 + state="frozen"
@@ -592,6 +596,9 @@ public static partial class XlsxReader
 
         // 读取单元格超链接（通过 sheet rels 的 hyperlink 关系 + sheet 的 <hyperlinks> 元素）
         ReadHyperlinksForSheet(zip, sheetPath, sheet);
+
+        // 读取浮动图片（drawing + media）——只读取 BackingFile，不改变表格本身
+        ReadImagesForSheet(zip, sheetPath, sheet);
 
         return sheet;
     }
@@ -755,6 +762,167 @@ public static partial class XlsxReader
             sheet.Comments ??= new Dictionary<string, string>();
             sheet.Comments[refAttr] = text;
         }
+    }
+
+    /// <summary>读取工作表浮动图片：sheet rels 找 drawing → drawing XML 提取锚点+rId → drawing rels 找 media → 读字节 </summary>
+    private static void ReadImagesForSheet(ZipArchive zip, string sheetPath, SheetData sheet)
+    {
+        var dir = System.IO.Path.GetDirectoryName(sheetPath);
+        if (string.IsNullOrEmpty(dir)) return;
+        dir = dir.Replace('\\', '/');
+        var file = System.IO.Path.GetFileName(sheetPath);
+        var relsPath = $"{dir}/_rels/{file}.rels";
+        var relsEntry = zip.GetEntry(relsPath);
+        if (relsEntry is null) return;
+
+        string? drawingTarget = null;
+        using (var rr = XmlReader.Create(relsEntry.Open(), XmlSettings))
+        {
+            while (rr.Read())
+            {
+                if (rr.NodeType == XmlNodeType.Element && rr.LocalName == "Relationship")
+                {
+                    var type = rr.GetAttribute("Type") ?? "";
+                    if (type.EndsWith("/drawing", StringComparison.OrdinalIgnoreCase))
+                    {
+                        drawingTarget = rr.GetAttribute("Target");
+                        break;
+                    }
+                }
+            }
+        }
+        if (drawingTarget is null) return;
+
+        var drawingPath = ResolveRelativePath(sheetPath, drawingTarget);
+        var drawingEntry = zip.GetEntry(drawingPath);
+        if (drawingEntry is null) return;
+
+        // drawing rels（rId → media 路径）
+        var drawingRelMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var drawingDir = System.IO.Path.GetDirectoryName(drawingPath) ?? "";
+        drawingDir = drawingDir.Replace('\\', '/');
+        var drawingName = System.IO.Path.GetFileName(drawingPath);
+        var drawingRelsPath = $"{drawingDir}/_rels/{drawingName}.rels";
+        var drawingRelsEntry = zip.GetEntry(drawingRelsPath);
+        if (drawingRelsEntry is not null)
+        {
+            using var dr = XmlReader.Create(drawingRelsEntry.Open(), XmlSettings);
+            while (dr.Read())
+            {
+                if (dr.NodeType == XmlNodeType.Element && dr.LocalName == "Relationship")
+                {
+                    var id = dr.GetAttribute("Id");
+                    var type = dr.GetAttribute("Type") ?? "";
+                    var target = dr.GetAttribute("Target") ?? "";
+                    if (id is not null && type.EndsWith("/image", StringComparison.OrdinalIgnoreCase))
+                        drawingRelMap[id] = ResolveRelativePath(drawingPath, target);
+                }
+            }
+        }
+
+        using var reader = XmlReader.Create(drawingEntry.Open(), XmlSettings);
+        while (reader.Read())
+        {
+            if (reader.NodeType != XmlNodeType.Element) continue;
+            bool isOne = reader.LocalName == "oneCellAnchor";
+            bool isTwo = reader.LocalName == "twoCellAnchor";
+            if (!isOne && !isTwo) continue;
+
+            var editAs = reader.GetAttribute("editAs");
+        var img = ReadOneAnchor(reader, drawingRelMap, zip, isOne, isTwo, editAs);
+            if (img is null) continue;
+
+            img.Placement = ImagePlacement.Floating;
+            sheet.Images ??= new List<WorksheetImage>();
+            sheet.Images.Add(img);
+        }
+    }
+
+    /// <summary>从 oneCellAnchor/twoCellAnchor 子树读取一个 WorksheetImage </summary>
+    private static WorksheetImage? ReadOneAnchor(XmlReader anchorReader, Dictionary<string, string> relMap, ZipArchive zip,
+        bool isOne, bool isTwo, string? editAs)
+    {
+        int? col = null, row = null, colOff = null, rowOff = null;
+        double? cx = null, cy = null;
+        string? name = null, descr = null, embed = null;
+        bool inTo = false;
+
+        using var sub = anchorReader.ReadSubtree();
+        while (sub.Read())
+        {
+            if (sub.NodeType != XmlNodeType.Element) continue;
+            switch (sub.LocalName)
+            {
+                case "from":
+                    inTo = false;
+                    break;
+                case "to":
+                    inTo = true;
+                    continue;
+                case "col" when !sub.IsEmptyElement && !inTo:
+                    if (int.TryParse(ReadElementText(sub), out var c)) col = c;
+                    break;
+                case "colOff" when !sub.IsEmptyElement && !inTo:
+                    if (int.TryParse(ReadElementText(sub), out var co)) colOff = co;
+                    break;
+                case "row" when !sub.IsEmptyElement && !inTo:
+                    if (int.TryParse(ReadElementText(sub), out var rw)) row = rw;
+                    break;
+                case "rowOff" when !sub.IsEmptyElement && !inTo:
+                    if (int.TryParse(ReadElementText(sub), out var ro)) rowOff = ro;
+                    break;
+                case "ext":
+                    if (!cx.HasValue)
+                    {
+                        if (double.TryParse(sub.GetAttribute("cx"), NumberStyles.Float, CultureInfo.InvariantCulture, out var w)) cx = w;
+                        if (double.TryParse(sub.GetAttribute("cy"), NumberStyles.Float, CultureInfo.InvariantCulture, out var h)) cy = h;
+                    }
+                    break;
+                case "cNvPr":
+                    name ??= sub.GetAttribute("name");
+                    descr ??= sub.GetAttribute("descr");
+                    break;
+                case "blip":
+                    embed ??= sub.GetAttribute("embed", "http://schemas.openxmlformats.org/officeDocument/2006/relationships");
+                    break;
+            }
+        }
+
+        if (embed is null || col is null || row is null) return null;
+        if (!relMap.TryGetValue(embed, out var mediaPath)) return null;
+        var mediaEntry = zip.GetEntry(mediaPath);
+        if (mediaEntry is null) return null;
+
+        byte[] data;
+        using (var ms = new MemoryStream())
+        {
+            using var s = mediaEntry.Open();
+            s.CopyTo(ms);
+            data = ms.ToArray();
+        }
+
+        return new WorksheetImage
+        {
+            Data = data,
+            Extension = System.IO.Path.GetExtension(mediaPath).TrimStart('.'),
+            Row = row.Value + 1,
+            Column = col.Value + 1,
+            Name = name,
+            AltText = descr,
+            Anchor = new ImageAnchor
+            {
+                TopLeftCell = CellRef.ToString(row.Value, col.Value),
+                TopLeftOffsetX = colOff ?? 0,
+                TopLeftOffsetY = rowOff ?? 0,
+                WidthPixels = cx.HasValue ? cx.Value / WorksheetImage.EmuPerPixel : 0,
+                HeightPixels = cy.HasValue ? cy.Value / WorksheetImage.EmuPerPixel : 0,
+                MoveMode = isTwo
+                    ? ImageMoveMode.MoveAndSizeWithCells
+                    : (string.Equals(editAs, "absolute", StringComparison.OrdinalIgnoreCase)
+                        ? ImageMoveMode.FixedPosition
+                        : ImageMoveMode.MoveButDontSizeWithCells),
+            },
+        };
     }
 
     private static string ResolveRelativePath(string basePath, string target)
@@ -1180,6 +1348,150 @@ public static partial class XlsxReader
             sheet.Validations ??= new List<DataValidation>();
             sheet.Validations.Add(dv);
         }
+    }
+
+    /// <summary>解析条件格式（cellIs / expression / colorScale / dataBar） 及其 dxfId 关联的样式 </summary>
+    private static void ParseConditionalFormatting(XmlReader reader, SheetData sheet, StylesheetInfo styles)
+    {
+        if (reader.IsEmptyElement) return;
+        var sqref = reader.GetAttribute("sqref") ?? "";
+
+        using var sub = reader.ReadSubtree();
+        while (sub.Read())
+        {
+            if (sub.NodeType != XmlNodeType.Element || sub.LocalName != "cfRule") continue;
+
+            var typeAttr = sub.GetAttribute("type") ?? "";
+            var dxfIdAttr = sub.GetAttribute("dxfId");
+            int? dxfId = dxfIdAttr is not null && int.TryParse(dxfIdAttr, out var did) ? did : null;
+            var prioAttr = sub.GetAttribute("priority");
+            int prio = prioAttr is not null && int.TryParse(prioAttr, out var p) ? p : 0;
+
+            var cf = new ConditionalFormat { Sqref = sqref, Priority = prio };
+
+            switch (typeAttr)
+            {
+                case "cellIs":
+                {
+                    cf.Type = ConditionalFormatType.CellIs;
+                    cf.Operator = sub.GetAttribute("operator") switch
+                    {
+                        "lessThan" => ConditionalOperator.LessThan,
+                        "lessThanOrEqual" => ConditionalOperator.LessThanOrEqual,
+                        "equal" => ConditionalOperator.Equal,
+                        "notEqual" => ConditionalOperator.NotEqual,
+                        "greaterThanOrEqual" => ConditionalOperator.GreaterThanOrEqual,
+                        "between" => ConditionalOperator.Between,
+                        "notBetween" => ConditionalOperator.NotBetween,
+                        _ => ConditionalOperator.GreaterThan,
+                    };
+                    ReadCfFormulas(sub, out var f1, out var f2);
+                    cf.Formula = f1; cf.Formula2 = f2;
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "expression":
+                {
+                    cf.Type = ConditionalFormatType.Expression;
+                    ReadCfFormulas(sub, out var f1, out _);
+                    cf.Formula = f1;
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "colorScale":
+                {
+                    cf.Type = ConditionalFormatType.ColorScale;
+                    ReadColorScale(sub, styles, cf);
+                    break;
+                }
+                case "dataBar":
+                {
+                    cf.Type = ConditionalFormatType.DataBar;
+                    ReadDataBar(sub, cf);
+                    if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
+                        cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+            }
+
+            sheet.ConditionalFormats.Add(cf);
+        }
+    }
+
+    private static void ReadCfFormulas(XmlReader cfRuleReader, out string? f1, out string? f2)
+    {
+        f1 = null; f2 = null;
+        if (cfRuleReader.IsEmptyElement) return;
+        using var sub = cfRuleReader.ReadSubtree();
+        while (sub.Read())
+        {
+            if (sub.NodeType != XmlNodeType.Element || sub.LocalName != "formula") continue;
+            var text = ReadElementText(sub);
+            if (f1 is null) f1 = text; else f2 ??= text;
+        }
+    }
+
+    private static void ReadColorScale(XmlReader cfRuleReader, StylesheetInfo styles, ConditionalFormat cf)
+    {
+        if (cfRuleReader.IsEmptyElement) return;
+        using var sub = cfRuleReader.ReadSubtree();
+        var colors = new List<string>();
+        bool inScale = false;
+        while (sub.Read())
+        {
+            if (sub.NodeType != XmlNodeType.Element) continue;
+            if (sub.LocalName == "colorScale")
+            {
+                inScale = true;
+                continue;
+            }
+            if (inScale && sub.LocalName == "color")
+            {
+                var rgb = sub.GetAttribute("rgb");
+                if (!string.IsNullOrEmpty(rgb)) colors.Add(NormalizeToCssColor(rgb));
+            }
+        }
+        var map = new ColorScaleInfo();
+        if (colors.Count >= 1) map.LowColor = colors[0];
+        if (colors.Count >= 3) { map.MidColor = colors[1]; map.HighColor = colors[2]; }
+        else if (colors.Count >= 2) map.HighColor = colors[1];
+        cf.ColorScale = map;
+    }
+
+    private static void ReadDataBar(XmlReader cfRuleReader, ConditionalFormat cf)
+    {
+        if (cfRuleReader.IsEmptyElement) return;
+        using var sub = cfRuleReader.ReadSubtree();
+        var info = new DataBarInfo();
+        while (sub.Read())
+        {
+            if (sub.NodeType != XmlNodeType.Element) continue;
+            if (sub.LocalName == "dataBar")
+            {
+                var minLen = sub.GetAttribute("minLength");
+                var maxLen = sub.GetAttribute("maxLength");
+                var showVal = sub.GetAttribute("showValue");
+                if (minLen is not null && int.TryParse(minLen, out var m1)) info.MinLengthPercent = m1;
+                if (maxLen is not null && int.TryParse(maxLen, out var m2)) info.MaxLengthPercent = m2;
+                if (showVal is not null) info.ShowValue = showVal == "1" || string.Equals(showVal, "true", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (sub.LocalName == "color")
+            {
+                var color = sub.GetAttribute("rgb");
+                if (!string.IsNullOrEmpty(color)) info.Color = NormalizeToCssColor(color);
+            }
+        }
+        cf.DataBar = info;
+    }
+
+    /// <summary>#FFRRGGBB / RGB → #RRGGBB（CSS 风格），失败回原值 </summary>
+    private static string NormalizeToCssColor(string rgb)
+    {
+        if (rgb.Length == 8) return "#" + rgb.Substring(2);
+        if (rgb.Length == 6) return "#" + rgb;
+        return rgb;
     }
 
     private static string ReadElementText(XmlReader reader)

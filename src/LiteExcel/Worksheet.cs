@@ -52,6 +52,9 @@ public sealed class Worksheet
     /// <summary>自动筛选 </summary>
     public AutoFilter? Filter { get; set; }
 
+    /// <summary>条件格式规则列表 </summary>
+    public List<ConditionalFormat> ConditionalFormats { get; } = new();
+
     /// <summary>工作表宿主的 VBA 代码名（打开时捕获，保存时随 SheetData 写回 sheetPr@codeName） </summary>
     internal string? CodeName { get; set; }
 
@@ -312,6 +315,7 @@ public sealed class Worksheet
             Validations = Validations,
             Filter = Filter,
             CodeName = CodeName,
+            ConditionalFormats = new List<ConditionalFormat>(ConditionalFormats),
         };
 
         if (Images.Count > 0)
@@ -368,6 +372,12 @@ public sealed class Worksheet
             Filter = sheet.Filter,
             CodeName = sheet.CodeName,
         };
+
+        if (sheet.ConditionalFormats is { Count: > 0 })
+        {
+            foreach (var cf in sheet.ConditionalFormats)
+                ws.ConditionalFormats.Add(cf);
+        }
 
         if (sheet.Images is { Count: > 0 })
         {

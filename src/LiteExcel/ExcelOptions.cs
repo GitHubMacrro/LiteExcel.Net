@@ -33,6 +33,13 @@ public sealed class ExcelReadOptions
     /// 文件设置了修改密码但未提供（或提供错误）时，工作簿以只读方式打开，不能保存。
     /// </summary>
     public string? ModifyPassword { get; set; }
+
+    /// <summary>
+    /// CSV 分隔符（可选，默认 null → 自动探测）。
+    /// 仅在 ExcelFormat.Csv 生效。指定后固定使用，不再探测。
+    /// 自动探测策略：首位分隔符候选在引号外的出现频率中取最多；三个候选都未出现 → 默认逗号。
+    /// </summary>
+    public char? Separator { get; set; }
 }
 
 /// <summary>
@@ -71,4 +78,9 @@ public sealed class ExcelWriteOptions
     /// 默认关闭：不注册则行为与历史版本完全一致（无破坏性）。
     /// </summary>
     public Action<DegradationInfo>? OnDegradation { get; set; }
+
+    /// <summary>
+    /// CSV 写出时分隔符（可选，默认 null → 逗号）。仅在 ExcelFormat.Csv 生效。
+    /// </summary>
+    public char? Separator { get; set; }
 }
