@@ -1582,7 +1582,49 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 
 ### Reading
 
-Opening an xlsx/xlsm file with conditional formats now populates `Worksheet.ConditionalFormats`. **xls/xlsb/csv do not support conditional formatting** — writes will report degradations via [§26 Capability Degradation Callback](#26-capability-degradation-callback-ondegradation-242). Additional rule types (`containsText`, `top10`, etc.) will follow in later versions.
+Opening an xlsx/xlsm file with conditional formats now populates `Worksheet.ConditionalFormats`. **xls/xlsb/csv do not support conditional formatting** — writes will report degradations via [§26 Capability Degradation Callback](#26-capability-degradation-callback-ondegradation-242).
+
+### Additional types (2.4.4+)
+
+Beyond `cellIs`/`expression`/`colorScale`/`dataBar`, the following rule types are also supported:
+
+| Type | Enum | Description | Key fields |
+|---|---|---|---|
+| Text contains | `ContainsText` | cell contains given text | `Text` |
+| Text begins with | `BeginsWith` | starts with given text | `Text` |
+| Text ends with | `EndsWith` | ends with given text | `Text` |
+| Text does not contain | `NotContainsText` | does not contain given text | `Text` |
+| Time period | `TimePeriod` | yesterday/today/lastWeek/thisMonth etc. | `TimePeriod` (e.g. `"thisMonth"`) |
+| Blanks | `Blanks` | blank cells | — |
+| Non-blanks | `NoBlanks` | non-blank cells | — |
+| Errors | `Errors` | error values | — |
+| Non-errors | `NoErrors` | non-error values | — |
+| Unique values | `Unique` | unique within range | — |
+| Duplicates | `Duplicate` | duplicate within range | — |
+| Top N | `Top10` | top N items or top N% | `Rank` + `Percent` |
+| Above average | `AboveAverage` | above range average | — |
+| Below average | `BelowAverage` | below range average | — |
+
+Example:
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.ContainsText,
+    Sqref = "B2:B100",
+    Text = "urgent",
+    Style = new CellStyle { FontColor = "#FF0000" },
+});
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.Top10,
+    Sqref = "A2:A100",
+    Rank = 3,        // top 3 items; set Percent=true for top 3%
+});
+```
+
+> Still on the roadmap: `iconSet` (icon sets) and full cfvo threshold control — planned for a later release.
+
 
 ---
 

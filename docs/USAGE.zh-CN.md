@@ -1939,7 +1939,49 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 
 ### 读取
 
-xlsx/xlsm 打开含条件格式的工作簿，`Worksheet.ConditionalFormats` 已回填：**xls/xlsb/csv 不支持条件格式**，写出那会按 [§25 能力降级回调](#25-capability-degradation-callback-ondegradation-242) 上报。晊续版本将补齐 `containsText`/`top10` 等更多类型。
+xlsx/xlsm 打开含条件格式的工作簿，`Worksheet.ConditionalFormats` 已回填：**xls/xlsb/csv 不支持条件格式**，写出那会按 [§26 能力降级回调](#26-能力降级回调ondegradation242) 上报。
+
+### 长尾类型（2.4.4+）
+
+除 `cellIs`/`expression`/`colorScale`/`dataBar` 外，追加支持：
+
+| 类型 | 枚举 | 说明 | 关键字段 |
+|---|---|---|---|
+| 文本包含 | `ContainsText` | 含指定文本 | `Text` |
+| 文本开头 | `BeginsWith` | 以指定文本开头 | `Text` |
+| 文本结尾 | `EndsWith` | 以指定文本结尾 | `Text` |
+| 文本不含 | `NotContainsText` | 不含指定文本 | `Text` |
+| 时间周期 | `TimePeriod` | 昨天/今天/上周等 | `TimePeriod`（如 `"thisMonth"`） |
+| 空单元格 | `Blanks` | 空白 | — |
+| 非空单元格 | `NoBlanks` | 非空白 | — |
+| 错误 | `Errors` | 错误值 | — |
+| 非错误 | `NoErrors` | 非错误值 | — |
+| 唯一值 | `Unique` | 本范围内唯一 | — |
+| 重复值 | `Duplicate` | 本范围内重复 | — |
+| 前 N 项 | `Top10` | 前 N 项或前 N% | `Rank` + `Percent` |
+| 高于平均 | `AboveAverage` | 高于本范围平均分 | — |
+| 低于平均 | `BelowAverage` | 低于本范围平均分 | — |
+
+示例：
+
+```csharp
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.ContainsText,
+    Sqref = "B2:B100",
+    Text = "urgent",
+    Style = new CellStyle { FontColor = "#FF0000" },
+});
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.Top10,
+    Sqref = "A2:A100",
+    Rank = 3,        // 前 3 项；Percent=true 则前 3%
+});
+```
+
+> 仍需的部分：`iconSet`（图标集）、`containsText` 变体、更多 cfvo 阈值控制 ——列入后续版本。
+
 
 ---
 

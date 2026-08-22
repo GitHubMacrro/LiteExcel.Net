@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.4] - 2026-08-22
+
+### Added
+
+- **真实 Excel 样本对拍基础设施**：打包集成 `tests/LiteExcel.Tests/Fixtures/` 两个新生成文件（含条件格式/图表/浮动图片），让库自读之外还有真实 Excel 对照。
+- **InCell richData 图片读回**：`Worksheet.Images` 读取时回填 InCell 图片（Placement=InCell、Row/Column、Extension、Data）。
+- **条件格式长尾类型**：支持 `ContainsText`/`BeginsWith`/`EndsWith`/`NotContainsText`/`Blanks`/`NoBlanks`/`Errors`/`NoErrors`/`Unique`/`Duplicate`/`TimePeriod`/`Top10`/`AboveAverage`/`BelowAverage`。
+  - 参数：`Text.`、`TimePeriod`、`Rank`、`Percent`。
+  - xls/xlsb/csv 一律走降级上报。
+  - xlsx/xlsm 启读回双向支持。
+
+### Fixed
+
+- **条件格式长尾类型 cfRule type 值错误**：`unique`/`duplicate`/`blanks`/`noBlanks`/`errors`/`noErrors` 写出非标准 `ST_CfType` 值，Excel 打开报「已修复的部件 / XML 错误」；`top10` `rank="3%"` 非法；`belowAverage` 并不存在。改为标准枚举（uniqueValues/duplicateValues/containsBlanks/notContainsBlanks/containsErrors/notContainsErrors，排名 rank=int 与 percent=bool，aboveAverage 用 aboveAverage 属性并入）。
+
+### Notes
+
+- 验证：497/497 单元测试通过，net48/net8.0 构建干净；真实 Excel COM 打开含条件格式工作簿无修复提示，规则保留完整（14 条）。
+
 ## [2.4.3] - 2026-08-22
 
 ### Added
