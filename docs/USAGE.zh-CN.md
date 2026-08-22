@@ -33,8 +33,9 @@
 23. [错误处理](#23-错误处理)
 24. [AOT 兼容性](#24-aot-兼容性)
 25. [条件格式（2.4.3+）](#25-条件格式243)
-26. [能力降级回调（OnDegradation）（2.4.2+）](#26-能力降级回调ondegradation242)
-27. [完整 API 索引](#27-完整-api-索引)
+26. [命名区域（Name Range）](#26-命名区域-name-range)
+27. [能力降级回调（OnDegradation）（2.4.2+）](#27-能力降级回调ondegradation242)
+28. [完整 API 索引](#28-完整-api-索引)
 
 ---
 ## 1. 安装与引用
@@ -1985,7 +1986,28 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 
 ---
 
-## 26. 能力降级回调（OnDegradation）（2.4.2+）
+## 26. 命名区域（Name Range）
+
+工作簿中的命名区域（如 `Score = S1!$B$2:$B$6`）通过 `Workbook.Names` 读取。包含：
+
+- `Name` — 名称（如 `"Score"`）
+- `Reference` — 原始范围文本（如 `"S1!$B$2:$B$6"`，含 sheet 限定）
+- `LocalSheetId` — 并非 `-1` 时表示该名称为工作表局部；`-1` 表示工作簿全局
+- `IsLocalSheet` — 布尔快速地判断是否为局部名称
+
+```csharp
+var wb = Excel.Open("data.xlsx");
+foreach (var nr in wb.Names)
+{
+    Console.WriteLine($"Name={nr.Name} Ref={nr.Reference} Local={nr.LocalSheetId}");
+}
+```
+
+写入：不修改 `Workbook.Names` 的前提下，保存时原始 XML 原样回写（内容不会丢）。
+
+---
+
+## 27. 能力降级回调（OnDegradation）（2.4.2+）
 
 保存到不支持某能力的格式时（如 xls/xlsb/csv），默认会静默丢弃这些能力。开启回调可直接收到被丢弃项的清单，不再沉默。
 
@@ -2030,7 +2052,7 @@ Excel.Write("out.csv", wb, options);
 
 ---
 
-## 27. 完整 API 索引
+## 28. 完整 API 索引
 
 ### XlsxReader
 

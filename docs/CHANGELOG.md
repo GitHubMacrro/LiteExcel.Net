@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.5] - 2026-08-23
+
+### Added
+
+- **命名区域读回**：`Workbook.Names` 读取 `workbook.xml` 中的 `definedNames`（名称/范围/作用域），兼容全局与 sheet-local 定义。打开即回填；写出未修改时原样保留。
+
+### Notes
+
+- 全量 **502 测试**，通过 net48 + net8.0。
+
 ## [2.4.4] - 2026-08-22
 
 ### Added

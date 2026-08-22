@@ -33,8 +33,9 @@
 23. [Error Handling](#23-error-handling)
 24. [AOT Compatibility](#24-aot-compatibility)
 25. [Conditional Formatting (2.4.3+)](#25-conditional-formatting-243)
-26. [Capability Degradation Callback (OnDegradation) (2.4.2+)](#26-capability-degradation-callback-ondegradation-242)
-27. [Full API Reference](#27-full-api-reference)
+26. [Named Ranges (2.4.4+)](#26-named-ranges-244)
+27. [Capability Degradation Callback (OnDegradation) (2.4.2+)](#27-capability-degradation-callback-ondegradation-242)
+28. [Full API Reference](#28-full-api-reference)
 
 ---
 
@@ -1628,7 +1629,24 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 
 ---
 
-## 26. Capability Degradation Callback (OnDegradation) (2.4.2+)
+## 26. Named Ranges (2.4.4+)
+
+Read named ranges from `Workbook.Names` (each backed by `workbook.xml` `definedNames`):
+
+```csharp
+var wb = Excel.Open("data.xlsx");
+foreach (var nr in wb.Names)
+{
+    Console.WriteLine($"Name={nr.Name} Ref={nr.Reference} Local={nr.LocalSheetId}");
+}
+```
+
+Fields: `Name` / `Reference` / `LocalSheetId` (-1 = workbook-global) / `IsLocalSheet`.
+Rewrites: existing names are preserved unchanged unless you edit `Workbook.Names` (not yet supported).
+
+---
+
+## 27. Capability Degradation Callback (OnDegradation) (2.4.2+)
 
 When saving to a format that does not support a capability (xls/xlsb/csv), those capabilities are silently dropped by default. Register the callback to receive a per-item list, so nothing is lost in silence.
 
@@ -1673,7 +1691,7 @@ Comments, DataValidation, AutoFilter, Images, DocumentProperties, NamedRanges, S
 
 ---
 
-## 26. Full API Reference
+## 28. Full API Reference
 
 ### XlsxReader
 
