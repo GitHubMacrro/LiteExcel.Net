@@ -24,7 +24,7 @@
 14. [图片](#14-图片)
 15. [数据验证（下拉列表）](#15-数据验证下拉列表)
 16. [追加数据](#16-追加数据)
-17. [List&lt;T&gt; 映射（反射，不兼容 AOT）](#17-listt-映射反射不兼容-aot)
+17. [List&lt;T&gt; 映射（反射，AOT 安全）](#17-listt-映射反射aot-安全)
 18. [DataTable 便利 API（AOT 安全）](#18-datatable-便利-apiaot-安全)
 19. [Stream 读写](#19-stream-读写)
 20. [流式读取与进度回调](#20-流式读取与进度回调)
@@ -101,6 +101,22 @@ var wb2   = Excel.Create("员工表", ExcelFormat.Xlsx);   // 新建并命名首
 ```
 
 支持格式：`Xlsx`、`Xlsm`、`Csv`、`Xls`、`Xlsb`（后两者为历史兼容格式，读取与写入均已实现）。
+
+带数据新建（一步建簿并写入首表，返回的 `Workbook` 可与样式/冻结/条件格式/密码等能力混用）：
+
+```csharp
+// 从 List<T> 新建（首行为表头，反射映射，AOT 安全）
+var wb = Excel.Create(new[] { new Person { Name = "张三", Age = 25 } }, "员工表");
+wb.Worksheets[0].FreezeRows = 1;      // 建完后可继续用工作簿级能力
+wb.SaveAs("out.xlsx");
+
+// 从 DataTable 新建（表名为空时取 DataTable.TableName，再为空则 Sheet1）
+var dt = new DataTable("库存表");
+dt.Columns.Add("货号"); dt.Columns.Add("金额");
+dt.Rows.Add("A1", 12.5m);
+var wb2 = Excel.Create(dt);
+wb2.SaveAs("stock.xlsx");
+```
 
 ### 2.2 打开已有文件
 
@@ -266,7 +282,7 @@ wb.Save();
 ### 2.9 List\<T\> / DataTable 便利 API
 
 ```csharp
-// List<T> 映射（反射，不兼容 AOT）
+// List<T> 映射（反射，AOT 安全）
 Excel.Write("out.xlsx", new[] { new Person { Name = "张三", Age = 25 } });
 var list = Excel.Read<Person>("out.xlsx");
 
@@ -354,6 +370,81 @@ ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 
 ---
 ## 3. 快速上手
+
+### 创建工作簿填充数据（高层 API）
+
+交互式编辑推荐使用对象模型：`Excel.Create` 新建 → `SetValue` 填充 → `SaveAs` 保存 → `Open` 读回：
+
+```csharp
+using LiteExcel;
+
+var wb = Excel.Create();                    // 默认 xlsx，自带 Sheet1
+var ws = wb.Worksheets["Sheet1"];
+
+ws.SetValue("A1", "姓名");  ws.SetValue("B1", "年龄");
+ws.SetValue("A2", "张三");   ws.SetValue("B2", 28);
+ws.SetValue("A3", "李四");   ws.SetValue("B3", 32);
+
+ws.Cell("A1").Style = new CellStyle { Bold = true };   // 表头加粗
+ws.FreezeHeader = true;                                  // 冻结首行
+
+wb.SaveAs("output.xlsx");
+
+var rb = Excel.Open("output.xlsx");        // 读回
+Console.WriteLine(rb.Worksheets[0].Cell("A2").GetString());  // 张三
+```
+
+### 用自定义类快速写出（List&lt;T&gt; 映射）
+
+批量导出用 `List&lt;T&gt;` 映射，一个类即可声明列名 / 顺序 / 格式 / 公式 / 忽略：
+
+```csharp
+public class Employee
+{
+    [LiteColumn(Name = "姓名", Order = 0)]
+    public string Name { get; set; } = "";
+
+    [LiteColumn(Name = "年龄", Order = 1)]
+    public int Age { get; set; }
+
+    [LiteColumn(Name = "入职日期", Order = 2, Format = "yyyy-MM-dd")]
+    public DateTime HireDate { get; set; }
+
+    [LiteColumn(Name = "薪资", Order = 3, Format = "#,##0.00")]
+    public decimal Salary { get; set; }
+
+    [LiteColumn(Name = "在职", Order = 4)]
+    public bool Active { get; set; }
+
+    [LiteColumn(Name = "平均年龄", Order = 5, IsFormula = true)]
+    public string AvgAgeFormula { get; set; } = "";   // 公式列："=AVERAGE(B2:B3)" 或 "AVERAGE(B2:B3)"
+
+    [LiteColumn(Ignore = true)]
+    public string InternalId { get; set; } = "";       // 不输出
+}
+
+var list = new List<Employee>
+{
+    new() { Name = "张三", Age = 28, HireDate = new DateTime(2020, 3, 15), Salary = 8500.50m, Active = true, AvgAgeFormula = "=AVERAGE(B2:B3)" },
+    new() { Name = "李四", Age = 32, HireDate = new DateTime(2018, 7, 1),  Salary = 12000m,    Active = false, AvgAgeFormula = "AVERAGE(B2:B3)" },
+};
+
+XlsxWriter.Write("employees.xlsx", list, opt => opt.FreezeHeader = true);
+```
+
+`List&lt;T&gt;` 支持的属性类型一览：
+
+| C# 属性类型 | → Excel 列 | 特性 |
+|---|---|---|
+| `string` | 文本 | — |
+| `int` / `double` / `decimal` | 数字 | `Format` |
+| `DateTime` | 日期 | `Format`（显示格式） |
+| `bool` | 布尔 | — |
+| `string` + `IsFormula=true` | 公式 | `IsFormula` |
+| `null` | 空单元格 | — |
+| 任意 + `Ignore=true` | 不输出 | `Ignore` |
+
+> 超链接、样式、合并、冻结、条件格式、图片等高级能力请用高层 API（`Excel.Create` + `Cell.Hyperlink` / `Cell.Style` 等）或低层 `SheetData`。`List&lt;T&gt;` 映射聚焦"批量纯数据"场景。
 
 ### 最简写出
 
@@ -1455,9 +1546,9 @@ XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
 
 ---
 
-## 17. List&lt;T&gt; 映射（反射，不兼容 AOT）
+## 17. List&lt;T&gt; 映射（反射，AOT 安全）
 
-> **注意**：List&lt;T&gt; API 使用反射，不兼容 AOT/裁剪。AOT 项目请用 SheetData 或 DataTable。
+> **注意**：List&lt;T&gt; API 使用反射，已用 `[DynamicallyAccessedMembers]` 标注，兼容 AOT/裁剪（详见 §24）。调用时请使用具体类型（如 `Excel.Write<Person>`）。
 
 ### 基本写出
 
@@ -1483,6 +1574,30 @@ XlsxWriter.Write("people.xlsx", list);
 ```csharp
 var list = XlsxReader.Read<Person>("people.xlsx");
 ```
+
+### 建簿并写入（Excel.Create）
+
+```csharp
+// 返回可继续使用的工作簿（样式/冻结/条件格式/密码等都能加）
+var wb = Excel.Create(list, "员工表");
+wb.Worksheets[0].HeaderStyle = new CellStyle { Bold = true };
+wb.SaveAs("people.xlsx");
+
+// 批量加表并写入
+wb.Worksheets.Add("历史", moreList);
+```
+
+### 导入到已有工作表（Worksheet.ImportData）
+
+```csharp
+var wb = Excel.Open("people.xlsx");
+var ws = wb.Worksheets[0];
+ws.ImportData(newList);                 // 清空现有内容，从 A1 重建（首行表头）
+ws.ImportData(dataTable, includeHeader: false);   // DataTable 版，可不写表头
+wb.Save();
+```
+
+`ImportData` 清空整表后重建（合并区一并清除），导入后仍可继续修改单元格样式。
 
 ### [LiteColumn] 特性
 
@@ -1513,6 +1628,7 @@ public class Product
 | `Name` | 列名（默认用属性名） |
 | `Order` | 列顺序（-1 按声明顺序） |
 | `Format` | 数字/日期格式 |
+| `IsFormula` | true 则把该字符串属性当公式写出（值可带或不带 `=`） |
 | `Ignore` | true 则不输出/读取 |
 
 ### Fluent 配置（写出）
@@ -1522,6 +1638,7 @@ XlsxWriter.Write("people.xlsx", list, opt => opt
     .Column(x => x.Name, "姓名")
     .Column(x => x.Age, "年龄")
     .Column(x => x.Birthday, "生日", "yyyy-MM-dd")
+    .Column(x => x.SumFormula, "合计", isFormula: true)   // 公式列
     .Ignore(x => x.InternalRemark));
 
 // 也可设 SheetName 和 FreezeHeader
@@ -1589,6 +1706,19 @@ foreach (DataRow row in dt.Rows)
 {
     Console.WriteLine($"#{row["OrderID"]} | {row["Customer"]} | {row["Amount"]:C}");
 }
+```
+
+### 建簿并导入
+
+```csharp
+// 一步建簿并写 DataTable（表名空则取 DataTable.TableName，再空则 Sheet1）
+var wb = Excel.Create(dt);
+wb.SaveAs("orders.xlsx");
+
+// 或导入到已有工作表（清空整表后从 A1 重建；includeHeader=false 不写列名行）
+var opened = Excel.Open("orders.xlsx");
+opened.Worksheets[0].ImportData(dt, includeHeader: false);
+opened.Save();
 ```
 
 ---
@@ -1850,28 +1980,25 @@ catch (InvalidSheetNameException ex)
 
 ## 24. AOT 兼容性
 
-### AOT 安全的 API（无反射）
+全部公开 API 均兼容 Native AOT / 裁剪。库以 `IsAotCompatible` 编译，并经过两类实测验证：
 
-| API | 说明 |
+- **编译期**：仓库内置 `tests/LiteExcel.AotSmoke`（`PublishAot` + `TrimmerRootAssembly Include="LiteExcel"`），ILC 遍历库全部代码路径做裁剪分析，publish 零 IL 警告。
+- **运行期**：以原生 AOT 可执行文件实测覆盖 xlsx/xlsb/xls/csv 读写、`[LiteColumn]`、公式列、Fluent 表达式、可空/decimal、DataTable、`Excel.Create<T>`/`ImportData`/`Add<T>`、条件格式、命名区域、图片（Floating/InCell）、流式读写、降级回调、超链接、冻结窗格，全部断言通过。
+
+| API | AOT 说明 |
 |---|---|
-| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | 对象模型 |
-| `Excel.CreateWriter` / `Excel.StreamRows` | 流式读写 |
-| `Read(path/stream, ...)` | 返回 `SheetData` |
-| `Write(path/stream, SheetData)` | 接收 `SheetData` |
-| `ReadAsDataTable(...)` | DataTable 自带 schema |
-| `Write(path, DataTable)` | DataTable 写出 |
-| `GetSheetNames(...)` | 列出表名 |
-| `Append(...)` | 追加 |
-| `AutoColumnWidths(...)` | 列宽自适应 |
+| 对象模型（`Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells`） | 无反射 |
+| 流式（`Excel.CreateWriter` / `Excel.StreamRows`） | 无反射 |
+| `SheetData` 读写（`Read` / `Write` / `Append` / `AutoColumnWidths`） | 无反射 |
+| DataTable（`ReadAsDataTable` / `Write(path, DataTable)` / `Create(DataTable)` / `ImportData(DataTable)`） | 无反射 |
+| List&lt;T&gt; 映射（`Excel.Read<T>` / `Excel.Write<T>` / `Excel.Create<T>` / `Worksheet.ImportData<T>` / `WorksheetCollection.Add<T>`） | 使用反射，已用 `[DynamicallyAccessedMembers]` 标注，AOT/裁剪安全 |
+| `WriteOptions.Column<TProp>` / `Ignore<TProp>` | 只读表达式树的 `Member.Name`，从不 `.Compile()`，无成员反射 |
 
-### AOT 不安全的 API（有反射，标注 `[RequiresUnreferencedCode]`）
+> **调用约束**：`List<T>` 泛型 API 请使用具体类型（如 `Excel.Write<Employee>`）。若在你的未标注开放泛型方法中转发，编译器会提示 IL2091 警告，需给对应类型参数补上标注——这是正确的传染行为。
 
-| API | 说明 |
-|---|---|
-| `Excel.Read<T>(...)` / `Read<T>(...)` | List&lt;T&gt; 读取 |
-| `Excel.Write<T>(...)` / `Write<T>(...)` | List&lt;T&gt; 写出 |
+> **读取入口边界**：`Excel.Read<T>` / `XlsxReader.Read` 仅支持 xlsx/xlsm（OpenXML 文本格式）；**xls / xlsb / csv 的读取请走 `Excel.Open(path)`**（门面按扩展名路由到对应后端）。
 
-> AOT 项目编译时，调用这些 API 会收到 `IL3050`/`IL2026` 警告。非 AOT 项目（net48、net8 普通发布）无影响。
+> **InvariantGlobalization**：`InvariantGlobalization=true`（AOT 项目常见配置）下，19 项原生可执行文件断言全部通过，含 xls/xlsb 读写。注意 xls 的 ANSI 文本在 Invariant 模式下按 Latin1 解码，非当前系统代码页的字符（如中文 GBK 文本）可能失真——这是 xls 二进制格式的固有限制，与 AOT 无关。
 
 ---
 
@@ -2054,6 +2181,41 @@ Excel.Write("out.csv", wb, options);
 
 ## 28. 完整 API 索引
 
+### Excel（门面）
+
+| 方法 | 返回 | 说明 |
+|---|---|---|
+| `Open(path, options?)` / `Open(stream, format, options?)` | `Workbook` | 按扩展名识别格式打开 |
+| `DetectFormat(path)` | `ExcelFormat` | 按扩展名识别格式 |
+| `Create(format = Xlsx)` / `Create(sheetName, format)` / `Create(string[], format)` | `Workbook` | 新建工作簿（空壳 / 命名 / 批量表） |
+| `Create<T>(data, sheetName, format, configure?)` | `Workbook` | 建簿并写入 List&lt;T&gt;（首行表头，反射，AOT 安全） |
+| `Create(DataTable, sheetName?, format)` | `Workbook` | 建簿并写入 DataTable（表名兜底 TableName → Sheet1） |
+| `Write(path, Workbook, options?)` | `void` | 写出工作簿 |
+| `Write(path, SheetData, options?)` | `void` | 写出单表（低层模型） |
+| `Write(path, DataTable, sheetName?, options?)` | `void` | 从 DataTable 写（AOT 安全） |
+| `Write<T>(path, IEnumerable<T>, sheetName?, configure?)` | `void` | 从 List&lt;T&gt; 写（反射，AOT 安全） |
+| `Read<T>(path, sheetName?, configure?)` | `List<T>` | 读为 List&lt;T&gt;（仅 xlsx/xlsm） |
+| `ReadAsDataTable(path, sheetName?, firstRowIsHeader?)` | `DataTable` | 读为 DataTable |
+| `GetSheetNames(path)` | `List<string>` | 列出所有工作表名 |
+| `StreamRows(path, sheetName, onRow)` | `void` | 流式读取（自动跳过首行） |
+| `CreateWriter(path)` / `CreateWriter(stream)` | `XlsxStreamWriter` | 流式写入（仅 xlsx/xlsm） |
+
+### Worksheet
+
+| 成员 | 说明 |
+|---|---|
+| `Cell(row, col)` / `Cell("A1")` / `Range(...)` / `Cells` | 单元格 / 区域访问 |
+| `SetValue(row, col / address, value)` | 写值 |
+| `ImportData<T>(data, configure?)` | 清空整表并从 A1 重建（List&lt;T&gt;，首行表头） |
+| `ImportData(DataTable, includeHeader = true)` | 清空整表并从 A1 重建（DataTable） |
+| `AddImage(byte[] data, row, col, ...)` | 添加图片（Floating/InCell） |
+| `FreezeRows` / `FreezeColumns` / `FreezeHeader` | 冻结窗格 |
+| `Merge(...)` / `Unmerge(...)` / `MergedRanges` | 合并单元格 |
+| `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | 样式 |
+| `RowHeights` / `ColumnWidths` | 行高 / 列宽 |
+| `Comments` / `Validations` / `Filter` / `ConditionalFormats` / `Images` | 批注 / 数据验证 / 筛选 / 条件格式 / 图片 |
+| `ToSheetData()` | 转回低层模型（写回用） |
+
 ### XlsxReader
 
 | 方法 | 返回 | 说明 |
@@ -2073,11 +2235,9 @@ Excel.Write("out.csv", wb, options);
 | `ReadAsDataTable(string path, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | 按名读为 DataTable |
 | `ReadAsDataTable(Stream stream, int sheetIndex = 0, bool firstRowIsHeader = true)` | `DataTable` | 从流读为 DataTable |
 | `ReadAsDataTable(Stream stream, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | 从流按名读 |
-| `Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null)` ⚠️ | `List<T>` | 读为 List&lt;T&gt;（反射） |
-| `Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null)` ⚠️ | `List<T>` | 按名读为 List&lt;T&gt; |
+| `Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null)` | `List<T>` | 读为 List&lt;T&gt;（反射，AOT 安全） |
+| `Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null)` | `List<T>` | 按名读为 List&lt;T&gt; |
 | `ReadProperties(string path)` / `ReadProperties(Stream stream)` | `WorkbookProperties` | 读取文档属性（作者/时间/标题） |
-
-> ⚠️ 标注 `[RequiresUnreferencedCode]`，不兼容 AOT。
 
 ### XlsxWriter
 
@@ -2089,7 +2249,7 @@ Excel.Write("out.csv", wb, options);
 | `Write(Stream stream, IReadOnlyList<SheetData> sheets)` | 写多表到流 |
 | `Write(path/stream, sheets, WorkbookProperties? properties)` | 写出并携带文档属性 |
 | `Write(string path, DataTable table, string sheetName = "Sheet1")` | 从 DataTable 写 |
-| `Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)` ⚠️ | 从 List&lt;T&gt; 写（反射） |
+| `Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)` | 从 List&lt;T&gt; 写（反射，AOT 安全） |
 | `Append(string path, SheetData? newData, WorkbookProperties? updateProperties = null)` | 追加数据并可更新文档属性 |
 | `AutoColumnWidths(SheetData sheet)` | 自动估算列宽 |
 

@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Data;
+using System.Diagnostics.CodeAnalysis;
 
 namespace LiteExcel;
 
@@ -46,6 +48,24 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
         var sheet = new Worksheet(name);
         _sheets.Add(sheet);
         _workbook.OnWorksheetAdded(sheet);
+        return sheet;
+    }
+
+    /// <summary>新增工作表并写入 List&lt;T&gt; 数据（首行为表头） </summary>
+    public Worksheet Add<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string name, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)
+    {
+        var sheet = Add(name);
+        sheet.ImportData(data, configure);
+        return sheet;
+    }
+
+    /// <summary>新增工作表并写入 DataTable 数据（首行写列名） </summary>
+    public Worksheet Add(string name, DataTable table)
+    {
+        var sheet = Add(name);
+        sheet.ImportData(table);
         return sheet;
     }
 

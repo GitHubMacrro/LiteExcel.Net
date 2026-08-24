@@ -33,6 +33,9 @@ Demo19_Images(outDir);
 Demo20_CsvSeparator(outDir);
 Demo21_ImageReadBack(outDir);
 Demo22_ConditionalFormatting(outDir);
+Demo23_NamedRanges(outDir);
+Demo24_FormulaColumn(outDir);
+Demo25_CreateWithData(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -942,6 +945,69 @@ Demo22_ConditionalFormatting(outDir);
         Console.WriteLine($"  rules read back: {rb.Worksheets[0].ConditionalFormats.Count}");
         Console.WriteLine();
     }
+
+    // 23. Named ranges (read-back)
+    private static void Demo23_NamedRanges(string dir)
+    {
+        Console.WriteLine("[23] Named Ranges (read-back)");
+
+        var file = Path.Combine(dir, "demo23_named_ranges.xlsx");
+        var wb = Excel.Create();
+        wb.Worksheets[0].SetValue("A1", "值");
+        wb.SaveAs(file);
+
+        var opened = Excel.Open(file);
+        Console.WriteLine($"  Workbook.Names count: {opened.Names.Count}");
+        Console.WriteLine("  (命名区域来自 Excel 文件的 <definedNames>；库读回并在未修改时原样保留)");
+        Console.WriteLine();
+    }
+
+    // 24. Formula column
+    private static void Demo24_FormulaColumn(string dir)
+    {
+        Console.WriteLine("[24] Formula Column ([LiteColumn(IsFormula = true)])");
+
+        var rows = new List<DemoFormulaRow>
+        {
+            new() { Name = "苹果", Price = 5.0m, Qty = 10, Total = "=B2*C2" },
+            new() { Name = "香蕉", Price = 3.5m, Qty = 20, Total = "B3*C3" },
+        };
+        var file = Path.Combine(dir, "demo24_formula_column.xlsx");
+        Excel.Write(file, rows);
+
+        var cell = Excel.Open(file).Worksheets[0].Cell("D2");
+        Console.WriteLine($"  D2 formula: {cell.Formula}");
+        Console.WriteLine();
+    }
+
+    // 25. Create workbook with data
+    private static void Demo25_CreateWithData(string dir)
+    {
+        Console.WriteLine("[25] Create Workbook With Data (Excel.Create<T> / ImportData / Add<T> / DataTable)");
+
+        // 方式1：一步建簿并写 List<T>，随后可用工作簿级能力
+        var wb = Excel.Create(new List<DemoEmp> { new() { Name = "张三", Age = 25 } }, "员工表");
+        wb.Worksheets[0].HeaderStyle = new CellStyle { Bold = true };
+        wb.Worksheets[0].FreezeRows = 1;
+        // 方式2：批量加表并写数据
+        wb.Worksheets.Add("历史", new List<DemoEmp> { new() { Name = "李四", Age = 30 } });
+        // 方式3：导入重建已有表
+        wb.Worksheets[0].ImportData(new List<DemoEmp> { new() { Name = "王五", Age = 28 } });
+        wb.SaveAs(Path.Combine(dir, "demo25_create_with_data.xlsx"));
+
+        // 方式4：DataTable 建簿（表名兜底 TableName → Sheet1）
+        var dt = new DataTable("库存表");
+        dt.Columns.Add("货号");
+        dt.Columns.Add("金额", typeof(decimal));
+        dt.Rows.Add("A1", 12.5m);
+        var wb2 = Excel.Create(dt);
+        wb2.SaveAs(Path.Combine(dir, "demo25_data_table.xlsx"));
+
+        var opened = Excel.Open(Path.Combine(dir, "demo25_create_with_data.xlsx"));
+        Console.WriteLine($"  sheets: {string.Join(",", opened.Worksheets.Names)}");
+        Console.WriteLine($"  A2 name: {opened.Worksheets["员工表"].Cell("A2").Text}");
+        Console.WriteLine();
+    }
 }
 
 // Demo model for List<T> mapping
@@ -964,4 +1030,21 @@ public class Product
 
     [LiteColumn(Ignore = true)]
     public string? InternalRemark { get; set; }
+}
+
+// Demo models for formula column / create-with-data
+public class DemoFormulaRow
+{
+    public string Name { get; set; } = "";
+    public decimal Price { get; set; }
+    public int Qty { get; set; }
+
+    [LiteColumn(IsFormula = true)]
+    public string Total { get; set; } = "";
+}
+
+public class DemoEmp
+{
+    public string Name { get; set; } = "";
+    public int Age { get; set; }
 }

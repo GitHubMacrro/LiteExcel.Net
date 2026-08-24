@@ -13,7 +13,7 @@ A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/cs
 ## Features
 
 - **Zero dependencies**: .NET BCL only (ZipArchive + XmlReader/XDocument), no third-party packages
-- **AOT friendly**: object-model and DataTable APIs use no reflection; List\<T\> mapping APIs are marked `[RequiresUnreferencedCode]`
+- **AOT friendly**: all public APIs are compatible with Native AOT/trimming; List\<T\> reflection mapping is annotated with `[DynamicallyAccessedMembers]` and verified by a native AOT executable (incl. xls/xlsb/csv, conditional formatting, named ranges, images, streaming)
 - **Dual target**: net48 + net8.0 (works with legacy WinForms projects and new projects)
 - **Intuitive object-model API**: natural hierarchy `Excel -> Workbook -> Worksheet -> Cell/Range/Cells`, one-liner read/write
 - **Extensible formats**: xlsx/xlsm/csv read+write; xls read/write (formulas as static values); xlsb read/write (formulas as static values)
@@ -22,6 +22,9 @@ A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/cs
 - **Hyperlinks**: read + write on all 4 formats (xlsx/xlsm/xlsb/xls; external URLs/files/mailto/UNC + internal `#Sheet1!A1` jumps via `Cell.Hyperlink`)
 - **Freeze panes**: `FreezeRows` / `FreezeColumns` on xlsx/xlsb/xls (arbitrary rows/columns), `FreezeHeader` compatible
 - **Images (write-only)**: xlsx/xlsm floating images + in-cell images, with anchor/move-mode/AltText (`ws.AddImage`, `ImageAnchor`, `ImageMoveMode`; image reading is out of scope for 2.4.0)
+- **Create workbook with data in one step**: `Excel.Create<T>` / `Excel.Create(DataTable)`, `Worksheet.ImportData`, `WorksheetCollection.Add<T>`
+- **Named ranges read-back** (2.4.5+): `Workbook.Names`
+- **Formula columns** (2.4.5+): `[LiteColumn(IsFormula = true)]` / `WriteOptions.Column(..., isFormula:)`
 - **Real file compatibility**: correctly reads xlsx created by Excel/WPS (including Table/theme extension parts)
 
 ## Installation
@@ -107,16 +110,18 @@ foreach (var row in read.Rows)
 | `Excel.Open(path)` | open a workbook, format auto-detected from extension |
 | `Excel.Open(stream, format)` | open a workbook from stream (format must be specified) |
 | `Excel.Create(format)` / `Excel.Create(sheetName, format)` / `Excel.Create(sheetNames[], format)` | create a workbook (xlsx/xlsm/csv/xls/xlsb), batch sheet creation supported |
-| `Excel.Read<T>(path, sheetName?)` | read as List\<T\> (reflection, not AOT compatible) |
+| `Excel.Create<T>(data, sheetName, format, configure?)` / `Excel.Create(dataTable, ...)` | create a workbook and write List\<T\> / DataTable data directly (first row is header, AOT safe) |
+| `Excel.Read<T>(path, sheetName?)` | read as List\<T\> (reflection, AOT safe) |
 | `Excel.ReadAsDataTable(path, sheetName?)` | read as DataTable (AOT safe) |
 | `Excel.Write(path, Workbook)` | write a workbook |
 | `Excel.Write(path, DataTable)` | write from DataTable (AOT safe) |
-| `Excel.Write<T>(path, IEnumerable<T>)` | write from List\<T\> (reflection, not AOT compatible) |
+| `Excel.Write<T>(path, IEnumerable<T>)` | write from List\<T\> (reflection, AOT safe) |
 | `Excel.CreateWriter(path/stream)` | streaming write for large files (row by row) |
 | `Excel.StreamRows(path, sheetName, onRow)` | streaming read for large files |
 | `Excel.GetSheetNames(path)` | list all sheet names |
 | `Workbook.Worksheets / Properties / Save() / SaveAs(path, format)` | file-level operations |
 | `Worksheet.Cell("A1") / Cell(row, col) / Range("A1:D10") / Cells` | sheet-level access |
+| `Worksheet.ImportData<T>(data, configure?)` / `ImportData(dataTable)` | clear the sheet and rebuild from A1 (List\<T\> / DataTable) |
 | `Worksheet.SetValue / Merge / Unmerge` | sheet-level write and merge |
 | `Cell.GetString/GetDouble/GetDateTime/GetBoolean/TryGet*` | typed cell accessors |
 | `Cell.SetValue / IsFormula / FromFormula` | cell write and formula |
@@ -134,7 +139,7 @@ foreach (var row in read.Rows)
 | `Write(path, IReadOnlyList<SheetData>)` / `Write(stream, ...)` | write multiple sheets |
 | `Write(path/stream, sheets, WorkbookProperties)` | write with document properties |
 | `Write(path, DataTable)` | write from DataTable (AOT safe) |
-| `Write<T>(path, IEnumerable<T>)` | write from List\<T\> (reflection, not AOT compatible) |
+| `Write<T>(path, IEnumerable<T>)` | write from List\<T\> (reflection, AOT safe) |
 | `Append(path, SheetData, WorkbookProperties?)` | append data and optionally update document properties |
 | `AutoColumnWidths(sheet)` | auto estimate column widths |
 
@@ -149,7 +154,7 @@ foreach (var row in read.Rows)
 | `StreamRows(path, sheetName, onRow)` / `StreamRows(stream, ...)` | stream large files |
 | `ReadWithProgress(path, sheetIndex, onProgress)` | read with progress |
 | `ReadAsDataTable(path)` / `ReadAsDataTable(stream)` | read as DataTable (AOT safe) |
-| `Read<T>(path)` | read as List\<T\> (reflection, not AOT compatible) |
+| `Read<T>(path)` | read as List\<T\> (reflection, AOT safe) |
 | `ReadProperties(path)` / `ReadProperties(stream)` | read document properties (author/time/title) |
 
 ### Model Classes
@@ -184,7 +189,7 @@ foreach (var row in read.Rows)
 | `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | ✅ Safe (no reflection) |
 | `Excel.ReadAsDataTable` / `DataTable` read/write | ✅ Safe (no reflection) |
 | `SheetData` / `XlsxWriter` / `XlsxReader` read/write | ✅ Safe (no reflection) |
-| `Excel.Read<T>` / `Excel.Write<T>` / `List<T>` read/write | ⚠️ Marked `[RequiresUnreferencedCode]`, warns on AOT compile |
+| `Excel.Read<T>` / `Excel.Write<T>` / `List<T>` read/write | ✅ Safe (reflection mapping annotated with `[DynamicallyAccessedMembers]`) |
 
 ## Detailed Docs
 

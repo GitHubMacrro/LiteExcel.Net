@@ -104,7 +104,7 @@ public static partial class XlsxWriter
         Write(path, sheet);
     }
 
-    private static SheetData DataTableToSheet(DataTable table, string sheetName)
+    internal static SheetData DataTableToSheet(DataTable table, string sheetName)
     {
         var sheet = new SheetData { SheetName = sheetName };
 
@@ -118,34 +118,11 @@ public static partial class XlsxWriter
             var cells = new List<Cell>(table.Columns.Count);
             for (int i = 0; i < table.Columns.Count; i++)
             {
-                cells.Add(ObjectToCell(dataRow[i]));
+                cells.Add(CellFactory.FromObject(dataRow[i]));
             }
             sheet.Rows.Add(cells);
         }
 
         return sheet;
-    }
-
-    private static Cell ObjectToCell(object? value)
-    {
-        if (value == null || value == DBNull.Value) return Cell.Empty;
-
-        return value switch
-        {
-            bool b => Cell.FromBoolean(b),
-            DateTime dt => Cell.FromDate(dt),
-            sbyte n => Cell.FromNumber(n),
-            byte n => Cell.FromNumber(n),
-            short n => Cell.FromNumber(n),
-            ushort n => Cell.FromNumber(n),
-            int n => Cell.FromNumber(n),
-            uint n => Cell.FromNumber(n),
-            long n => Cell.FromNumber(n),
-            ulong n => Cell.FromNumber(n),
-            float n => Cell.FromNumber(n),
-            double n => Cell.FromNumber(n),
-            decimal n => Cell.FromNumber((double)n),
-            _ => Cell.FromText(value.ToString()),
-        };
     }
 }

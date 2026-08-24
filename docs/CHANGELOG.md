@@ -1,14 +1,22 @@
 # Changelog
 
-## [2.4.5] - 2026-08-23
+## [2.4.5] - 2026-08-24
 
 ### Added
 
 - **命名区域读回**：`Workbook.Names` 读取 `workbook.xml` 中的 `definedNames`（名称/范围/作用域），兼容全局与 sheet-local 定义。打开即回填；写出未修改时原样保留。
+- **`List<T>` 公式列**：`LiteColumnAttribute.IsFormula` / `WriteOptions.Column(..., isFormula:)`，字符串属性按公式写出（值可带或不带前导 `=`）。
+- **高层 API 带数据建簿**：`Excel.Create<T>(data, sheetName, format, configure?)` / `Excel.Create(DataTable, sheetName?, format)` 一步建簿并写入首表；`Worksheet.ImportData<T>(...)` / `ImportData(DataTable, includeHeader)` 清空整表并从 A1 重建；`WorksheetCollection.Add<T>(name, data, configure?)` / `Add(name, DataTable)` 批量加表并写数据。泛型入口沿用 `[DynamicallyAccessedMembers]`，AOT 安全。`DataTableToSheet` 收敛为单一实现（统一 `CellFactory.FromObject`）。
+
+### Changed
+
+- **`List<T>` 映射转为 Native AOT 兼容**：`Excel.Read<T>` / `Excel.Write<T>` / `XlsxReader.Read<T>` / `XlsxWriter.Write<T>` 等反射入口由 `[RequiresUnreferencedCode]` 改为 `[DynamicallyAccessedMembers]` 标注，库以 `IsAotCompatible` 编译，新增 `tests/LiteExcel.AotSmoke` 原生 AOT 冒烟项目（`PublishAot` + `TrimmerRootAssembly`）。
+  - 验证：`dotnet publish -r win-x64` 零 IL/CS 警告；原生可执行文件运行 15 项断言全部通过（含 `[LiteColumn]` 特性、公式列、Fluent 表达式配置、可空/decimal、DataTable 往返）。
+  - 调用方以具体类型调用零警告；在未标注的开放泛型中转发会收到 IL2091 提示，按提示补标注即可。
 
 ### Notes
 
-- 全量 **502 测试**，通过 net48 + net8.0。
+- 全量 **518 测试**，通过 net48 + net8.0；net48 以 internal polyfill 提供 `DynamicallyAccessedMembersAttribute`。
 
 ## [2.4.4] - 2026-08-22
 

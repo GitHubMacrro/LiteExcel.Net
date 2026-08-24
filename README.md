@@ -53,11 +53,14 @@ var read = XlsxReader.Read("output2.xlsx", 0);
 ## Features / 特性
 
 - Zero dependencies / 零依赖
-- AOT friendly / AOT 友好
+- AOT friendly — all public APIs are Native AOT / trim compatible, verified by a native AOT executable / AOT 友好 —— 全部公开 API 兼容 Native AOT / 裁剪，经原生可执行文件实测
 - net48 + net8.0
 - Object-model API `Excel -> Workbook -> Worksheet -> Cell/Range/Cells` / 直觉化对象模型 API
 - xlsx / xlsm / csv read+write, xls read+write, xlsb read/write / 多格式支持（xlsx/xlsm/csv 读写、xls 读写、xlsb 读写）
 - Streaming read/write for large files / 大文件流式读写
+- Create workbook with data in one step: `Excel.Create<T>` / `Excel.Create(DataTable)` / `Worksheet.ImportData` / `WorksheetCollection.Add<T>` / 一步建簿并写数据
+- Named ranges read-back (2.4.5+): `Workbook.Names` / 命名区域读回
+- Formula columns (2.4.5+): `[LiteColumn(IsFormula = true)]` / 公式列
 - Read/Write, styles, merged cells, auto filter, row height, comments, data validation, append, Stream, List\<T\>/DataTable
 - 读/写、样式、合并、自动筛选、行高、批注、数据验证、追加、Stream、List\<T\>/DataTable
 - File-level security: open password (Agile Encryption) + modify password (write protection) on xlsx/xlsm/xlsb, via `Workbook.Security` (`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`) / 文件级安全：打开密码（Agile 加密）+ 修改密码（写保护），支持 xlsx/xlsm/xlsb

@@ -18,23 +18,26 @@ public sealed class WriteOptions<T>
 
     private readonly Dictionary<string, string> _columnNames = new();
     private readonly Dictionary<string, string> _columnFormats = new();
+    private readonly HashSet<string> _formulaColumns = new();
     private readonly HashSet<string> _ignored = new();
 
     /// <summary>指定属性对应的列名和可选格式（Fluent，引用类型） </summary>
-    public WriteOptions<T> Column(Expression<Func<T, object?>> prop, string name, string? format = null)
+    public WriteOptions<T> Column(Expression<Func<T, object?>> prop, string name, string? format = null, bool isFormula = false)
     {
         var propName = ExpressionHelper.GetPropertyName(prop);
         _columnNames[propName] = name;
         if (format is not null) _columnFormats[propName] = format;
+        if (isFormula) _formulaColumns.Add(propName);
         return this;
     }
 
     /// <summary>指定属性对应的列名和可选格式（Fluent，值类型） </summary>
-    public WriteOptions<T> Column<TProp>(Expression<Func<T, TProp>> prop, string name, string? format = null)
+    public WriteOptions<T> Column<TProp>(Expression<Func<T, TProp>> prop, string name, string? format = null, bool isFormula = false)
     {
         var propName = ExpressionHelper.GetPropertyName(prop);
         _columnNames[propName] = name;
         if (format is not null) _columnFormats[propName] = format;
+        if (isFormula) _formulaColumns.Add(propName);
         return this;
     }
 
@@ -64,6 +67,8 @@ public sealed class WriteOptions<T>
 
     internal string? GetFormat(string propName) =>
         _columnFormats.TryGetValue(propName, out var fmt) ? fmt : null;
+
+    internal bool IsFormulaColumn(string propName) => _formulaColumns.Contains(propName);
 
     internal bool IsIgnored(string propName) => _ignored.Contains(propName);
 }

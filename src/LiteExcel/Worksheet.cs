@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Data;
+using System.Diagnostics.CodeAnalysis;
 
 namespace LiteExcel;
 
@@ -219,6 +221,59 @@ public sealed class Worksheet
     {
         var cell = Cell(address);
         cell.SetValue(value);
+    }
+
+    // ── 数据导入 ──
+
+    /// <summary>
+    /// 把 List&lt;T&gt; 导入本工作表：清空现有内容后从 A1 重建（首行为表头，与 <see cref="Excel.Write{T}"/> 一致）。
+    /// </summary>
+    public void ImportData<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)
+    {
+        if (data is null) throw new ArgumentNullException(nameof(data));
+        var options = new WriteOptions<T>();
+        configure?.Invoke(options);
+        ImportSheet(XlsxWriter.ListToSheet(data, options), includeHeader: true);
+    }
+
+    /// <summary>
+    /// 把 DataTable 导入本工作表：清空现有内容后从 A1 重建。首行默认写表头。
+    /// </summary>
+    public void ImportData(DataTable table, bool includeHeader = true)
+    {
+        if (table is null) throw new ArgumentNullException(nameof(table));
+        ImportSheet(XlsxWriter.DataTableToSheet(table, Name), includeHeader);
+    }
+
+    private void ImportSheet(SheetData sheet, bool includeHeader)
+    {
+        _grid.Clear();
+        _mergedRanges.Clear();
+
+        if (sheet.FreezeHeader) FreezeHeader = true;
+        if (sheet.FreezeRows > 0) FreezeRows = sheet.FreezeRows;
+        if (sheet.FreezeColumns > 0) FreezeColumns = sheet.FreezeColumns;
+        if (sheet.ColumnWidths is not null)
+            ColumnWidths = sheet.ColumnWidths.Select((w, i) => (i, w)).ToDictionary(x => x.i, x => x.w);
+
+        if (includeHeader && sheet.Headers is { Count: > 0 })
+        {
+            var headerRow = new List<Cell>(sheet.Headers.Count);
+            foreach (var h in sheet.Headers)
+                headerRow.Add(LiteExcel.Cell.FromText(h));
+            SetRowCells(0, headerRow);
+        }
+
+        foreach (var row in sheet.Rows)
+        {
+            var list = new List<Cell>(row.Count);
+            list.AddRange(row);
+            _grid.Add(list);
+        }
+
+        RebindOwners();
     }
 
     // ── 合并 ──

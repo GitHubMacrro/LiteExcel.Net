@@ -24,7 +24,7 @@
 14. [Images](#14-images)
 15. [Data Validation (Dropdown List)](#15-data-validation-dropdown-list)
 16. [Appending Data](#16-appending-data)
-17. [List<T> Mapping (reflection, not AOT compatible)](#17-listt-mapping-reflection-not-aot-compatible)
+17. [List<T> Mapping (reflection, AOT safe)](#17-listt-mapping-reflection-aot-safe)
 18. [DataTable Convenience API (AOT safe)](#18-datatable-convenience-api-aot-safe)
 19. [Stream Read/Write](#19-stream-readwrite)
 20. [Streaming Read & Progress Callback](#20-streaming-read--progress-callback)
@@ -102,6 +102,22 @@ var wb2   = Excel.Create("Employees", ExcelFormat.Xlsx); // create and name the 
 ```
 
 Supported formats: `Xlsx`, `Xlsm`, `Csv`, `Xls`, `Xlsb` (the latter two are legacy formats with read and write implemented).
+
+Create a workbook with data in one step (the returned `Workbook` can still be combined with styles / freeze panes / conditional formatting / passwords):
+
+```csharp
+// From List<T> (first row is the header, reflection mapping, AOT safe)
+var wb = Excel.Create(new[] { new Person { Name = "Zhang San", Age = 25 } }, "Employees");
+wb.Worksheets[0].FreezeRows = 1;   // keep using workbook-level features
+wb.SaveAs("out.xlsx");
+
+// From DataTable (falls back to DataTable.TableName, then "Sheet1")
+var dt = new DataTable("Stock");
+dt.Columns.Add("Code"); dt.Columns.Add("Amount");
+dt.Rows.Add("A1", 12.5m);
+var wb2 = Excel.Create(dt);
+wb2.SaveAs("stock.xlsx");
+```
 
 ### 2.2 Open an Existing File
 
@@ -267,7 +283,7 @@ wb.Save();
 ### 2.9 List\<T\> / DataTable Convenience API
 
 ```csharp
-// List<T> mapping (reflection, not AOT compatible)
+// List<T> mapping (reflection, AOT safe)
 Excel.Write("out.xlsx", new[] { new Person { Name = "Zhang San", Age = 25 } });
 var list = Excel.Read<Person>("out.xlsx");
 
@@ -356,6 +372,81 @@ Styles, merge, comments, data validation, auto filter, row height and column wid
 ---
 
 ## 3. Quick Start
+
+### Create a workbook and fill data (high-level API)
+
+For interactive editing, use the object model: `Excel.Create` → `SetValue` → `SaveAs` → `Open`:
+
+```csharp
+using LiteExcel;
+
+var wb = Excel.Create();                    // default xlsx with Sheet1
+var ws = wb.Worksheets["Sheet1"];
+
+ws.SetValue("A1", "Name");  ws.SetValue("B1", "Age");
+ws.SetValue("A2", "Zhang");  ws.SetValue("B2", 28);
+ws.SetValue("A3", "Li");     ws.SetValue("B3", 32);
+
+ws.Cell("A1").Style = new CellStyle { Bold = true };   // bold header
+ws.FreezeHeader = true;                                  // freeze first row
+
+wb.SaveAs("output.xlsx");
+
+var rb = Excel.Open("output.xlsx");        // read back
+Console.WriteLine(rb.Worksheets[0].Cell("A2").GetString());  // Zhang
+```
+
+### Write from a custom class (List<T> mapping)
+
+For batch export, use `List<T>` mapping. One class declares column name / order / format / formula / ignore:
+
+```csharp
+public class Employee
+{
+    [LiteColumn(Name = "Name", Order = 0)]
+    public string Name { get; set; } = "";
+
+    [LiteColumn(Name = "Age", Order = 1)]
+    public int Age { get; set; }
+
+    [LiteColumn(Name = "Hire Date", Order = 2, Format = "yyyy-MM-dd")]
+    public DateTime HireDate { get; set; }
+
+    [LiteColumn(Name = "Salary", Order = 3, Format = "#,##0.00")]
+    public decimal Salary { get; set; }
+
+    [LiteColumn(Name = "Active", Order = 4)]
+    public bool Active { get; set; }
+
+    [LiteColumn(Name = "Avg Age", Order = 5, IsFormula = true)]
+    public string AvgAgeFormula { get; set; } = "";   // formula: "=AVERAGE(B2:B3)" or "AVERAGE(B2:B3)"
+
+    [LiteColumn(Ignore = true)]
+    public string InternalId { get; set; } = "";       // skipped
+}
+
+var list = new List<Employee>
+{
+    new() { Name = "Zhang", Age = 28, HireDate = new DateTime(2020, 3, 15), Salary = 8500.50m, Active = true, AvgAgeFormula = "=AVERAGE(B2:B3)" },
+    new() { Name = "Li",    Age = 32, HireDate = new DateTime(2018, 7, 1),  Salary = 12000m,    Active = false, AvgAgeFormula = "AVERAGE(B2:B3)" },
+};
+
+XlsxWriter.Write("employees.xlsx", list, opt => opt.FreezeHeader = true);
+```
+
+Supported property types:
+
+| C# property type | → Excel column | Attribute |
+|---|---|---|
+| `string` | text | — |
+| `int` / `double` / `decimal` | number | `Format` |
+| `DateTime` | date | `Format` (display format) |
+| `bool` | boolean | — |
+| `string` + `IsFormula=true` | formula | `IsFormula` |
+| `null` | empty cell | — |
+| any + `Ignore=true` | skipped | `Ignore` |
+
+> Advanced capabilities (hyperlinks, styles, merged cells, freeze, conditional formatting, images) require the high-level API (`Excel.Create` + `Cell.Hyperlink` / `Cell.Style`, etc.) or the low-level `SheetData`. `List<T>` mapping targets "bulk plain data".
 
 ### Minimal Write
 
@@ -1237,9 +1328,11 @@ XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
 
 ---
 
-## 17. List&lt;T&gt; Mapping (reflection, not AOT compatible)
+## 17. List&lt;T&gt; Mapping (reflection, AOT safe)
 
-> For AOT projects, use the SheetData or DataTable overloads.
+> List<T> APIs use reflection, annotated with `[DynamicallyAccessedMembers]`, compatible with AOT/trimming (see §24). Call with a concrete type (e.g. `Excel.Write<Person>`).
+
+### Basic write
 
 ```csharp
 public class Person
@@ -1252,14 +1345,43 @@ public class Person
     public string? InternalId { get; set; }
 }
 
-// Write
 var list = new List<Person> { new() { Name = "Zhang San", Age = 25 } };
 XlsxWriter.Write("people.xlsx", list);
+```
 
-// Read
+### Basic read
+
+```csharp
 var read = XlsxReader.Read<Person>("people.xlsx");
+```
 
-// Fluent configuration
+### Create a workbook with data (Excel.Create)
+
+```csharp
+// Returns a usable workbook (styles / freeze panes / conditional formatting / passwords)
+var wb = Excel.Create(list, "Employees");
+wb.Worksheets[0].HeaderStyle = new CellStyle { Bold = true };
+wb.SaveAs("out2.xlsx");
+
+// Add a sheet with data
+wb.Worksheets.Add("History", moreList);
+```
+
+### Import into an existing worksheet (Worksheet.ImportData)
+
+```csharp
+var opened = Excel.Open("people.xlsx");
+var ws = opened.Worksheets[0];
+ws.ImportData(read);                    // clears and rebuilds from A1 (first row is header)
+ws.ImportData(dataTable, includeHeader: false);   // DataTable overload, optional header
+opened.Save();
+```
+
+`ImportData` clears the whole sheet (including merged ranges) then rebuilds; cell styles remain editable afterwards.
+
+### Fluent configuration
+
+```csharp
 XlsxWriter.Write("people.xlsx", list, opt => opt
     .Column(x => x.Name, "Name")
     .Column(x => x.Age, "Age")
@@ -1268,8 +1390,8 @@ XlsxWriter.Write("people.xlsx", list, opt => opt
 
 ### Three Ways to Customize Columns
 
-1. **`[LiteColumn]` attribute**: `Name` / `Order` / `Format` / `Ignore`
-2. **Fluent callback**: `opt.Column(x => x.Name, "Name").Ignore(x => x.Id)`
+1. **`[LiteColumn]` attribute**: `Name` / `Order` / `Format` / `IsFormula` / `Ignore`
+2. **Fluent callback**: `opt.Column(x => x.Name, "Name").Ignore(x => x.Id)` — `Column(..., isFormula: true)` for formula columns
 3. **Dictionary mapping**: `opt.Map(new Dictionary<string,string> { { "Name", "Name" } })`
 
 ---
@@ -1284,6 +1406,19 @@ dt.Rows.Add("Zhang San", 25);
 XlsxWriter.Write("data.xlsx", dt);
 
 var read = XlsxReader.ReadAsDataTable("data.xlsx");
+```
+
+Create a workbook with data in one step, or import into an existing sheet:
+
+```csharp
+// One-step create (sheet name falls back to DataTable.TableName, then "Sheet1")
+var wb = Excel.Create(dt);
+wb.SaveAs("data.xlsx");
+
+// Import into an existing worksheet (clears and rebuilds from A1; includeHeader=false skips column names)
+var opened = Excel.Open("data.xlsx");
+opened.Worksheets[0].ImportData(dt, includeHeader: false);
+opened.Save();
 ```
 
 ---
@@ -1493,28 +1628,25 @@ catch (InvalidSheetNameException ex)
 
 ## 24. AOT Compatibility
 
-### AOT-safe APIs (no reflection)
+All public APIs are compatible with Native AOT / trimming. The library compiles with `IsAotCompatible` and is verified in two ways:
 
-| API | Description |
+- **Compile time**: the repo includes `tests/LiteExcel.AotSmoke` (`PublishAot` + `TrimmerRootAssembly Include="LiteExcel"`), so ILC walks every library code path for trim analysis. Its publish emits zero IL warnings.
+- **Runtime**: a native AOT executable is exercised against xlsx/xlsb/xls/csv read+write, `[LiteColumn]`, formula columns, Fluent expressions, nullable/decimal, DataTable, `Excel.Create<T>` / `ImportData` / `Add<T>`, conditional formatting, named ranges, images (Floating/InCell), streaming read/write, degradation callback, hyperlinks, and freeze panes — all assertions pass.
+
+| API | AOT notes |
 |---|---|
-| `Excel.Open` / `Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells` | object model |
-| `Excel.CreateWriter` / `Excel.StreamRows` | streaming read/write |
-| `Read(path/stream, ...)` | returns `SheetData` |
-| `Write(path/stream, SheetData)` | accepts `SheetData` |
-| `ReadAsDataTable(...)` | DataTable has its own schema |
-| `Write(path, DataTable)` | DataTable write |
-| `GetSheetNames(...)` | list sheet names |
-| `Append(...)` | append |
-| `AutoColumnWidths(...)` | auto column widths |
+| Object model (`Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells`) | no reflection |
+| Streaming (`Excel.CreateWriter` / `Excel.StreamRows`) | no reflection |
+| `SheetData` read/write (`Read` / `Write` / `Append` / `AutoColumnWidths`) | no reflection |
+| DataTable (`ReadAsDataTable` / `Write(path, DataTable)` / `Create(DataTable)` / `ImportData(DataTable)`) | no reflection |
+| List&lt;T&gt; mapping (`Excel.Read<T>` / `Excel.Write<T>` / `Excel.Create<T>` / `Worksheet.ImportData<T>` / `WorksheetCollection.Add<T>`) | uses reflection, annotated with `[DynamicallyAccessedMembers]`, AOT/trim safe |
+| `WriteOptions.Column<TProp>` / `Ignore<TProp>` | only reads `MemberExpression.Member.Name`, never `.Compile()`, no member reflection |
 
-### AOT-unsafe APIs (reflection, marked `[RequiresUnreferencedCode]`)
+> Call `List<T>` APIs with a concrete type (e.g. `Excel.Write<Employee>`). If you forward them from your own unannotated open generic method, the compiler raises IL2091 — add matching annotations to your type parameter. This is the intended propagation behavior.
 
-| API | Description |
-|---|---|
-| `Excel.Read<T>(...)` / `Read<T>(...)` | List<T> read |
-| `Excel.Write<T>(...)` / `Write<T>(...)` | List<T> write |
+> **Read entry boundary**: `Excel.Read<T>` / `XlsxReader.Read` support only xlsx/xlsm (OpenXML text format). For **xls / xlsb / csv reading, use `Excel.Open(path)`** (the facade routes by extension to the matching backend).
 
-> AOT projects will get `IL3050`/`IL2026` warnings when calling these. Non-AOT projects (net48, net8 normal publish) are unaffected.
+> **InvariantGlobalization**: with `InvariantGlobalization=true` (common for AOT apps), all 19 native-executable assertions pass, including xls/xlsb read+write. Note that xls ANSI text is decoded as Latin1 under Invariant mode; characters outside the current system code page (e.g. Chinese GBK text) may be distorted — this is an inherent limitation of the xls binary format, unrelated to AOT.
 
 ---
 
@@ -1693,6 +1825,25 @@ Comments, DataValidation, AutoFilter, Images, DocumentProperties, NamedRanges, S
 
 ## 28. Full API Reference
 
+### Excel (facade)
+
+| Method | Returns | Description |
+|---|---|---|
+| `Open(path, options?)` / `Open(stream, format, options?)` | `Workbook` | open by extension |
+| `DetectFormat(path)` | `ExcelFormat` | detect format from extension |
+| `Create(format = Xlsx)` / `Create(sheetName, format)` / `Create(string[], format)` | `Workbook` | create empty / named / multi-sheet workbook |
+| `Create<T>(data, sheetName, format, configure?)` | `Workbook` | create workbook with List&lt;T&gt; data (first row is header, reflection, AOT safe) |
+| `Create(DataTable, sheetName?, format)` | `Workbook` | create workbook with DataTable data (falls back to TableName → Sheet1) |
+| `Write(path, Workbook, options?)` | `void` | write a workbook |
+| `Write(path, SheetData, options?)` | `void` | write single sheet (low-level model) |
+| `Write(path, DataTable, sheetName?, options?)` | `void` | write from DataTable (AOT safe) |
+| `Write<T>(path, IEnumerable<T>, sheetName?, configure?)` | `void` | write from List&lt;T&gt; (reflection, AOT safe) |
+| `Read<T>(path, sheetName?, configure?)` | `List<T>` | read as List&lt;T&gt; (xlsx/xlsm only) |
+| `ReadAsDataTable(path, sheetName?, firstRowIsHeader?)` | `DataTable` | read as DataTable |
+| `GetSheetNames(path)` | `List<string>` | list all sheet names |
+| `StreamRows(path, sheetName, onRow)` | `void` | streaming read (skips first row) |
+| `CreateWriter(path)` / `CreateWriter(stream)` | `XlsxStreamWriter` | streaming write (xlsx/xlsm only) |
+
 ### XlsxReader
 
 | Method | Returns | Description |
@@ -1712,11 +1863,9 @@ Comments, DataValidation, AutoFilter, Images, DocumentProperties, NamedRanges, S
 | `ReadAsDataTable(string path, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | read by name as DataTable |
 | `ReadAsDataTable(Stream stream, int sheetIndex = 0, bool firstRowIsHeader = true)` | `DataTable` | read as DataTable from stream |
 | `ReadAsDataTable(Stream stream, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | read by name from stream |
-| `Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null)` ⚠️ | `List<T>` | read as List<T> (reflection) |
-| `Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null)` ⚠️ | `List<T>` | read by name as List<T> |
+| `Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null)` | `List<T>` | read as List<T> (reflection, AOT safe) |
+| `Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null)` | `List<T>` | read by name as List<T> |
 | `ReadProperties(string path)` / `ReadProperties(Stream stream)` | `WorkbookProperties` | read document properties (author/time/title) |
-
-> ⚠️ Marked `[RequiresUnreferencedCode]`, not AOT compatible.
 
 ### XlsxWriter
 
@@ -1728,7 +1877,7 @@ Comments, DataValidation, AutoFilter, Images, DocumentProperties, NamedRanges, S
 | `Write(Stream stream, IReadOnlyList<SheetData> sheets)` | write multiple sheets to stream |
 | `Write(path/stream, sheets, WorkbookProperties? properties)` | write and carry document properties |
 | `Write(string path, DataTable table, string sheetName = "Sheet1")` | write from DataTable |
-| `Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)` ⚠️ | write from List<T> (reflection) |
+| `Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)` | write from List<T> (reflection, AOT safe) |
 | `Append(string path, SheetData? newData, WorkbookProperties? updateProperties = null)` | append data and optionally update document properties |
 | `AutoColumnWidths(SheetData sheet)` | auto estimate column widths |
 
@@ -1763,10 +1912,15 @@ Comments, DataValidation, AutoFilter, Images, DocumentProperties, NamedRanges, S
 ### Worksheet Members (hyperlinks / freeze panes / images)
 
 | Member | Description |
-|---|---|
+|---|---|---|
 | `Cell.Hyperlink` | get/set a cell hyperlink (see §12) |
 | `Worksheet.FreezeRows` / `Worksheet.FreezeColumns` | freeze panes by rows/columns (see §13) |
 | `ws.AddImage(byte[] data, int row, int col, int widthPx, int heightPx, ImagePlacement placement, string? extension, string? name)` | add an image to the sheet (see §14) |
+| `ws.ImportData<T>(data, configure?)` | clear the sheet and rebuild from A1 (List&lt;T&gt;, first row is header) |
+| `ws.ImportData(DataTable, includeHeader = true)` | clear the sheet and rebuild from A1 (DataTable) |
+| `ws.Cell(row, col)` / `ws.Cell("A1")` / `ws.Range(...)` / `ws.Cells` | cell / range access |
+| `ws.Merge(...)` / `ws.Unmerge(...)` / `ws.MergedRanges` | merge cells |
+| `ws.ToSheetData()` | convert back to the low-level model (for writing) |
 
 ### Enums
 

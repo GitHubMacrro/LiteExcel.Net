@@ -1,47 +1,45 @@
 using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
-
-// 本文件所有反射 API 均已标注 [RequiresUnreferencedCode]，IL2090 警告在此安全抑制 
-#pragma warning disable IL2090
 
 namespace LiteExcel;
 
 /// <summary>
 /// xlsx 读写器（高层反射 API） 
-/// List&lt;T&gt; 映射依赖反射，不兼容 AOT/裁剪 
+/// List&lt;T&gt; 映射使用反射，已用 [DynamicallyAccessedMembers] 标注，AOT/裁剪安全 
 /// </summary>
 public static partial class XlsxReader
 {
-#if NET5_0_OR_GREATER
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("List<T> 映射依赖反射，不兼容 AOT/裁剪 AOT 项目请用 SheetData 重载 ")]
-#endif
     /// <summary>
     /// 将指定工作表读为 List&lt;T&gt; 第一行作为表头 
     /// </summary>
-    public static List<T> Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null) where T : new()
+    public static List<T> Read<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties
+            | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>(
+        string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null) where T : new()
     {
         var sheet = Read(path, sheetIndex, firstRowIsHeader: true);
         return SheetToList<T>(sheet, configure);
     }
 
-#if NET5_0_OR_GREATER
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("List<T> 映射依赖反射，不兼容 AOT/裁剪 AOT 项目请用 SheetData 重载 ")]
-#endif
     /// <summary>
     /// 将指定工作表读为 List&lt;T&gt; 第一行作为表头 
     /// </summary>
-    public static List<T> Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null) where T : new()
+    public static List<T> Read<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties
+            | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>(
+        string path, string sheetName, Action<ReadOptions<T>>? configure = null) where T : new()
     {
         var sheet = Read(path, sheetName, firstRowIsHeader: true);
         return SheetToList<T>(sheet, configure);
     }
 
-#if NET5_0_OR_GREATER
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("List<T> 映射依赖反射，不兼容 AOT/裁剪 AOT 项目请用 SheetData 重载 ")]
-#endif
-    private static List<T> SheetToList<T>(SheetData sheet, Action<ReadOptions<T>>? configure) where T : new()
+    private static List<T> SheetToList<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties
+            | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>(
+        SheetData sheet, Action<ReadOptions<T>>? configure) where T : new()
     {
         var options = new ReadOptions<T>();
         configure?.Invoke(options);
@@ -65,7 +63,8 @@ public static partial class XlsxReader
         return list;
     }
 
-    private static List<(PropertyInfo prop, int colIdx)> BuildReadPropertyMap<T>(
+    private static List<(PropertyInfo prop, int colIdx)> BuildReadPropertyMap<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         ReadOptions<T> options, List<string> headers)
     {
         var props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
@@ -136,17 +135,16 @@ public static partial class XlsxReader
 
 /// <summary>
 /// xlsx 写出器（高层反射 API） 
-/// List&lt;T&gt; 映射依赖反射，不兼容 AOT/裁剪 
+/// List&lt;T&gt; 映射使用反射，已用 [DynamicallyAccessedMembers] 标注，AOT/裁剪安全 
 /// </summary>
 public static partial class XlsxWriter
 {
-#if NET5_0_OR_GREATER
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("List<T> 映射依赖反射，不兼容 AOT/裁剪 AOT 项目请用 SheetData 重载 ")]
-#endif
     /// <summary>
     /// 将 List&lt;T&gt; 写入 xlsx 文件 
     /// </summary>
-    public static void Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)
+    public static void Write<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)
     {
         var options = new WriteOptions<T>();
         configure?.Invoke(options);
@@ -155,10 +153,9 @@ public static partial class XlsxWriter
         Write(path, sheet);
     }
 
-#if NET5_0_OR_GREATER
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("List<T> 映射依赖反射，不兼容 AOT/裁剪 AOT 项目请用 SheetData 重载 ")]
-#endif
-    private static SheetData ListToSheet<T>(IEnumerable<T> data, WriteOptions<T> options)
+    internal static SheetData ListToSheet<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        IEnumerable<T> data, WriteOptions<T> options)
     {
         var sheet = new SheetData
         {
@@ -180,7 +177,7 @@ public static partial class XlsxWriter
             {
                 var col = columns[i];
                 var value = col.Property.GetValue(item);
-                cells[i] = ObjectToCell(value, col.Format);
+                cells[i] = ObjectToCell(value, col.Format, col.IsFormula);
             }
             sheet.Rows.Add(cells);
         }
@@ -193,9 +190,12 @@ public static partial class XlsxWriter
         public PropertyInfo Property = null!;
         public string HeaderName = "";
         public string? Format;
+        public bool IsFormula;
     }
 
-    private static List<WriteColumn> BuildWriteColumns<T>(WriteOptions<T> options)
+    private static List<WriteColumn> BuildWriteColumns<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        WriteOptions<T> options)
     {
         var props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance);
         var columns = new List<WriteColumn>(props.Length);
@@ -208,12 +208,14 @@ public static partial class XlsxWriter
 
             var headerName = options.GetColumnName(prop.Name) ?? attr?.Name ?? prop.Name;
             var format = options.GetFormat(prop.Name) ?? attr?.Format;
+            bool isFormula = options.IsFormulaColumn(prop.Name) || (attr is not null && attr.IsFormula);
 
             columns.Add(new WriteColumn
             {
                 Property = prop,
                 HeaderName = headerName,
                 Format = format,
+                IsFormula = isFormula,
             });
         }
 
@@ -238,9 +240,17 @@ public static partial class XlsxWriter
         return result;
     }
 
-    private static Cell ObjectToCell(object? value, string? format)
+    private static Cell ObjectToCell(object? value, string? format, bool isFormula = false)
     {
         if (value is null) return Cell.Empty;
+
+        // 公式列：字符串值按公式写出（去掉前导 "="）
+        if (isFormula && value is string formulaText)
+        {
+            var f = formulaText.TrimStart();
+            if (f.StartsWith("=", StringComparison.Ordinal)) f = f.Substring(1);
+            return Cell.FromFormula(f);
+        }
 
         return value switch
         {

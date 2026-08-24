@@ -15,6 +15,9 @@ public sealed class LiteColumnAttribute : Attribute
     /// <summary>数字/日期格式，如 "0.00" / "yyyy-MM-dd" </summary>
     public string? Format { get; set; }
 
+    /// <summary>true 则把该字符串属性当作公式写出（值可带或不带前导 "="） </summary>
+    public bool IsFormula { get; set; }
+
     /// <summary>true 则不输出该列 </summary>
     public bool Ignore { get; set; }
 }

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <AssemblyName>LiteExcel.AotSmoke</AssemblyName>
+    <RootNamespace>LiteExcel.AotSmoke</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LiteExcel\LiteExcel.csproj" />
+    <TrimmerRootAssembly Include="LiteExcel" />
+  </ItemGroup>
+
+</Project>

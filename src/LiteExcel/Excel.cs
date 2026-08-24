@@ -1,6 +1,7 @@
 using LiteExcel.Internal;
 using LiteExcel.Internal.Biff;
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.IO.Compression;
 
@@ -391,6 +392,41 @@ public static class Excel
         return wb;
     }
 
+    /// <summary>
+    /// 新建工作簿并直接写入 List&lt;T&gt; 数据（首个工作表，首行为表头）。
+    /// 反射映射，已标注 DAM，AOT/裁剪安全；返回的工作簿可与样式/冻结/条件格式/密码等工作簿级能力混用。
+    /// </summary>
+    public static Workbook Create<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        IEnumerable<T> data, string sheetName = "Sheet1", ExcelFormat format = ExcelFormat.Xlsx,
+        Action<WriteOptions<T>>? configure = null)
+    {
+        if (data is null) throw new ArgumentNullException(nameof(data));
+        var wb = Workbook.CreateEmpty(format);
+        var options = new WriteOptions<T> { SheetName = sheetName };
+        configure?.Invoke(options);
+        var ws = Worksheet.FromSheetData(XlsxWriter.ListToSheet(data, options));
+        wb.Worksheets.AddInternal(ws);
+        wb.OnWorksheetAdded(ws);
+        return wb;
+    }
+
+    /// <summary>
+    /// 新建工作簿并直接写入 DataTable 数据（首个工作表，首行写列名）。sheetName 为空时用 DataTable.TableName，再为空则 Sheet1。
+    /// </summary>
+    public static Workbook Create(DataTable table, string? sheetName = null, ExcelFormat format = ExcelFormat.Xlsx)
+    {
+        if (table is null) throw new ArgumentNullException(nameof(table));
+        var name = sheetName;
+        if (string.IsNullOrWhiteSpace(name))
+            name = string.IsNullOrWhiteSpace(table.TableName) ? "Sheet1" : table.TableName;
+        var wb = Workbook.CreateEmpty(format);
+        var ws = Worksheet.FromSheetData(XlsxWriter.DataTableToSheet(table, name));
+        wb.Worksheets.AddInternal(ws);
+        wb.OnWorksheetAdded(ws);
+        return wb;
+    }
+
     /// <summary>根据扩展名识别格式 </summary>
     public static ExcelFormat DetectFormat(string path)
     {
@@ -445,17 +481,16 @@ public static class Excel
     {
         if (table is null) throw new ArgumentNullException(nameof(table));
         var wb = Workbook.CreateEmpty(ExcelFormat.Xlsx);
-        var ws = Worksheet.FromSheetData(DataTableToSheet(table, sheetName));
+        var ws = Worksheet.FromSheetData(XlsxWriter.DataTableToSheet(table, sheetName));
         wb.Worksheets.AddInternal(ws);
         wb.OnWorksheetAdded(ws);
         Write(path, wb, options);
     }
 
-    /// <summary>写出 List&lt;T&gt;（反射映射，不兼容 AOT/裁剪） </summary>
-#if NET5_0_OR_GREATER
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("List<T> 映射依赖反射，不兼容 AOT/裁剪。AOT 项目请用 DataTable 或 SheetData 重载")]
-#endif
-    public static void Write<T>(string path, IEnumerable<T> data, string sheetName = "Sheet1", Action<WriteOptions<T>>? configure = null)
+    /// <summary>写出 List&lt;T&gt;（反射映射，已标注 DAM，AOT/裁剪安全） </summary>
+    public static void Write<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string path, IEnumerable<T> data, string sheetName = "Sheet1", Action<WriteOptions<T>>? configure = null)
     {
         if (data is null) throw new ArgumentNullException(nameof(data));
         XlsxWriter.Write(path, data, opt =>
@@ -467,11 +502,11 @@ public static class Excel
 
     // ── 读取便利 ──
 
-    /// <summary>读取指定工作表为 List&lt;T&gt;（反射映射，不兼容 AOT/裁剪）。默认第一张表，首行作为表头 </summary>
-#if NET5_0_OR_GREATER
-    [System.Diagnostics.CodeAnalysis.RequiresUnreferencedCode("List<T> 映射依赖反射，不兼容 AOT/裁剪。AOT 项目请用 ReadAsDataTable 或 Open 重载")]
-#endif
-    public static List<T> Read<T>(string path, string? sheetName = null, Action<ReadOptions<T>>? configure = null) where T : new()
+    /// <summary>读取指定工作表为 List&lt;T&gt;（反射映射，已标注 DAM，AOT/裁剪安全）。默认第一张表，首行作为表头 </summary>
+    public static List<T> Read<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties
+            | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>(
+        string path, string? sheetName = null, Action<ReadOptions<T>>? configure = null) where T : new()
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
@@ -554,7 +589,7 @@ public static class Excel
                 ws.FreezeHeader = true;
         }
 
-        if (options.Properties is not null)
+            if (options.Properties is not null)
         {
             workbook.Properties.Creator = options.Properties.Creator ?? workbook.Properties.Creator;
             workbook.Properties.LastModifiedBy = options.Properties.LastModifiedBy ?? workbook.Properties.LastModifiedBy;
@@ -564,20 +599,5 @@ public static class Excel
             if (options.Properties.Created is not null) workbook.Properties.Created = options.Properties.Created;
             if (options.Properties.Modified is not null) workbook.Properties.Modified = options.Properties.Modified;
         }
-    }
-
-    private static SheetData DataTableToSheet(DataTable table, string sheetName)
-    {
-        var sheet = new SheetData { SheetName = sheetName };
-        foreach (DataColumn col in table.Columns)
-            sheet.Headers.Add(col.ColumnName);
-        foreach (DataRow dataRow in table.Rows)
-        {
-            var cells = new List<Cell>(table.Columns.Count);
-            for (int i = 0; i < table.Columns.Count; i++)
-                cells.Add(CellFactory.FromObject(dataRow[i]));
-            sheet.Rows.Add(cells);
-        }
-        return sheet;
     }
 }
