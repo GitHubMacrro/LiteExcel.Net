@@ -220,6 +220,8 @@ internal static class CsvBackend
             if (sheet.Images.Any(i => i.Placement == ImagePlacement.InCell))
                 Report(DegradationCapability.RichData, $"CSV 不支持 InCell 图片，工作表 '{sheet.SheetName}' 的 InCell 图片已丢弃。");
         }
+        if (sheet.Tables is { Count: > 0 })
+            Report(DegradationCapability.Tables, $"CSV 不支持超级表，工作表 '{sheet.SheetName}' 的超级表已丢弃。");
 
         foreach (var row in sheet.Rows)
         {

@@ -51,6 +51,9 @@ public sealed class Workbook
     /// <summary>文件级安全状态（打开密码 / 修改密码 / 只读与保存权限） </summary>
     public WorkbookSecurity Security { get; }
 
+    /// <summary>工作簿保护（workbookProtection：锁结构/窗口）。默认 null（无保护） </summary>
+    public WorkbookProtection? Protection { get; set; }
+
     /// <summary>命名区域（definedNames，全局 + sheet-local）。读取打开文件时自动填充。 </summary>
     public List<NamedRange> Names { get; } = new();
 
@@ -202,7 +205,8 @@ public sealed class Workbook
                     using var zipMs = new MemoryStream();
                     XlsxWriter.Write(zipMs, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
                         macroEnabled: format == ExcelFormat.Xlsm, date1904: Date1904,
-                        fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo);
+                        fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo,
+                        workbookProtection: Protection, degradationCallback: DegradationCallback);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwd);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -211,7 +215,8 @@ public sealed class Workbook
                 {
                     XlsxWriter.Write(stream, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
                         macroEnabled: format == ExcelFormat.Xlsm, date1904: Date1904,
-                        fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo);
+                        fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo,
+                        workbookProtection: Protection, degradationCallback: DegradationCallback);
                 }
                 break;
             }

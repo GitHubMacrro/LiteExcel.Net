@@ -6,7 +6,7 @@
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.4.5**
+A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/csv files, plus legacy xls (read/write) and xlsb (read/write). AOT-friendly. **Version 2.4.6**
 
 > [中文 README](README.zh-CN.md)
 
@@ -19,12 +19,15 @@ A lightweight, zero-dependency .NET library for reading and writing xlsx/xlsm/cs
 - **Extensible formats**: xlsx/xlsm/csv read+write; xls read/write (formulas as static values); xlsb read/write (formulas as static values)
 - **Full featured**: read/write, styles, merged cells, auto filter, row height/column width, comments, data validation, append, Stream, List\<T\>/DataTable convenience APIs, streaming read/write for large files
 - **File-level security**: open password (Agile Encryption) + modify password (write protection) on xlsx/xlsm/xlsb, via `Workbook.Security` (`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`)
+- **Sheet/Workbook protection** (2.4.6+): `sheetProtection` / `workbookProtection` (lock editing / lock structure, optional password, `ws.Protection` / `wb.Protection`)
 - **Hyperlinks**: read + write on all 4 formats (xlsx/xlsm/xlsb/xls; external URLs/files/mailto/UNC + internal `#Sheet1!A1` jumps via `Cell.Hyperlink`)
 - **Freeze panes**: `FreezeRows` / `FreezeColumns` on xlsx/xlsb/xls (arbitrary rows/columns), `FreezeHeader` compatible
 - **Images (write-only)**: xlsx/xlsm floating images + in-cell images, with anchor/move-mode/AltText (`ws.AddImage`, `ImageAnchor`, `ImageMoveMode`; image reading is out of scope for 2.4.0)
 - **Create workbook with data in one step**: `Excel.Create<T>` / `Excel.Create(DataTable)`, `Worksheet.ImportData`, `WorksheetCollection.Add<T>`
 - **Named ranges read-back** (2.4.5+): `Workbook.Names`
 - **Formula columns** (2.4.5+): `[LiteColumn(IsFormula = true)]` / `WriteOptions.Column(..., isFormula:)`
+- **Super table** (2.4.6+): `Worksheet.AddTable` / `Tables` read+write (60 built-in Excel banded styles as an enum, plus arbitrary style names and per-column formats)
+- **Icon-set conditional formatting** (2.4.6+): `ConditionalFormatType.IconSet` (17 built-in sets as an enum — arrows/traffic lights/symbols/ratings — with custom thresholds)
 - **Real file compatibility**: correctly reads xlsx created by Excel/WPS (including Table/theme extension parts)
 
 ## Installation

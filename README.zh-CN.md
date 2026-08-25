@@ -6,7 +6,7 @@
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.5**
+轻量级 xlsx/xlsm/csv 读写库（另支持 xls 读写、xlsb 读写），零第三方依赖，AOT 友好。**版本 2.4.6**
 
 > [English README](README.en.md)
 
@@ -19,12 +19,15 @@
 - **格式可扩展**：xlsx/xlsm/csv 读写；xls 读写（公式降级为静态值）；xlsb 读写（公式降级为静态值）
 - **全功能**：读/写、样式、合并单元格、自动筛选、行高/列宽、批注、数据验证、追加、Stream、List\<T\>/DataTable 便利 API、流式读写大文件
 - **文件级安全**：打开密码（Agile 加密）+ 修改密码（写保护），支持 xlsx/xlsm/xlsb，通过 `Workbook.Security`（`SetOpenPassword` / `SetModifyPassword` / `RemoveOpenPassword` / `RemoveModifyPassword`）
+- **工作表/工作簿保护**（2.4.6+）：`sheetProtection` / `workbookProtection`（锁编辑/锁结构，可选密码，`ws.Protection` / `wb.Protection`）
 - **超链接**：xlsx/xlsm/xlsb/xls 四格式读写（外部 URL/文件/mailto/UNC + 内部 `#Sheet1!A1` 跳转，`Cell.Hyperlink`）
 - **冻结窗格**：`FreezeRows` / `FreezeColumns` 支持 xlsx/xlsb/xls 任意行列冻结，`FreezeHeader` 兼容
 - **图片写回**：xlsx/xlsm 浮动图片 + 单元格内嵌图片，支持锚点/移动方式/AltText（`ws.AddImage`、`ImageAnchor`、`ImageMoveMode`；图片读取不在 2.4.0 范围）
 - **一步建簿并写数据**：`Excel.Create<T>` / `Excel.Create(DataTable)` 建簿即写数据，`Worksheet.ImportData` 清空重建，`WorksheetCollection.Add<T>` 批量加表
 - **命名区域读回**（2.4.5+）：`Workbook.Names`
 - **公式列**（2.4.5+）：`[LiteColumn(IsFormula = true)]` / `WriteOptions.Column(..., isFormula:)`
+- **超级表**（2.4.6+）：`Worksheet.AddTable` / `Tables` 读写（60 种 Excel 内置条纹样式枚举，支持任意样式名与列级格式）
+- **图标集条件格式**（2.4.6+）：`ConditionalFormatType.IconSet`（17 种内置集合枚举，箭头/红绿灯/符号/星级，可自定义阈值）
 - **真实文件兼容**：可正确读取 Excel/WPS 创建的 xlsx（含 Table/theme 等扩展部件）
 
 ## 安装

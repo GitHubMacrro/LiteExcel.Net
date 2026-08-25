@@ -63,6 +63,14 @@ public sealed class Worksheet
     /// <summary>工作表图片（InCell / Floating） </summary>
     public List<WorksheetImage> Images { get; } = new();
 
+    /// <summary>工作表保护（sheetProtection）。默认 null（无保护） </summary>
+    public SheetProtection? Protection { get; set; }
+
+    /// <summary>超级表（Table/ListObject）列表。打开含表文件时自动填充；新建用 <see cref="AddTable"/> </summary>
+    public IReadOnlyList<XlTable> Tables => _tables;
+
+    private readonly List<XlTable> _tables = new();
+
     /// <summary>合并区域（CellRange 为 0-based，与低层模型一致） </summary>
     public IReadOnlyList<CellRange> MergedRanges => _mergedRanges;
 
@@ -276,6 +284,99 @@ public sealed class Worksheet
         RebindOwners();
     }
 
+    // ── 超级表 ──
+
+    /// <summary>
+    /// 创建超级表（Excel 内置表）。覆盖区首行作为表头列名，至少需要表头 + 1 行数据。
+    /// 样式使用 Excel 内置名（见 <see cref="TableStyleStyle"/>）；自定义名见 <paramref name="styleName"/>。
+    /// </summary>
+    public XlTable AddTable(string refAddress, string name, TableStyleStyle? style = null)
+    {
+        var tbl = CreateTableCore(refAddress, name);
+        tbl.Style = style ?? TableStyleStyle.Medium9;
+        AddTableInternal(tbl);
+        return tbl;
+    }
+
+    /// <summary>创建超级表并指定任意样式名（未知名将经降级回调提示，Excel 打开时退化为无样式） </summary>
+    public XlTable AddTable(string refAddress, string name, string styleName)
+    {
+        var tbl = CreateTableCore(refAddress, name);
+        tbl.CustomStyleName = styleName;
+        AddTableInternal(tbl);
+        return tbl;
+    }
+
+    /// <summary>按表名删除超级表。存在则删除并返回 true，否则 false </summary>
+    public bool RemoveTable(string name)
+    {
+        for (int i = 0; i < _tables.Count; i++)
+        {
+            if (string.Equals(_tables[i].Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                _tables.RemoveAt(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private XlTable CreateTableCore(string refAddress, string name)
+    {
+        if (string.IsNullOrWhiteSpace(refAddress))
+            throw new ArgumentException("表区域不能为空", nameof(refAddress));
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("表名不能为空", nameof(name));
+        ValidateTableName(name);
+
+        var (firstRow, firstCol, lastRow, lastCol) = CellRef.ParseRange(refAddress);
+        int rowCount = lastRow - firstRow + 1;
+        int colCount = lastCol - firstCol + 1;
+        if (rowCount < 2)
+            throw new LiteExcelException("超级表至少需要表头 + 1 行数据（区域至少 2 行）");
+        if (colCount < 1)
+            throw new LiteExcelException("超级表至少需要 1 列");
+
+        // 与既有表区域重叠校验
+        foreach (var t in _tables)
+        {
+            var (tr0, tc0, tr1, tc1) = CellRef.ParseRange(t.Ref);
+            if (firstRow <= tr1 && lastRow >= tr0 && firstCol <= tc1 && lastCol >= tc0)
+                throw new LiteExcelException($"表区域与既有表「{t.Name}」重叠");
+        }
+
+        var tbl = new XlTable { Name = name, Ref = refAddress };
+        // 首行文本作为列名（TryGetCell 为 1-based）
+        for (int c = 0; c < colCount; c++)
+        {
+            var cell = TryGetCell(firstRow + 1, firstCol + c + 1);
+            string colName = cell is not null && cell.Type == CellType.Text && !string.IsNullOrEmpty(cell.Text)
+                ? cell.Text!
+                : $"Column{c + 1}";
+            tbl.AddColumn(new XlTableColumn { Name = colName });
+        }
+        return tbl;
+    }
+
+    private void AddTableInternal(XlTable tbl)
+    {
+        foreach (var t in _tables)
+            if (string.Equals(t.Name, tbl.Name, StringComparison.OrdinalIgnoreCase))
+                throw new LiteExcelException($"表名重复：{tbl.Name}");
+        _tables.Add(tbl);
+    }
+
+    private static void ValidateTableName(string name)
+    {
+        // Excel 表名规则：不能以数字开头、不能含空格、不能是纯单元格地址、不能含 ". "、不能以 "_xlfn" 开头
+        if (char.IsDigit(name[0]))
+            throw new LiteExcelException($"表名不能以数字开头：{name}");
+        if (name.Contains(" "))
+            throw new LiteExcelException($"表名不能包含空格：{name}");
+        if (CellRef.TryParse(name, out _))
+            throw new LiteExcelException($"表名不能是单元格地址：{name}");
+    }
+
     // ── 合并 ──
 
     /// <summary>合并区域（1-based，含端点）。例如 Merge(1, 1, 2, 2) 合并 A1:B2 </summary>
@@ -371,6 +472,8 @@ public sealed class Worksheet
             Filter = Filter,
             CodeName = CodeName,
             ConditionalFormats = new List<ConditionalFormat>(ConditionalFormats),
+            Protection = Protection,
+            Tables = _tables.Select(t => CloneTable(t)).ToList(),
         };
 
         if (Images.Count > 0)
@@ -426,7 +529,14 @@ public sealed class Worksheet
             Validations = sheet.Validations,
             Filter = sheet.Filter,
             CodeName = sheet.CodeName,
+            Protection = sheet.Protection,
         };
+
+        if (sheet.Tables is { Count: > 0 })
+        {
+            foreach (var t in sheet.Tables)
+                ws._tables.Add(CloneTable(t));
+        }
 
         if (sheet.ConditionalFormats is { Count: > 0 })
         {
@@ -473,8 +583,28 @@ public sealed class Worksheet
         _grid[row0] = cells;
     }
 
-    private void RebindOwners()
+    private static XlTable CloneTable(XlTable t)
     {
+        var clone = new XlTable
+        {
+            Name = t.Name,
+            Ref = t.Ref,
+            Style = t.Style,
+            CustomStyleName = t.CustomStyleName,
+            ShowRowStripes = t.ShowRowStripes,
+            ShowFirstColumn = t.ShowFirstColumn,
+            ShowLastColumn = t.ShowLastColumn,
+            ShowColumnStripes = t.ShowColumnStripes,
+            AutoFilter = t.AutoFilter,
+            TotalsRowShown = t.TotalsRowShown,
+            HeaderStyle = t.HeaderStyle?.Clone(),
+        };
+        foreach (var c in t.Columns)
+            clone.AddColumn(c.Clone());
+        return clone;
+    }
+
+    private void RebindOwners()    {
         for (int r = 0; r < _grid.Count; r++)
         {
             for (int c = 0; c < _grid[r].Count; c++)

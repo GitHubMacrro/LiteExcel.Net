@@ -36,6 +36,38 @@ public static class CellRef
     }
 
     /// <summary>
+    /// 尝试把 A1 单元格地址解析为 (row, col)，格式非法返回 false。
+    /// </summary>
+    public static bool TryParse(string? cellRef, out (int row, int col) pos)
+    {
+        pos = default;
+        if (string.IsNullOrEmpty(cellRef)) return false;
+        var (row, col) = Parse(cellRef);
+        if (row < 0 || col < 0) return false;
+        // 重新生成校验原串是纯 A1（防 "A1C" 这类尾巴被吞）
+        if (!string.Equals(ToString(row, col), cellRef, StringComparison.OrdinalIgnoreCase)) return false;
+        pos = (row, col);
+        return true;
+    }
+
+    /// <summary>
+    /// 解析区域引用："A1" 或 "A1:D100" -> (firstRow, firstCol, lastRow, lastCol)，全 0-based 含端点。
+    /// </summary>
+    public static (int firstRow, int firstCol, int lastRow, int lastCol) ParseRange(string range)
+    {
+        if (string.IsNullOrWhiteSpace(range))
+            throw new ArgumentException("区域不能为空", nameof(range));
+        int colon = range.IndexOf(':');
+        string first = colon >= 0 ? range.Substring(0, colon) : range;
+        string last = colon >= 0 ? range.Substring(colon + 1) : range;
+        var (r0, c0) = Parse(first);
+        var (r1, c1) = Parse(last);
+        if (r0 < 0 || c0 < 0 || r1 < 0 || c1 < 0)
+            throw new ArgumentException($"无效的区域引用：{range}");
+        return (Math.Min(r0, r1), Math.Min(c0, c1), Math.Max(r0, r1), Math.Max(c0, c1));
+    }
+
+    /// <summary>
     /// (row=0, col=0) -> "A1" 
     /// </summary>
     public static string ToString(int row, int col)

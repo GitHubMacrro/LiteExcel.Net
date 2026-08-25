@@ -18,6 +18,9 @@ public sealed class CellStyle
     public bool WrapText { get; set; }
     public BorderStyle? Border { get; set; }
 
+    /// <summary>数字格式（如 "yyyy/m/d" / "#,##0.00"）。普通单元格用 <see cref="Cell.NumberFormat"/>；此处用于 dxf（超级表列格式/条件格式）读回 </summary>
+    public string? NumberFormat { get; set; }
+
     public CellStyle Clone()
     {
         return new CellStyle
@@ -33,6 +36,7 @@ public sealed class CellStyle
             HorizontalAlignment = HorizontalAlignment,
             VerticalAlignment = VerticalAlignment,
             WrapText = WrapText,
+            NumberFormat = NumberFormat,
             Border = Border?.Clone(),
         };
     }
@@ -51,6 +55,7 @@ public sealed class CellStyle
             && HorizontalAlignment == other.HorizontalAlignment
             && VerticalAlignment == other.VerticalAlignment
             && WrapText == other.WrapText
+            && NumberFormat == other.NumberFormat
             && Equals(Border, other.Border);
     }
 
@@ -68,6 +73,7 @@ public sealed class CellStyle
         hash.Add(HorizontalAlignment);
         hash.Add(VerticalAlignment);
         hash.Add(WrapText);
+        hash.Add(NumberFormat);
         hash.Add(Border);
         return hash.ToHashCode();
     }

@@ -55,6 +55,9 @@ public enum DegradationCapability
 
     /// <summary>条件格式（条件格式规则 + dxf 样式） </summary>
     ConditionalFormatting,
+
+    /// <summary>超级表（Table/ListObject）；目标格式不支持或引用了 Excel 未知的样式名 </summary>
+    Tables,
 }
 
 /// <summary>

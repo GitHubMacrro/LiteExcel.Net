@@ -30,9 +30,9 @@ internal sealed class Stylesheet
     private readonly Dictionary<string, int> _numFmtIndex = new();
     private int _nextNumFmtId = 164;
 
-    // dxf dedup（条件格式样式，去重缓存）
-    private readonly List<CellStyle> _dxfs = new();
-    private readonly Dictionary<CellStyle, int> _dxfIndex = new();
+    // dxf dedup（条件格式样式 + 超级表列格式，去重缓存）
+    private readonly List<DxfKey> _dxfs = new();
+    private readonly Dictionary<DxfKey, int> _dxfIndex = new();
 
     // cellXf dedup
     private readonly List<XfDef> _xfs = new();
@@ -64,13 +64,16 @@ internal sealed class Stylesheet
     // -- Write: register styles --
 
     /// <summary>注册条件格式样式（fontColor/fillColor/border/bold/italic 等），返回 dxfId（从 0 起） </summary>
-    public int GetOrCreateDxfId(CellStyle style)
+    public int GetOrCreateDxfId(CellStyle style) => GetOrCreateDxfId(style, null);
+
+    /// <summary>注册 dxf 样式（可携带数字格式，用于超级表列格式 dataDxfId），返回 dxfId（从 0 起） </summary>
+    public int GetOrCreateDxfId(CellStyle? style, string? numberFormat)
     {
-        if (style is null) return -1;
-        if (_dxfIndex.TryGetValue(style, out var id)) return id;
+        var key = new DxfKey(style, numberFormat);
+        if (_dxfIndex.TryGetValue(key, out var id)) return id;
         id = _dxfs.Count;
-        _dxfs.Add(style);
-        _dxfIndex[style] = id;
+        _dxfs.Add(key);
+        _dxfIndex[key] = id;
         return id;
     }
 
@@ -318,19 +321,25 @@ internal sealed class Stylesheet
 
         sb.Append("<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>");
 
-        // dxfs：条件格式样式
+        // dxfs：条件格式样式 / 超级表列格式
         if (_dxfs.Count > 0)
         {
             sb.Append($"<dxfs count=\"{_dxfs.Count}\">");
-            foreach (var d in _dxfs)
+            foreach (var key in _dxfs)
             {
+                var d = key.Style;
                 sb.Append("<dxf>");
-                bool anyFont = d.Bold || d.Italic || d.Underline || d.Strikeout
-                    || !string.IsNullOrEmpty(d.FontColor);
+                if (!string.IsNullOrEmpty(key.NumberFormat))
+                {
+                    int nfId = GetOrCreateNumFmt(key.NumberFormat);
+                    sb.Append($"<numFmt numFmtId=\"{nfId}\" formatCode=\"{XlsxWriter.XmlEscape(key.NumberFormat)}\"/>");
+                }
+                bool anyFont = d is not null && (d.Bold || d.Italic || d.Underline || d.Strikeout
+                    || !string.IsNullOrEmpty(d.FontColor));
                 if (anyFont)
                 {
                     sb.Append("<font>");
-                    if (d.Bold) sb.Append("<b/>");
+                    if (d!.Bold) sb.Append("<b/>");
                     if (d.Italic) sb.Append("<i/>");
                     if (d.Underline) sb.Append("<u/>");
                     if (d.Strikeout) sb.Append("<strike/>");
@@ -338,9 +347,9 @@ internal sealed class Stylesheet
                         sb.Append($"<color rgb=\"FF{NormalizeColor(d.FontColor)}\"/>");
                     sb.Append("</font>");
                 }
-                if (!string.IsNullOrEmpty(d.FillColor))
+                if (d is not null && !string.IsNullOrEmpty(d.FillColor))
                     sb.Append($"<fill><patternFill><bgColor rgb=\"FF{NormalizeColor(d.FillColor)}\"/></patternFill></fill>");
-                if (d.Border is not null)
+                if (d is not null && d.Border is not null)
                 {
                     sb.Append("<border>");
                     sb.Append(d.Border.Left is not null ? $"<left style=\"{d.Border.Left.Style}\">" + (d.Border.Left.Color is not null ? $"<color rgb=\"FF{NormalizeColor(d.Border.Left.Color)}\"/>" : "") + "</left>" : "<left/>");
@@ -353,6 +362,9 @@ internal sealed class Stylesheet
             }
             sb.Append("</dxfs>");
         }
+
+        // 表格样式（超级表用 Excel 内置样式名，无需定义；count=0 + 默认名即可）
+        sb.Append("<tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/>");
 
         sb.Append("</styleSheet>");
         return sb.ToString();
@@ -503,6 +515,10 @@ internal sealed class Stylesheet
         foreach (var d in dxfsEl.Elements(ns + "dxf"))
         {
             var style = new CellStyle();
+
+            var numFmt = d.Element(ns + "numFmt");
+            if (numFmt?.Attribute("formatCode")?.Value is { } fc0)
+                style.NumberFormat = fc0;
 
             var font = d.Element(ns + "font");
             if (font is not null)
@@ -726,6 +742,35 @@ internal sealed class Stylesheet
             h.Add(NumFmtId); h.Add(FontId); h.Add(FillId); h.Add(BorderId);
             h.Add(HAlign); h.Add(VAlign); h.Add(WrapText); h.Add(HasAlignment);
             return h.ToHashCode();
+        }
+    }
+
+    /// <summary>dxf 去重键：样式 + 可选数字格式（超级表列格式用） </summary>
+    private readonly struct DxfKey : IEquatable<DxfKey>
+    {
+        public readonly CellStyle? Style;
+        public readonly string? NumberFormat;
+
+        public DxfKey(CellStyle? style, string? numberFormat)
+        {
+            Style = style;
+            NumberFormat = numberFormat;
+        }
+
+        public bool Equals(DxfKey other) =>
+            (Style is null ? other.Style is null : Style.Equals(other.Style))
+            && string.Equals(NumberFormat, other.NumberFormat, StringComparison.Ordinal);
+
+        public override bool Equals(object? obj) => obj is DxfKey k && Equals(k);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int h = Style is null ? 0 : Style.GetHashCode();
+                if (NumberFormat is not null) h = (h * 31) + NumberFormat.GetHashCode();
+                return h;
+            }
         }
     }
 }

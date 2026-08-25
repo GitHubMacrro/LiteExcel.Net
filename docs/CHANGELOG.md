@@ -1,5 +1,29 @@
 # Changelog
 
+## [2.4.6] - 2026-08-25
+
+### Added
+
+- **工作表 / 工作簿保护**：`Worksheet.Protection`（`sheetProtection`，锁编辑 + 可选密码）与 `Workbook.Protection`（`workbookProtection`，锁结构/窗口 + 可选密码）。
+  - 密码以 SHA-512 + salt 哈希写出（与 `fileSharing` 同机制，`SetPassword` / `VerifyPassword`），不含明文。
+  - xlsx/xlsm 写出/读回；xls/xlsb 走既有降级上报。
+  - 验证：7 个单测 + Excel COM 真实打开（`ProtectContents` / `ProtectStructure` 为 True）+ AOT 编译零 IL 警告。
+  - 修复：`sheetProtection` 必须位于 `<sheetData>` 之后且含 `sheet="1"`（否则 Excel 拒绝打开或保护不生效）。
+- **超级表（Table / ListObject）**：`Worksheet.AddTable(ref, name, style?)` / `RemoveTable` / `Tables` 读回；60 种 Excel 内置条纹样式枚举（`TableStyleStyle`）或任意样式名字符串；列级格式（`Column(name).NumberFormat` / `.Style` → `dataDxfId`）；表头样式（`HeaderStyle` → `headerRowDxfId`）。
+  - 写出：`xl/tables/table{N}.xml` + `<tableParts>` + sheet rels + ContentTypes + `styles.xml` `<tableStyles>`。
+  - 读回：`dataDxfId` 反查 `styles.xml` dxfs 的数字格式与样式。
+  - 未知样式名经 `OnDegradation` 上报（Excel 打开时静默退化为无样式）；xls/xlsb/csv 表降级上报。
+  - 保真修复：打开含表 Excel 原稿再保存，`xl/tables/*` 与 `<tableParts>` 透传，不再丢表。
+  - 验证：15 个单测 + Excel COM（表名/行数/列数/加行扩展）+ AOT 运行期断言。
+- **图标集条件格式（iconSet）**：`ConditionalFormatType.IconSet` + `IconSetInfo`（17 种内置集合枚举 `IconSetStyle`，`Percent`/`ShowValue`/`Thresholds`）。
+  - 写出 `<cfRule type="iconSet">` + `<iconSet iconSet="…">` + cfvo 阈值（默认按图标数均分，`Percent=false` 写 `type="num"`）。
+  - 读回解析集合名/percent/showValue/阈值；`iconSet` 属性缺失时按默认（3TrafficLights1 族）处理。
+  - 验证：4 个单测 + 真实 Excel 样本读回（5 条规则）+ Excel COM（库写出文件打开无修复、规则识别）+ AOT 运行期断言。
+
+### Notes
+
+- 全量 **541 测试**，net48 + net8.0 通过。
+
 ## [2.4.5] - 2026-08-24
 
 ### Added

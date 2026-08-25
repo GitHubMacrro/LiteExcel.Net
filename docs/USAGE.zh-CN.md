@@ -1675,6 +1675,51 @@ var list = XlsxReader.Read<Person>("people.xlsx", 0, opt => opt.Map(mapping));
 
 自动转换：`int`/`long`/`double`/`float`/`decimal`/`DateTime`/`bool`/`string` 及其可空版本。
 
+### 超级表（Table / ListObject）
+
+超级表是 Excel 的"插入 ▸ 表"——带条纹样式、表头筛选、结构化范围的区域。
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets[0];
+
+// 先准备数据（首行为表头）
+ws.SetValue("A1", "姓名"); ws.SetValue("B1", "薪资"); ws.SetValue("C1", "入职日期");
+for (int i = 2; i <= 501; i++) { ws.SetValue($"A{i}", $"员工{i}"); ws.SetValue($"B{i}", i * 100); }
+
+// 建表（区域至少 2 行：表头 + 1 行数据）
+var tbl = ws.AddTable("A1:C501", "员工表");          // 默认 TableStyleMedium9
+ws.AddTable("E1:F10", "历史表", TableStyleStyle.Medium6);  // 或指定枚举
+
+// 列格式（用户自定义）：映射到列 dxf
+tbl.Column("薪资").NumberFormat = "#,##0.00";
+tbl.Column("入职日期").NumberFormat = "yyyy/m/d";
+tbl.Column("姓名").Style = new CellStyle { FontColor = "#FF0000", Bold = true };
+
+// 样式开关
+tbl.ShowRowStripes = true;      // 斑马线（默认 true）
+tbl.ShowFirstColumn = false;    // 首列强调
+tbl.ShowLastColumn = false;     // 末列强调
+tbl.ShowColumnStripes = false;  // 列条纹
+tbl.AutoFilter = true;          // 表头筛选下拉（默认 true）
+tbl.CustomStyleName = "TableStyleDark3";   // 或用任意样式名字符串（优先生效）
+
+wb.SaveAs("table.xlsx");
+
+// 读回
+foreach (var t in Excel.Open("table.xlsx").Worksheets[0].Tables)
+    Console.WriteLine($"{t.Name} {t.Ref} {t.StyleName}");
+
+// 删除
+ws.RemoveTable("员工表");
+```
+
+> **条纹样式机理**：条纹长什么样由 Excel 程序内置渲染，**文件里只存样式名字符串**。Excel 内置 60 种样式名：`TableStyleLight1~21`、`TableStyleMedium1~28`、`TableStyleDark1~11`（`None` 表示无样式）。名字写错/大小写错时 Excel 静默退化为无样式（不报错）；库侧用字符串重载写了未知名字会经 `OnDegradation` 上报提示。
+
+> **命名规则**：表名全簿唯一；不能以数字开头、不能含空格、不能是单元格地址（如 `C1`）；允许中文。
+
+> **支持范围**：仅 xlsx/xlsm 写出与读回；xls/xlsb/csv 走 `OnDegradation` 降级上报（不写表）。暂不支持：汇总行、结构化引用（`表名[#All]`）、自定义条纹配色定义。
+
 ---
 ## 18. DataTable 便利 API（AOT 安全）
 
@@ -1929,6 +1974,39 @@ wb.SaveAs("plain.xlsx");
 - 密码**绝不会**出现在异常消息、日志或测试输出中。
 - 仅支持 xlsx/xlsm/xlsb；csv/xls 不支持密码。
 
+### 工作表 / 工作簿保护（2.4.6+）
+
+工作表保护（`sheetProtection`）与工作簿保护（`workbookProtection`）是**编辑限制**（区别于上面的文件级密码）：
+
+```csharp
+// 工作表保护：锁定后按标志位限制编辑，可选密码
+wb.Worksheets[0].Protection = new SheetProtection
+{
+    Enabled = true,
+    SelectLockedCells = true,
+    SelectUnlockedCells = false,   // 不允许选定未锁定单元格
+    Sort = false,                  // 不允许排序
+    AutoFilter = false,            // 不允许自动筛选
+};
+wb.Worksheets[0].Protection.SetPassword("pw");
+
+// 工作簿保护：锁定结构（禁止增删/移动/重命名工作表）
+wb.Protection = new WorkbookProtection
+{
+    Enabled = true,
+    LockStructure = true,
+    LockWindows = false,
+};
+wb.Protection.SetPassword("wb");
+
+wb.SaveAs("protected.xlsx");
+```
+
+- 读回：`wb.Worksheets[i].Protection` / `wb.Protection` 自动填充；`VerifyPassword(pwd)` 校验保护密码。
+- 密码以 SHA-512 + salt 哈希写出（与 `fileSharing` 同机制），不含明文。
+- 仅支持 xlsx/xlsm 写出；xls/xlsb 走既有降级上报。
+- 已由 Excel COM 真实验证：打开后 `ProtectContents` / `ProtectStructure` 为 True。
+
 ---
 
 ## 23. 错误处理
@@ -2108,8 +2186,42 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 });
 ```
 
-> 仍需的部分：`iconSet`（图标集）、`containsText` 变体、更多 cfvo 阈值控制 ——列入后续版本。
+### 图标集（iconSet，2.4.6+）
 
+在单元格内显示箭头 / 红绿灯 / 符号 / 星级等图标的条件可视化：
+
+```csharp
+// 最简：三色箭头，百分比均分阈值（0/33/67）
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.IconSet,
+    Sqref = "B2:B10",
+    IconSet = new IconSetInfo(),
+});
+
+// 指定集合 + 自定义阈值
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.IconSet,
+    Sqref = "C2:C10",
+    IconSet = new IconSetInfo
+    {
+        Style = IconSetStyle.FourRating,
+        Percent = true,
+        ShowValue = true,
+        Thresholds = new double[] { 25, 50, 75 },   // 图标数 - 1 个；为空则均分
+    },
+});
+
+// 读回
+foreach (var cf in wb.Worksheets[0].ConditionalFormats)
+    if (cf.Type == ConditionalFormatType.IconSet && cf.IconSet is not null)
+        Console.WriteLine($"{cf.Sqref} {cf.IconSet.Style}");
+```
+
+> **机理**：图标长什么样由 Excel 程序内置渲染，文件只存集合名字符串（同条纹样式）。Excel 内置 17 种集合：`3Arrows` / `3ArrowsGray` / `3Flags` / `3TrafficLights1` / `3TrafficLights2` / `3Signs` / `3Symbols` / `3Symbols2` / `4Arrows` / `4ArrowsGray` / `4RedToBlack` / `4Rating` / `4TrafficLights` / `5Arrows` / `5ArrowsGray` / `5Rating` / `5Quarters`。枚举 `IconSetStyle` 覆盖全部；`CustomStyleName` 可写任意集合名字符串。
+>
+> **阈值约定**：默认按图标数均分（3 图标=0/33/67，4=0/25/50/75，5=0/20/40/60/80）；`Thresholds` 自定义（数量 = 图标数 - 1）。`Percent=false` 时阈值为绝对数值（`cfvo type="num"`）。xls/xlsb/csv 不支持条件格式，走降级上报。
 
 ---
 

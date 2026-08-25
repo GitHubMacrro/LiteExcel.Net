@@ -444,6 +444,27 @@ public static partial class XlsxReader
         s_bookViewsXml = workbook.Element(ns + "bookViews")?.ToString();
         s_definedNamesXml = workbook.Element(ns + "definedNames")?.ToString();
 
+        // 捕获 workbookProtection（工作簿保护：锁结构/窗口 + 可选密码）
+        s_workbookProtection = null;
+        var wpEl = workbook.Element(ns + "workbookProtection");
+        if (wpEl is not null)
+        {
+            var wp = new WorkbookProtection
+            {
+                Enabled = true,
+                LockStructure = wpEl.Attribute("lockStructure")?.Value != "0",
+                LockWindows = wpEl.Attribute("lockWindows")?.Value == "1",
+            };
+            var hash = wpEl.Attribute("hashValue")?.Value;
+            var salt = wpEl.Attribute("saltValue")?.Value;
+            var algo = wpEl.Attribute("algorithmName")?.Value;
+            var spinStr = wpEl.Attribute("spinCount")?.Value;
+            int spin = spinStr is not null && int.TryParse(spinStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sv) ? sv : 100000;
+            if (!string.IsNullOrEmpty(hash))
+                wp.LoadHash(Convert.FromBase64String(hash), salt is null ? null : Convert.FromBase64String(salt), algo, spin);
+            s_workbookProtection = wp;
+        }
+
         // 读取 sheet 列表
         var sheetsEl = workbook.Element(ns + "sheets");
         if (sheetsEl is null) return result;
@@ -529,6 +550,13 @@ public static partial class XlsxReader
     [ThreadStatic]
     private static string? s_definedNamesXml;
 
+    // 最近一次 ReadWorkbook 捕获的 workbookProtection（工作簿保护），供 OpenCore 取用
+    [ThreadStatic]
+    private static WorkbookProtection? s_workbookProtection;
+
+    /// <summary>最近一次 ReadWorkbook 捕获的工作簿保护（同线程、单次打开内有效，供 OpenCore 取用） </summary>
+    internal static WorkbookProtection? WorkbookProtectionSnapshot => s_workbookProtection;
+
     /// <summary>最近一次 ReadWorkbook 捕获的工作簿 codeName（同线程、单次打开内有效，供 OpenCore 取用） </summary>
     internal static string? WorkbookCodeNameSnapshot => s_workbookCodeName;
 
@@ -564,6 +592,36 @@ public static partial class XlsxReader
                 var codeNameAttr = reader.GetAttribute("codeName");
                 if (!string.IsNullOrEmpty(codeNameAttr))
                     sheet.CodeName = codeNameAttr;
+            }
+            else if (reader.LocalName == "sheetProtection")
+            {
+                var prot = new SheetProtection
+                {
+                    Enabled = true,
+                    SelectLockedCells = reader.GetAttribute("selectLockedCells") != "0",
+                    SelectUnlockedCells = reader.GetAttribute("selectUnlockedCells") != "0",
+                    FormatCells = reader.GetAttribute("formatCells") == "1",
+                    FormatColumns = reader.GetAttribute("formatColumns") == "1",
+                    FormatRows = reader.GetAttribute("formatRows") == "1",
+                    InsertColumns = reader.GetAttribute("insertColumns") == "1",
+                    InsertRows = reader.GetAttribute("insertRows") == "1",
+                    InsertHyperlinks = reader.GetAttribute("insertHyperlinks") == "1",
+                    DeleteColumns = reader.GetAttribute("deleteColumns") == "1",
+                    DeleteRows = reader.GetAttribute("deleteRows") == "1",
+                    Sort = reader.GetAttribute("sort") == "1",
+                    AutoFilter = reader.GetAttribute("autoFilter") == "1",
+                    PivotTables = reader.GetAttribute("pivotTables") == "1",
+                    Objects = reader.GetAttribute("objects") != "0",
+                    Scenarios = reader.GetAttribute("scenarios") != "0",
+                };
+                var hash = reader.GetAttribute("hashValue");
+                var salt = reader.GetAttribute("saltValue");
+                var algo = reader.GetAttribute("algorithmName");
+                var spinStr = reader.GetAttribute("spinCount");
+                int spin = spinStr is not null && int.TryParse(spinStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var sv) ? sv : 100000;
+                if (!string.IsNullOrEmpty(hash))
+                    prot.LoadHash(Convert.FromBase64String(hash), salt is null ? null : Convert.FromBase64String(salt), algo, spin);
+                sheet.Protection = prot;
             }
             else if (reader.LocalName == "col")
             {
@@ -666,6 +724,12 @@ public static partial class XlsxReader
                         sheet.FreezeHeader = sheet.FreezeRows == 1;
                 }
             }
+            else if (reader.LocalName == "tablePart")
+            {
+                var rid = reader.GetAttribute("r:id");
+                if (!string.IsNullOrEmpty(rid))
+                    (sheet.TablesRawRelIds ??= new List<string>()).Add(rid);
+            }
         }
 
         // Convert hidden XML row numbers to 0-based data row indices
@@ -689,7 +753,172 @@ public static partial class XlsxReader
         // 读取浮动图片（drawing + media）——只读取 BackingFile，不改变表格本身
         ReadImagesForSheet(zip, sheetPath, sheet);
 
+        // 读取超级表（sheet tableParts → rels → table{N}.xml）
+        ReadTablesForSheet(zip, sheetPath, sheet, styles);
+
         return sheet;
+    }
+
+    /// <summary>
+    /// 读取超级表：按 sheet 的 &lt;tableParts&gt; r:id → sheet rels 的 table 关系 → 解析 table{N}.xml。
+    /// </summary>
+    private static void ReadTablesForSheet(ZipArchive zip, string sheetPath, SheetData sheet, StylesheetInfo styles)
+    {
+        if (sheet.TablesRawRelIds is not { Count: > 0 }) return;
+
+        // 解析 sheet rels：rId → 目标
+        var relMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var relsPath = System.IO.Path.GetDirectoryName(sheetPath)!.Replace('\\', '/')
+            + "/_rels/" + System.IO.Path.GetFileName(sheetPath) + ".rels";
+        var relsEntry = zip.GetEntry(relsPath);
+        if (relsEntry is not null)
+        {
+            var doc = XElement.Load(relsEntry.Open());
+            foreach (var rel in doc.Elements())
+            {
+                var id = rel.Attribute("Id")?.Value;
+                var type = rel.Attribute("Type")?.Value ?? "";
+                var target = rel.Attribute("Target")?.Value;
+                if (id is not null && target is not null && type.EndsWith("/table", StringComparison.Ordinal))
+                    relMap[id] = target;
+            }
+        }
+
+        foreach (var rid in sheet.TablesRawRelIds)
+        {
+            if (!relMap.TryGetValue(rid, out var target)) continue;
+            var entry = ResolveTableTarget(sheetPath, target);
+            var tableEntry = zip.GetEntry(entry);
+            if (tableEntry is null) continue;
+            try
+            {
+                var table = ParseTable(XElement.Load(tableEntry.Open()), styles);
+                if (table is not null) sheet.Tables.Add(table);
+            }
+            catch
+            {
+                // 单个表解析失败不影响整个工作表读取
+            }
+        }
+    }
+
+    private static bool TryMapIconSet(string name, out IconSetStyle style)
+    {
+        switch (name)
+        {
+            case "3Arrows": style = IconSetStyle.ThreeArrows; return true;
+            case "3ArrowsGray": style = IconSetStyle.ThreeArrowsGray; return true;
+            case "3Flags": style = IconSetStyle.ThreeFlags; return true;
+            case "3TrafficLights1": style = IconSetStyle.ThreeTrafficLights; return true;
+            case "3TrafficLights2": style = IconSetStyle.ThreeTrafficLights2; return true;
+            case "3Signs": style = IconSetStyle.ThreeSigns; return true;
+            case "3Symbols": style = IconSetStyle.ThreeSymbols; return true;
+            case "3Symbols2": style = IconSetStyle.ThreeSymbols2; return true;
+            case "4Arrows": style = IconSetStyle.FourArrows; return true;
+            case "4ArrowsGray": style = IconSetStyle.FourArrowsGray; return true;
+            case "4RedToBlack": style = IconSetStyle.FourRedToBlack; return true;
+            case "4Rating": style = IconSetStyle.FourRating; return true;
+            case "4TrafficLights": style = IconSetStyle.FourTrafficLights; return true;
+            case "5Arrows": style = IconSetStyle.FiveArrows; return true;
+            case "5ArrowsGray": style = IconSetStyle.FiveArrowsGray; return true;
+            case "5Rating": style = IconSetStyle.FiveRating; return true;
+            case "5Quarters": style = IconSetStyle.FiveQuarters; return true;
+            default: style = IconSetStyle.ThreeArrows; return false;
+        }
+    }
+
+    private static string? ResolveTableTarget(string sheetPath, string target)
+    {
+        if (target.StartsWith("/", StringComparison.Ordinal))
+            return target.TrimStart('/');
+        var dir = System.IO.Path.GetDirectoryName(sheetPath)!.Replace('\\', '/');
+        if (string.IsNullOrEmpty(dir)) return target;
+        var combined = dir + "/" + target;
+        // 归一化 "xl/worksheets/../tables/table1.xml" → "xl/tables/table1.xml"
+        var parts = new List<string>();
+        foreach (var seg in combined.Split('/'))
+        {
+            if (seg == "." || seg == "") continue;
+            if (seg == "..")
+            {
+                if (parts.Count > 0) parts.RemoveAt(parts.Count - 1);
+                continue;
+            }
+            parts.Add(seg);
+        }
+        return string.Join("/", parts);
+    }
+
+    private static XlTable? ParseTable(XElement tableEl, StylesheetInfo styles)
+    {
+        var name = tableEl.Attribute("name")?.Value;
+        var ref_ = tableEl.Attribute("ref")?.Value;
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(ref_)) return null;
+
+        var tbl = new XlTable
+        {
+            Name = name,
+            Ref = ref_,
+            TotalsRowShown = tableEl.Attribute("totalsRowShown")?.Value == "1",
+        };
+
+        var styleInfo = tableEl.Element(tableEl.GetDefaultNamespace() + "tableStyleInfo");
+        if (styleInfo is not null)
+        {
+            var styleName = styleInfo.Attribute("name")?.Value;
+            if (!string.IsNullOrEmpty(styleName))
+            {
+                tbl.CustomStyleName = styleName;
+                if (styleName.StartsWith("TableStyle", StringComparison.Ordinal)
+                    && Enum.TryParse<TableStyleStyle>(styleName.Substring("TableStyle".Length), out var parsed))
+                    tbl.Style = parsed;
+            }
+            tbl.ShowRowStripes = styleInfo.Attribute("showRowStripes")?.Value == "1";
+            tbl.ShowFirstColumn = styleInfo.Attribute("showFirstColumn")?.Value == "1";
+            tbl.ShowLastColumn = styleInfo.Attribute("showLastColumn")?.Value == "1";
+            tbl.ShowColumnStripes = styleInfo.Attribute("showColumnStripes")?.Value == "1";
+        }
+        else
+        {
+            tbl.ShowRowStripes = false;
+        }
+
+        var autoFilter = tableEl.Element(tableEl.GetDefaultNamespace() + "autoFilter");
+        tbl.AutoFilter = autoFilter is not null;
+
+        var columnsEl = tableEl.Element(tableEl.GetDefaultNamespace() + "tableColumns");
+        if (columnsEl is not null)
+        {
+            foreach (var colEl in columnsEl.Elements(tableEl.GetDefaultNamespace() + "tableColumn"))
+            {
+                var colName = colEl.Attribute("name")?.Value;
+                if (string.IsNullOrEmpty(colName)) continue;
+                var col = new XlTableColumn { Name = colName };
+                // dataDxfId → 列格式（数字格式从 styles dxfs 反查）
+                var dxfIdStr = colEl.Attribute("dataDxfId")?.Value;
+                if (dxfIdStr is not null && int.TryParse(dxfIdStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dxfId)
+                    && dxfId >= 0 && dxfId < styles.Dxfs.Count)
+                {
+                    var dxf = styles.Dxfs[dxfId];
+                    if (!string.IsNullOrEmpty(dxf.NumberFormat)) col.NumberFormat = dxf.NumberFormat;
+                    var styleCopy = new CellStyle
+                    {
+                        Bold = dxf.Bold,
+                        Italic = dxf.Italic,
+                        Underline = dxf.Underline,
+                        Strikeout = dxf.Strikeout,
+                        FontColor = dxf.FontColor,
+                        FillColor = dxf.FillColor,
+                        Border = dxf.Border,
+                    };
+                    if (styleCopy.Bold || styleCopy.Italic || styleCopy.Underline || styleCopy.Strikeout
+                        || styleCopy.FontColor is not null || styleCopy.FillColor is not null || styleCopy.Border is not null)
+                        col.Style = styleCopy;
+                }
+                tbl.AddColumn(col);
+            }
+        }
+        return tbl;
     }
 
     /// <summary>读取单元格超链接：sheet rels 的 hyperlink 关系（外部）+ sheet 的 &lt;hyperlinks&gt; 元素（含内部 location） </summary>
@@ -1501,6 +1730,44 @@ public static partial class XlsxReader
                     ReadDataBar(sub, cf);
                     if (dxfId.HasValue && dxfId.Value < styles.Dxfs.Count)
                         cf.Style = styles.Dxfs[dxfId.Value].Clone();
+                    break;
+                }
+                case "iconSet":
+                {
+                    cf.Type = ConditionalFormatType.IconSet;
+                    var iset = new IconSetInfo();
+                    var th = new List<double>();
+                    // iconSet 属性在 <cfRule> 的子元素 <iconSet> 上
+                    if (!sub.IsEmptyElement)
+                    {
+                        using var sub2 = sub.ReadSubtree();
+                        while (sub2.Read())
+                        {
+                            if (sub2.NodeType != System.Xml.XmlNodeType.Element) continue;
+                            if (sub2.LocalName == "iconSet")
+                            {
+                                var setAttr = sub2.GetAttribute("iconSet");
+                                if (string.IsNullOrEmpty(setAttr))
+                                    iset.Style = IconSetStyle.ThreeArrows;
+                                else
+                                {
+                                    iset.CustomStyleName = setAttr;
+                                    if (TryMapIconSet(setAttr, out var parsed)) iset.Style = parsed;
+                                }
+                                iset.Percent = sub2.GetAttribute("percent") != "0";
+                                iset.ShowValue = sub2.GetAttribute("showValue") != "0";
+                            }
+                            else if (sub2.LocalName == "cfvo")
+                            {
+                                var v = sub2.GetAttribute("val");
+                                if (v is not null && double.TryParse(v, System.Globalization.NumberStyles.Float,
+                                    System.Globalization.CultureInfo.InvariantCulture, out var tv))
+                                    th.Add(tv);
+                            }
+                        }
+                    }
+                    if (th.Count > 0) iset.Thresholds = th.ToArray();
+                    cf.IconSet = iset;
                     break;
                 }
                 // ── 2.4.4 长尾类型 ──

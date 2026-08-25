@@ -36,6 +36,9 @@ Demo22_ConditionalFormatting(outDir);
 Demo23_NamedRanges(outDir);
 Demo24_FormulaColumn(outDir);
 Demo25_CreateWithData(outDir);
+Demo26_Protection(outDir);
+Demo27_SuperTable(outDir);
+Demo28_IconSet(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -1006,6 +1009,102 @@ Demo25_CreateWithData(outDir);
         var opened = Excel.Open(Path.Combine(dir, "demo25_create_with_data.xlsx"));
         Console.WriteLine($"  sheets: {string.Join(",", opened.Worksheets.Names)}");
         Console.WriteLine($"  A2 name: {opened.Worksheets["员工表"].Cell("A2").Text}");
+        Console.WriteLine();
+    }
+
+    // 26. Sheet / Workbook protection
+    private static void Demo26_Protection(string dir)
+    {
+        Console.WriteLine("[26] Sheet / Workbook Protection");
+
+        var wb = Excel.Create();
+        wb.Worksheets[0].SetValue("A1", "受保护内容");
+        wb.Worksheets[0].Protection = new SheetProtection
+        {
+            Enabled = true,
+            SelectLockedCells = true,
+            SelectUnlockedCells = false,
+            Sort = false,
+            AutoFilter = false,
+        };
+        wb.Worksheets[0].Protection.SetPassword("pw");
+        wb.Protection = new WorkbookProtection { Enabled = true, LockStructure = true };
+        wb.Protection.SetPassword("wb");
+
+        var file = Path.Combine(dir, "demo26_protection.xlsx");
+        wb.SaveAs(file);
+
+        var opened = Excel.Open(file);
+        Console.WriteLine($"  sheet protected: {opened.Worksheets[0].Protection?.Enabled}");
+        Console.WriteLine($"  sheet pwd ok: {opened.Worksheets[0].Protection?.VerifyPassword("pw")}");
+        Console.WriteLine($"  workbook structure locked: {opened.Protection?.LockStructure}");
+        Console.WriteLine($"  workbook pwd ok: {opened.Protection?.VerifyPassword("wb")}");
+        Console.WriteLine();
+    }
+
+    // 27. Super table
+    private static void Demo27_SuperTable(string dir)
+    {
+        Console.WriteLine("[27] Super Table (Table/ListObject)");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets[0];
+        ws.SetValue("A1", "姓名"); ws.SetValue("B1", "薪资"); ws.SetValue("C1", "入职日期");
+        for (int i = 2; i <= 11; i++)
+        {
+            ws.SetValue($"A{i}", $"员工{i}");
+            ws.SetValue($"B{i}", 5000 + i * 100);
+            ws.SetValue($"C{i}", new DateTime(2020 + i % 5, 1, 1));
+        }
+
+        var tbl = ws.AddTable("A1:C11", "员工表", TableStyleStyle.Medium6);
+        tbl.Column("薪资").NumberFormat = "#,##0.00";
+        tbl.Column("入职日期").NumberFormat = "yyyy/m/d";
+        tbl.ShowRowStripes = true;
+
+        var file = Path.Combine(dir, "demo27_super_table.xlsx");
+        wb.SaveAs(file);
+
+        var opened = Excel.Open(file);
+        foreach (var t in opened.Worksheets[0].Tables)
+        {
+            Console.WriteLine($"  table: {t.Name} {t.Ref}  style={t.CustomStyleName ?? t.Style.ToString()}  cols={t.Columns.Count}");
+            foreach (var c in t.Columns)
+                Console.WriteLine($"    - {c.Name}  {c.NumberFormat}");
+        }
+        Console.WriteLine();
+    }
+
+    // 28. IconSet conditional formatting
+    private static void Demo28_IconSet(string dir)
+    {
+        Console.WriteLine("[28] IconSet Conditional Formatting");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets[0];
+        ws.SetValue("A1", "分数");
+        for (int i = 2; i <= 10; i++) ws.SetValue($"A{i}", i * 9);
+
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.IconSet,
+            Sqref = "A2:A10",
+            IconSet = new IconSetInfo { Style = IconSetStyle.FourRating },
+        });
+        ws.ConditionalFormats.Add(new ConditionalFormat
+        {
+            Type = ConditionalFormatType.IconSet,
+            Sqref = "A2:A10",
+            IconSet = new IconSetInfo { Style = IconSetStyle.ThreeArrows, ShowValue = false },
+        });
+
+        var file = Path.Combine(dir, "demo28_iconset.xlsx");
+        wb.SaveAs(file);
+
+        var opened = Excel.Open(file);
+        foreach (var cf in opened.Worksheets[0].ConditionalFormats)
+            if (cf.Type == ConditionalFormatType.IconSet && cf.IconSet is not null)
+                Console.WriteLine($"  iconSet {cf.Sqref}  {cf.IconSet.Style}");
         Console.WriteLine();
     }
 }

@@ -46,4 +46,13 @@ public sealed class SheetData
 
     /// <summary>工作表图片（InCell richData / Floating drawing） </summary>
     public List<WorksheetImage>? Images { get; set; }
+
+    /// <summary>工作表保护（sheetProtection）。为空表示无保护 </summary>
+    public SheetProtection? Protection { get; set; }
+
+    /// <summary>超级表（Table/ListObject）列表 </summary>
+    public List<XlTable> Tables { get; set; } = new();
+
+    /// <summary>读取时捕获的 sheet tableParts rel id 列表（内部使用，写出时透传保留） </summary>
+    internal List<string>? TablesRawRelIds { get; set; }
 }

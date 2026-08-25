@@ -109,6 +109,8 @@ internal static class XlsWriter
                 Report(DegradationCapability.Styles, $"xls 仅支持数字格式，工作表 '{sheet.SheetName}' 的完整样式（字体/颜色/边框/对齐/换行）已降级。");
             if (sheet.ConditionalFormats is { Count: > 0 })
                 Report(DegradationCapability.ConditionalFormatting, $"xls 不支持条件格式，工作表 '{sheet.SheetName}' 的条件格式已丢弃。");
+            if (sheet.Tables is { Count: > 0 })
+                Report(DegradationCapability.Tables, $"xls 不支持超级表，工作表 '{sheet.SheetName}' 的超级表已丢弃。");
         }
     }
 

@@ -156,6 +156,7 @@ public static class Excel
             wb.Date1904 = XlsxReader.Date1904Snapshot;
         }
         wb.PreservedParts = preserved;
+        wb.Protection = XlsxReader.WorkbookProtectionSnapshot;
         ApplyFileSharing(wb, options, XlsxReader.FileSharingSnapshot);
 
         if (options.FillMergedCells)
@@ -301,6 +302,7 @@ public static class Excel
             }
         }
         wb.PreservedParts = preserved;
+        wb.Protection = XlsxReader.WorkbookProtectionSnapshot;
         ApplyFileSharing(wb, options, XlsxReader.FileSharingSnapshot);
 
         if (options.FillMergedCells)

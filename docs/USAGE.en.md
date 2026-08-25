@@ -1394,6 +1394,51 @@ XlsxWriter.Write("people.xlsx", list, opt => opt
 2. **Fluent callback**: `opt.Column(x => x.Name, "Name").Ignore(x => x.Id)` — `Column(..., isFormula: true)` for formula columns
 3. **Dictionary mapping**: `opt.Map(new Dictionary<string,string> { { "Name", "Name" } })`
 
+### Super Table (Table / ListObject)
+
+A super table is Excel's "Insert ▸ Table" — a region with banded styles, header filters, and structured scope.
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets[0];
+
+// Prepare data first (first row is the header)
+ws.SetValue("A1", "Name"); ws.SetValue("B1", "Salary"); ws.SetValue("C1", "HireDate");
+for (int i = 2; i <= 501; i++) { ws.SetValue($"A{i}", $"Emp{i}"); ws.SetValue($"B{i}", i * 100); }
+
+// Create a table (region needs at least 2 rows: header + 1 data row)
+var tbl = ws.AddTable("A1:C501", "Employees");                  // default TableStyleMedium9
+ws.AddTable("E1:F10", "History", TableStyleStyle.Medium6);      // or pick an enum
+
+// Column formats (user-defined): mapped to per-column dxf
+tbl.Column("Salary").NumberFormat = "#,##0.00";
+tbl.Column("HireDate").NumberFormat = "yyyy/m/d";
+tbl.Column("Name").Style = new CellStyle { FontColor = "#FF0000", Bold = true };
+
+// Style switches
+tbl.ShowRowStripes = true;      // banding (default true)
+tbl.ShowFirstColumn = false;    // first-column emphasis
+tbl.ShowLastColumn = false;     // last-column emphasis
+tbl.ShowColumnStripes = false;  // column banding
+tbl.AutoFilter = true;          // header filter dropdown (default true)
+tbl.CustomStyleName = "TableStyleDark3";   // or any style-name string (takes precedence)
+
+wb.SaveAs("table.xlsx");
+
+// Read back
+foreach (var t in Excel.Open("table.xlsx").Worksheets[0].Tables)
+    Console.WriteLine($"{t.Name} {t.Ref} {t.StyleName}");
+
+// Remove
+ws.RemoveTable("Employees");
+```
+
+> **How stripe styles work**: the look is rendered by the Excel program itself — **the file only stores the style-name string**. Excel has 60 built-in names: `TableStyleLight1~21`, `TableStyleMedium1~28`, `TableStyleDark1~11` (`None` = no style). A misspelled / wrong-cased name silently degrades to an unstyled table (no error). When you use the string overload with an unknown name, the library reports it via `OnDegradation`.
+
+> **Naming rules**: table names are unique per workbook; cannot start with a digit, cannot contain spaces, cannot be a cell reference (e.g. `C1`); Chinese is allowed.
+
+> **Scope**: write + read-back on xlsx/xlsm only; xls/xlsb/csv degrade via `OnDegradation` (tables not written). Not yet supported: totals rows, structured references (`TableName[#All]`), custom banded-style definitions.
+
 ---
 
 ## 18. DataTable Convenience API (AOT safe)
@@ -1577,6 +1622,39 @@ wb.SaveAs("plain.xlsx");
 - Passwords **never** appear in exception messages, logs, or test output.
 - Supported for xlsx/xlsm/xlsb only; csv/xls do not support passwords.
 
+### Sheet / Workbook Protection (2.4.6+)
+
+Sheet protection (`sheetProtection`) and workbook protection (`workbookProtection`) are **editing restrictions** (distinct from the file-level passwords above):
+
+```csharp
+// Sheet protection: restricts editing per flag, optional password
+wb.Worksheets[0].Protection = new SheetProtection
+{
+    Enabled = true,
+    SelectLockedCells = true,
+    SelectUnlockedCells = false,   // disallow selecting unlocked cells
+    Sort = false,                  // disallow sorting
+    AutoFilter = false,            // disallow auto filter
+};
+wb.Worksheets[0].Protection.SetPassword("pw");
+
+// Workbook protection: locks the structure (no insert/delete/move/rename sheets)
+wb.Protection = new WorkbookProtection
+{
+    Enabled = true,
+    LockStructure = true,
+    LockWindows = false,
+};
+wb.Protection.SetPassword("wb");
+
+wb.SaveAs("protected.xlsx");
+```
+
+- Read-back: `wb.Worksheets[i].Protection` / `wb.Protection` are auto-populated; `VerifyPassword(pwd)` validates the protection password.
+- Passwords are written as a SHA-512 + salt hash (same mechanism as `fileSharing`); no plaintext is stored.
+- Write supported for xlsx/xlsm only; xls/xlsb go through the existing degradation reporting.
+- Verified with real Excel COM: `ProtectContents` / `ProtectStructure` are True after opening.
+
 ---
 
 ## 23. Error Handling
@@ -1756,8 +1834,42 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 });
 ```
 
-> Still on the roadmap: `iconSet` (icon sets) and full cfvo threshold control — planned for a later release.
+### Icon Sets (iconSet, 2.4.6+)
 
+Cell visualization with arrows / traffic lights / symbols / star ratings:
+
+```csharp
+// Minimal: three-color arrows, evenly divided percent thresholds (0/33/67)
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.IconSet,
+    Sqref = "B2:B10",
+    IconSet = new IconSetInfo(),
+});
+
+// Choose a set + custom thresholds
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.IconSet,
+    Sqref = "C2:C10",
+    IconSet = new IconSetInfo
+    {
+        Style = IconSetStyle.FourRating,
+        Percent = true,
+        ShowValue = true,
+        Thresholds = new double[] { 25, 50, 75 },   // icon count - 1; empty = evenly divided
+    },
+});
+
+// Read back
+foreach (var cf in wb.Worksheets[0].ConditionalFormats)
+    if (cf.Type == ConditionalFormatType.IconSet && cf.IconSet is not null)
+        Console.WriteLine($"{cf.Sqref} {cf.IconSet.Style}");
+```
+
+> **How it works**: icons are rendered by Excel itself — the file only stores the set-name string (same as banded table styles). Excel has 17 built-in sets: `3Arrows` / `3ArrowsGray` / `3Flags` / `3TrafficLights1` / `3TrafficLights2` / `3Signs` / `3Symbols` / `3Symbols2` / `4Arrows` / `4ArrowsGray` / `4RedToBlack` / `4Rating` / `4TrafficLights` / `5Arrows` / `5ArrowsGray` / `5Rating` / `5Quarters`. The `IconSetStyle` enum covers all; `CustomStyleName` accepts any set-name string.
+>
+> **Threshold rules**: default is evenly divided by icon count (3 → 0/33/67, 4 → 0/25/50/75, 5 → 0/20/40/60/80); `Thresholds` is custom (count = icon count - 1). `Percent=false` writes `type="num"` absolute thresholds. xls/xlsb/csv do not support conditional formatting and degrade via the callback.
 
 ---
 

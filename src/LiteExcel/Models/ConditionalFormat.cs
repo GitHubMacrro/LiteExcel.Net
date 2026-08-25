@@ -62,6 +62,9 @@ public enum ConditionalFormatType
 
     /// <summary>低于平均（belowAverage） </summary>
     BelowAverage,
+
+    /// <summary>图标集（iconSet：箭头/红绿灯/符号/星级） </summary>
+    IconSet,
 }
 
 /// <summary>
@@ -145,6 +148,9 @@ public sealed class ConditionalFormat
 
     /// <summary>DataBar 专用参数 </summary>
     public DataBarInfo? DataBar { get; set; }
+
+    /// <summary>IconSet 专用参数 </summary>
+    public IconSetInfo? IconSet { get; set; }
 
     /// <summary>文本条件（ContainsText/BeginsWith/EndsWith/NotContainsText 的目标文本） </summary>
     public string? Text { get; set; }
