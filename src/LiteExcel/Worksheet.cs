@@ -377,6 +377,15 @@ public sealed class Worksheet
             throw new LiteExcelException($"表名不能是单元格地址：{name}");
     }
 
+    /// <summary>按表内现有内容估算自适应列宽，结果写入 <see cref="ColumnWidths"/>（0-based 列索引）。 </summary>
+    public void AutoColumnWidths()
+    {
+        var sd = ToSheetData();
+        XlsxWriter.AutoColumnWidths(sd);
+        if (sd.ColumnWidths is not null)
+            ColumnWidths = sd.ColumnWidths.Select((w, i) => (i, w)).ToDictionary(x => x.i, x => x.w);
+    }
+
     // ── 合并 ──
 
     /// <summary>合并区域（1-based，含端点）。例如 Merge(1, 1, 2, 2) 合并 A1:B2 </summary>

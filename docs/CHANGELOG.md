@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.7] - 2026-08-27
+
+### Added
+
+- **门面补齐**：`Excel.Append`（对象模型单行追加同 `SheetData` 语义）、`Excel.ReadWithProgress`（进度读取）、`Excel.GetSheetNames(Stream)`（仅 xlsx/xlsm）。
+- **`Worksheet.AutoColumnWidths()`**：实例方法，低层估算后回填 `ColumnWidths`。
+- **`GetSheetNames(path)` 路由修复**：xlsb / xls / csv 不再走 zip 元数据路径（会误读），改经 `Excel.Open` 按格式解析，正确返回表名。
+- **Excel 2021 兼容性修复（两处）**：
+  - `sheet1.xml` 子元素顺序重排为 OOXML schema 全序（autoFilter → mergeCells → conditionalFormatting → dataValidations → hyperlinks → drawing → legacyDrawing → tableParts），消除「XML 错误 / 丢弃整表」。
+  - 批注写回补 VML legacyDrawing（`xl/drawings/vmlDrawing{N}.vml` + `<legacyDrawing r:id="rIdC1"/>`，rels ContentType 用 `.../vmlDrawing`，`[Content_Types].xml` 补 `Default vml`），Excel 2021 下批注可见。
+- `FacadeGapsTests`：新增 4 个测试（Append 委托、AutoColumnWidths 回填、ReadWithProgress 回调、GetSheetNames(Stream)）。
+
 ## [2.4.6] - 2026-08-25
 
 ### Added

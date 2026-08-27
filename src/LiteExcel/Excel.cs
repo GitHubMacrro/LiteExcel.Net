@@ -532,7 +532,20 @@ public static class Excel
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
-        return XlsxReader.GetSheetNames(path);
+        var format = DetectFormat(path);
+        // xlsx / xlsm：XlsxReader 可直接读 workbook.xml 元数据列出表名（轻量）。
+        // xlsb / xls / csv：非 Excel XML 容器 → 走 Excel.Open 路由对应后端。
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return XlsxReader.GetSheetNames(path);
+        var wb = Excel.Open(path);
+        return wb.Worksheets.Names.ToList();
+    }
+
+    /// <summary>从流列出所有工作表名。仅支持 zip 容器格式（xlsx/xlsm）。 </summary>
+    public static List<string> GetSheetNames(Stream stream)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        return XlsxReader.GetSheetNames(stream);
     }
 
     /// <summary>流式读取指定工作表，逐行回调，不驻留内存（自动跳过首行） </summary>
@@ -561,6 +574,20 @@ public static class Excel
     {
         if (stream is null) throw new ArgumentNullException(nameof(stream));
         return XlsxStreamWriter.Create(stream);
+    }
+
+    /// <summary>追加数据到已有文件（同名表合并列后追加行；文件不存在则创建） </summary>
+    public static void Append(string path, SheetData newData, WorkbookProperties? updateProperties = null)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("路径不能为空", nameof(path));
+        XlsxWriter.Append(path, newData, updateProperties);
+    }
+
+    /// <summary>带进度读取指定工作表。current 从 1 递增到 total（数据行数，不含表头） </summary>
+    public static void ReadWithProgress(string path, int sheetIndex, Action<int, int> onProgress)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("路径不能为空", nameof(path));
+        XlsxReader.ReadWithProgress(path, sheetIndex, onProgress);
     }
 
     private static void EnsureXlsxStreamingFormat(string path, string operation)

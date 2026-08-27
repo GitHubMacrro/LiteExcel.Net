@@ -184,15 +184,16 @@ public static partial class XlsxWriter
             var inCellVm = imagePlan.InCellVmBySheet(i);
             bool hasDrawing = imagePlan.FloatingBySheet[i].Count > 0;
             string drawingRelId = hasDrawing ? imagePlan.DrawingTargetFor(i, preserved).RelId : "";
+            bool hasComments = sheets[i].Comments is { Count: > 0 };
             var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet, date1904, hyperlinks, inCellVm, hasDrawing, drawingRelId,
-                tablePartsXml: tablePlan.TablePartsXml(i));
+                tablePartsXml: tablePlan.TablePartsXml(i), hasComments: hasComments);
             WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
 
-            // 批注：每张有批注的 sheet 对应一个 comments 文件
-            bool hasComments = sheets[i].Comments is { Count: > 0 };
+            // 批注：每张有批注的 sheet 对应一个 comments 文件 + VML legacyDrawing
             if (hasComments)
             {
                 WriteXmlEntry(zip, $"xl/comments{i + 1}.xml", CommentsXml(sheets[i].Comments!));
+                WriteXmlEntry(zip, $"xl/drawings/vmlDrawing{i + 1}.vml", VmlDrawingXml(sheets[i].Comments!));
             }
 
             // 工作表 rels：合并保留的绘图/超链接等 rel（工作表结构未变时），追加新建超链接/批注/drawing/table
@@ -356,7 +357,7 @@ public static partial class XlsxWriter
         Dictionary<string, int> sharedIndex, Stylesheet stylesheet, bool date1904,
         List<(string Ref, string Target, string? Tooltip, bool IsInternal)>? hyperlinks = null,
         Dictionary<string, int>? inCellVm = null, bool hasDrawing = false, string drawingRelId = "rIdD1",
-        string tablePartsXml = "")
+        string tablePartsXml = "", bool hasComments = false)
     {
         var sb = new StringBuilder(4096);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -518,7 +519,7 @@ public static partial class XlsxWriter
 
         sb.Append("</sheetData>");
 
-        // 工作表保护（sheetProtection）：schema 位于 sheetData 之后、protectedRanges 之前
+        // 工作表保护（sheetProtection）：schema 位于 sheetData 之后
         if (sheet.Protection is { IsActive: true } prot)
         {
             sb.Append("<sheetProtection" + prot.WriteHashAttributes() +
@@ -532,68 +533,15 @@ public static partial class XlsxWriter
                       $"selectUnlockedCells=\"{(prot.SelectUnlockedCells ? 1 : 0)}\"/>");
         }
 
-        // 超链接（外部 r:id 与 sheet rels 编号对应，从 rIdH1 起；内部链接用 location）
-        if (hyperlinks is { Count: > 0 })
-        {
-            sb.Append("<hyperlinks>");
-            int extIndex = 0;
-            for (int h = 0; h < hyperlinks.Count; h++)
-            {
-                var (ref_, target, tooltip, isInternal) = hyperlinks[h];
-                string tooltipAttr = string.IsNullOrEmpty(tooltip) ? "" : $" tooltip=\"{XmlEscape(tooltip)}\"";
-                if (isInternal)
-                {
-                    sb.Append($"<hyperlink ref=\"{ref_}\" location=\"{XmlEscape(NormalizeInternalLocation(target))}\"{tooltipAttr}/>");
-                }
-                else
-                {
-                    extIndex++;
-                    sb.Append($"<hyperlink ref=\"{ref_}\" r:id=\"rIdH{extIndex}\"{tooltipAttr}/>");
-                }
-            }
-            sb.Append("</hyperlinks>");
-        }
-
-        // 数据验证
-        if (sheet.Validations is { Count: > 0 })
-        {
-            sb.Append($"<dataValidations count=\"{sheet.Validations.Count}\">");
-            foreach (var dv in sheet.Validations)
-            {
-                string typeAttr = dv.Type switch
-                {
-                    DataValidationType.List => "list",
-                    DataValidationType.WholeNumber => "whole",
-                    DataValidationType.Decimal => "decimal",
-                    DataValidationType.Date => "date",
-                    _ => "list",
-                };
-                string allowBlankAttr = dv.AllowBlank ? " allowBlank=\"1\"" : "";
-                string promptTitleAttr = dv.PromptTitle is not null ? $" promptTitle=\"{XmlEscape(dv.PromptTitle)}\"" : "";
-                string promptAttr = dv.Prompt is not null ? $" prompt=\"{XmlEscape(dv.Prompt)}\"" : "";
-
-                sb.Append($"<dataValidation type=\"{typeAttr}\" sqref=\"{XmlEscape(dv.Sqref)}\"{allowBlankAttr}{promptTitleAttr}{promptAttr}>");
-                sb.Append($"<formula1>{XmlEscape(dv.Formula1)}</formula1>");
-                if (dv.Formula2 is not null)
-                {
-                    sb.Append($"<formula2>{XmlEscape(dv.Formula2)}</formula2>");
-                }
-                sb.Append("</dataValidation>");
-            }
-            sb.Append("</dataValidations>");
-        }
-
-        // 自动筛选
+        // 自动筛选（autoFilter）：schema 位于 sheetProtection 之后、mergeCells 之前
         if (sheet.Filter is not null)
         {
             string filterRange = sheet.Filter.Range;
             if (string.IsNullOrEmpty(filterRange) && sheet.Headers.Count > 0)
             {
-                // 自动计算范围：表头行到最后一数据行
                 int totalRows = sheet.Headers.Count + sheet.Rows.Count;
                 filterRange = $"{CellRef.ToString(0, 0)}:{CellRef.ToString(totalRows - 1, sheet.Headers.Count - 1)}";
             }
-
             if (!string.IsNullOrEmpty(filterRange))
             {
                 sb.Append($"<autoFilter ref=\"{filterRange}\">");
@@ -607,10 +555,9 @@ public static partial class XlsxWriter
             }
         }
 
-        // 合并单元格
+        // 合并单元格（mergeCells）：schema 位于 autoFilter 之后、conditionalFormatting 之前
         if (sheet.MergedRanges is { Count: > 0 })
         {
-            // 表头占 1 行（如果有 Headers），MergedRanges 行号是相对于 Rows 的，需要偏移
             int headerOffset = (sheet.Headers is { Count: > 0 }) ? 1 : 0;
             sb.Append("<mergeCells count=\"" + sheet.MergedRanges.Count + "\">");
             foreach (var range in sheet.MergedRanges)
@@ -622,7 +569,7 @@ public static partial class XlsxWriter
             sb.Append("</mergeCells>");
         }
 
-        // 条件格式（2.4.3：cellIs/expression/colorScale/dataBar）
+        // 条件格式（conditionalFormatting）：schema 位于 mergeCells 之后、dataValidations 之前
         if (sheet.ConditionalFormats is { Count: > 0 })
         {
             int priority = 1;
@@ -632,7 +579,6 @@ public static partial class XlsxWriter
                 int dxfId = cf.Style is not null ? stylesheet.GetOrCreateDxfId(cf.Style) : -1;
                 string dxfAttr = dxfId >= 0 ? $" dxfId=\"{dxfId}\"" : "";
                 int prio = cf.Priority > 0 ? cf.Priority : priority++;
-
                 sb.Append($"<conditionalFormatting sqref=\"{XmlEscape(cf.Sqref)}\">");
                 switch (cf.Type)
                 {
@@ -657,18 +603,13 @@ public static partial class XlsxWriter
                         var cs = cf.ColorScale ?? new ColorScaleInfo();
                         sb.Append($"<cfRule type=\"colorScale\" priority=\"{prio}\">");
                         sb.Append("<colorScale>");
-                        // cfvo 类型须为 ST_CfvoType 合法值：min/max/num/percent/percentile/formula
                         sb.Append(cs.MidColor is not null
                             ? "<cfvo type=\"min\"/><cfvo type=\"percent\" val=\"50\"/><cfvo type=\"max\"/>"
                             : "<cfvo type=\"min\"/><cfvo type=\"max\"/>");
                         if (cs.MidColor is null)
-                        {
                             sb.Append($"<color rgb=\"FF{NormalizeColorRgb(cs.LowColor)}\"/><color rgb=\"FF{NormalizeColorRgb(cs.HighColor)}\"/>");
-                        }
                         else
-                        {
                             sb.Append($"<color rgb=\"FF{NormalizeColorRgb(cs.LowColor)}\"/><color rgb=\"FF{NormalizeColorRgb(cs.MidColor)}\"/><color rgb=\"FF{NormalizeColorRgb(cs.HighColor)}\"/>");
-                        }
                         sb.Append("</colorScale>");
                         sb.Append("</cfRule>");
                         break;
@@ -678,7 +619,6 @@ public static partial class XlsxWriter
                         var db = cf.DataBar ?? new DataBarInfo();
                         sb.Append($"<cfRule type=\"dataBar\" priority=\"{prio}\">");
                         sb.Append($"<dataBar minLength=\"{db.MinLengthPercent}\" maxLength=\"{db.MaxLengthPercent}\" showValue=\"{(db.ShowValue ? 1 : 0)}\">");
-                        // dataBar 的 cfvo 必须为 min/max（ST_CfvoType 无 "auto"，否则 Excel 报 XML 错误并丢弃规则）
                         sb.Append("<cfvo type=\"min\"/><cfvo type=\"max\"/>");
                         sb.Append($"<color rgb=\"FF{NormalizeColorRgb(db.Color)}\"/>");
                         sb.Append("</dataBar>");
@@ -689,8 +629,7 @@ public static partial class XlsxWriter
                     {
                         var iset = cf.IconSet ?? new IconSetInfo();
                         sb.Append($"<cfRule type=\"iconSet\" priority=\"{prio}\">");
-                        sb.Append($"<iconSet iconSet=\"{XmlEscape(iset.SetName)}\" " +
-                                  $"percent=\"{(iset.Percent ? 1 : 0)}\" showValue=\"{(iset.ShowValue ? 1 : 0)}\">");
+                        sb.Append($"<iconSet iconSet=\"{XmlEscape(iset.SetName)}\" percent=\"{(iset.Percent ? 1 : 0)}\" showValue=\"{(iset.ShowValue ? 1 : 0)}\">");
                         string cfvoType = iset.Percent ? "percent" : "num";
                         foreach (var t in iset.EffectiveThresholds())
                             sb.Append($"<cfvo type=\"{cfvoType}\" val=\"{FormatDouble(t)}\"/>");
@@ -698,7 +637,6 @@ public static partial class XlsxWriter
                         sb.Append("</cfRule>");
                         break;
                     }
-                    // ── 2.4.4 长尾类型（文本/时间周期/空值/错误/唯一重复/前N/平均线） ──
                     case ConditionalFormatType.ContainsText:
                     case ConditionalFormatType.BeginsWith:
                     case ConditionalFormatType.EndsWith:
@@ -734,7 +672,6 @@ public static partial class XlsxWriter
                     case ConditionalFormatType.Unique:
                     case ConditionalFormatType.Duplicate:
                     {
-                        // ST_CfType 合法值：uniqueValues/duplicateValues/containsBlanks/notContainsBlanks/containsErrors/notContainsErrors
                         string excelType = cf.Type switch
                         {
                             ConditionalFormatType.Blanks => "containsBlanks",
@@ -755,9 +692,7 @@ public static partial class XlsxWriter
                     case ConditionalFormatType.AboveAverage:
                     case ConditionalFormatType.BelowAverage:
                     {
-                        // 合格分两种：type="aboveAverage" + aboveAverage="1|0"（无 belowAverage 枚举）
-                        string excelType = "aboveAverage";
-                        sb.Append($"<cfRule type=\"{excelType}\"{dxfAttr} priority=\"{prio}\" aboveAverage=\"{(cf.Type == ConditionalFormatType.AboveAverage ? 1 : 0)}\"/>");
+                        sb.Append($"<cfRule type=\"aboveAverage\"{dxfAttr} priority=\"{prio}\" aboveAverage=\"{(cf.Type == ConditionalFormatType.AboveAverage ? 1 : 0)}\"/>");
                         break;
                     }
                 }
@@ -765,10 +700,62 @@ public static partial class XlsxWriter
             }
         }
 
-        // 浮动图片 drawing 引用
+        // 数据验证（dataValidations）：schema 位于 conditionalFormatting 之后、hyperlinks 之前
+        if (sheet.Validations is { Count: > 0 })
+        {
+            sb.Append($"<dataValidations count=\"{sheet.Validations.Count}\">");
+            foreach (var dv in sheet.Validations)
+            {
+                string typeAttr = dv.Type switch
+                {
+                    DataValidationType.List => "list",
+                    DataValidationType.WholeNumber => "whole",
+                    DataValidationType.Decimal => "decimal",
+                    DataValidationType.Date => "date",
+                    _ => "list",
+                };
+                string allowBlankAttr = dv.AllowBlank ? " allowBlank=\"1\"" : "";
+                string promptTitleAttr = dv.PromptTitle is not null ? $" promptTitle=\"{XmlEscape(dv.PromptTitle)}\"" : "";
+                string promptAttr = dv.Prompt is not null ? $" prompt=\"{XmlEscape(dv.Prompt)}\"" : "";
+                sb.Append($"<dataValidation type=\"{typeAttr}\" sqref=\"{XmlEscape(dv.Sqref)}\"{allowBlankAttr}{promptTitleAttr}{promptAttr}>");
+                sb.Append($"<formula1>{XmlEscape(dv.Formula1)}</formula1>");
+                if (dv.Formula2 is not null)
+                    sb.Append($"<formula2>{XmlEscape(dv.Formula2)}</formula2>");
+                sb.Append("</dataValidation>");
+            }
+            sb.Append("</dataValidations>");
+        }
+
+        // 超链接（hyperlinks）：schema 位于 dataValidations 之后、drawing 之前
+        if (hyperlinks is { Count: > 0 })
+        {
+            sb.Append("<hyperlinks>");
+            int extIndex = 0;
+            for (int h = 0; h < hyperlinks.Count; h++)
+            {
+                var (ref_, target, tooltip, isInternal) = hyperlinks[h];
+                string tooltipAttr = string.IsNullOrEmpty(tooltip) ? "" : $" tooltip=\"{XmlEscape(tooltip)}\"";
+                if (isInternal)
+                    sb.Append($"<hyperlink ref=\"{ref_}\" location=\"{XmlEscape(NormalizeInternalLocation(target))}\"{tooltipAttr}/>");
+                else
+                {
+                    extIndex++;
+                    sb.Append($"<hyperlink ref=\"{ref_}\" r:id=\"rIdH{extIndex}\"{tooltipAttr}/>");
+                }
+            }
+            sb.Append("</hyperlinks>");
+        }
+
+        // 浮动图片 drawing 引用（drawing）：schema 位于 hyperlinks 之后
         if (hasDrawing)
         {
             sb.Append($"<drawing r:id=\"{drawingRelId}\"/>");
+        }
+
+        // VML legacyDrawing（批注形状载体）：schema 位于 drawing 之后、tableParts 之前
+        if (hasComments)
+        {
+            sb.Append("<legacyDrawing r:id=\"rIdC1\"/>");
         }
 
         // 超级表 tableParts（schema 位于 worksheet 末尾、extLst 之前）
@@ -1012,6 +999,8 @@ public static partial class XlsxWriter
         // 写入器固有声明；xlsm 的主文档类型必须为 macroEnabled，否则 Excel 拒绝打开
         defaults.Add(("rels", "application/vnd.openxmlformats-package.relationships+xml"));
         defaults.Add(("xml", "application/xml"));
+        if (sheetsWithComments.Count > 0)
+            defaults.Add(("vml", "application/vnd.openxmlformats-officedocument.vmlDrawing"));
         overrides.Add(("/xl/workbook.xml", macroEnabled
             ? "application/vnd.ms-excel.sheet.macroEnabled.main+xml"
             : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"));
@@ -1130,7 +1119,7 @@ public static partial class XlsxWriter
             original = r;
         }
 
-        // 重建 rels（完整 XML）：批注 + 超链接 + drawing
+        // 重建 rels（完整 XML）：批注 + VML legacyDrawing + 超链接 + drawing + table
         var relParts = new List<RelInfo>();
         if (hasComments)
         {
@@ -1139,6 +1128,12 @@ public static partial class XlsxWriter
                 Id = "rId1",
                 Type = $"{OfficeRelNs}/comments",
                 Target = $"../comments{sheetNumber}.xml",
+            });
+            relParts.Add(new RelInfo
+            {
+                Id = "rIdC1",
+                Type = $"{OfficeRelNs}/vmlDrawing",
+                Target = $"../drawings/vmlDrawing{sheetNumber}.vml",
             });
         }
         if (hyperlinks is { Count: > 0 })
@@ -1325,6 +1320,37 @@ public static partial class XlsxWriter
         }
         sb.Append("</commentList>");
         sb.Append("</comments>");
+        return sb.ToString();
+    }
+
+    /// <summary>生成 VML legacyDrawing（批注形状载体，Excel 需要它才能显示批注） </summary>
+    private static string VmlDrawingXml(IReadOnlyDictionary<string, string> comments)
+    {
+        var sb = new StringBuilder(512);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\">");
+        sb.Append("<o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"1\"/></o:shapelayout>");
+        sb.Append("<v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\">");
+        sb.Append("<v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>");
+        int shapeId = 1025;
+        foreach (var kv in comments)
+        {
+            var (row, col) = CellRef.Parse(kv.Key);
+            sb.Append($"<v:shape id=\"_x0000_s{shapeId}\" type=\"#_x0000_t202\" style=\"position:absolute;margin-left:119.25pt;margin-top:6.75pt;width:96pt;height:59.25pt;z-index:{shapeId - 1024};visibility:hidden\" fillcolor=\"infoBackground [80]\" strokecolor=\"none [81]\" o:insetmode=\"auto\">");
+            sb.Append("<v:fill color2=\"infoBackground [80]\"/>");
+            sb.Append("<v:shadow color=\"none [81]\" obscured=\"t\"/>");
+            sb.Append("<v:path o:connecttype=\"none\"/>");
+            sb.Append("<v:textbox style=\"mso-direction-alt:auto\"><div style=\"text-align:left\"></div></v:textbox>");
+            sb.Append("<x:ClientData ObjectType=\"Note\">");
+            sb.Append("<x:MoveWithCells/><x:SizeWithCells/>");
+            sb.Append($"<x:Anchor>{col + 1}, 15, {row}, 9, {col + 2}, 71, {row + 4}, 12</x:Anchor>");
+            sb.Append("<x:AutoFill>False</x:AutoFill>");
+            sb.Append($"<x:Row>{row}</x:Row><x:Column>{col}</x:Column>");
+            sb.Append("</x:ClientData>");
+            sb.Append("</v:shape>");
+            shapeId++;
+        }
+        sb.Append("</xml>");
         return sb.ToString();
     }
 
