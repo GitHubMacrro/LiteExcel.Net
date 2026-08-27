@@ -340,6 +340,8 @@ T
 
 #### 3.10 Document Properties `WorkbookProperties`
 
+> ⚠️ Document properties are supported only for **xlsx / xlsm / xlsb** (OLE property sets are not implemented for xls). When writing to xls they are **silently dropped** (they are not reported via `OnDegradation`).
+
 `Workbook.Properties` corresponds to `docProps/core.xml` and `docProps/app.xml` inside the xlsx package:
 
 ```csharp
@@ -2074,6 +2076,8 @@ Products A1:B3 样式=TableStyleMedium2
 
 ### 17. Named Ranges
 
+> ⚠️ Named ranges are supported only for **xlsx / xlsm** (read from `definedNames` in `workbook.xml`). xls / xlsb are not implemented: named ranges are **silently dropped** on write (they are not reported via `OnDegradation`).
+
 #### 17.1 Reading Named Ranges
 
 After opening a file containing named ranges, `Workbook.Names` is populated automatically (global + sheet-local); simply iterate to print them:
@@ -2359,24 +2363,24 @@ The table below lists the support status of each capability across formats. Capa
 
 | Capability | xlsx | xlsm | xlsb | xls | csv |
 |---|---|---|---|---|---|
-| Cell value / Header | ✔ | ✔ | ✔ | ✔ | ✔ |
-| Style (font/color/border/alignment/wrap) | ✔ | ✔ | NumberFormat only | NumberFormat only | ✘ |
-| Number format | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Merged cells | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Auto filter | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Row height / Column width | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Comments | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Data validation | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Hyperlinks | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Freeze panes | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Images (Floating/InCell) | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Conditional formatting | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Tables | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Named ranges | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Document properties | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Open password / Modify password | ✔ | ✔ | ✔ | ✘ | ✘ |
-| Formulas | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Charts / PivotTables | fidelity only | fidelity only | fidelity only | ✘ | ✘ |
+| Cell value / Header | ☑️ | ☑️ | ☑️ | ☑️ | ☑️ |
+| Style (font/color/border/alignment/wrap) | ☑️ | ☑️ | NumberFormat only | NumberFormat only | ❌ |
+| Number format | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Merged cells | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Auto filter | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Row height / Column width | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Comments | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Data validation | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Hyperlinks | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Freeze panes | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Images (Floating/InCell) | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Conditional formatting | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Tables | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Named ranges | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Document properties | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Open password / Modify password | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Formulas | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Charts / PivotTables | fidelity only | fidelity only | fidelity only | ❌ | ❌ |
 
 Write to csv with the degradation callback connected to observe discarded capabilities:
 

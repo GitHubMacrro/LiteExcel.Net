@@ -79,24 +79,24 @@ Support per format / 各格式支持度（写出到不支持的能力时经 `OnD
 
 | Capability / 能力 | xlsx | xlsm | xlsb | xls | csv |
 |---|---|---|---|---|---|
-| Cell values & headers / 单元格值与表头 | ✔ | ✔ | ✔ | ✔ | ✔ |
-| Styles (font/color/border/alignment/wrap) / 样式 | ✔ | ✔ | 仅 NumberFormat | 仅 NumberFormat | ✘ |
-| Number formats / 数字格式 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Merged cells / 合并单元格 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| AutoFilter / 自动筛选 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Row height / column width / 行高 / 列宽 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Comments / 批注 | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Data validation / 数据验证 | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Hyperlinks / 超链接 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Freeze panes / 冻结窗格 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Images (Floating/InCell) / 图片 | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Conditional formatting / 条件格式 | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Excel Tables / 超级表 | ✔ | ✔ | ✘ | ✘ | ✘ |
-| Named ranges / 命名区域 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Document properties / 文档属性 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Open/modify passwords / 打开/修改密码 | ✔ | ✔ | ✔ | ✘ | ✘ |
-| Formulas / 公式 | ✔ | ✔ | ✔ | ✔ | ✘ |
-| Charts / PivotTables / 图表 / 透视表 | 只保真 | 只保真 | 只保真 | ✘ | ✘ |
+| Cell values & headers / 单元格值与表头 | ☑️ | ☑️ | ☑️ | ☑️ | ☑️ |
+| Styles (font/color/border/alignment/wrap) / 样式 | ☑️ | ☑️ | 仅 NumberFormat | 仅 NumberFormat | ❌ |
+| Number formats / 数字格式 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Merged cells / 合并单元格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| AutoFilter / 自动筛选 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Row height / column width / 行高 / 列宽 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Comments / 批注 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Data validation / 数据验证 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Hyperlinks / 超链接 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Freeze panes / 冻结窗格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Images (Floating/InCell) / 图片 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Conditional formatting / 条件格式 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Excel Tables / 超级表 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Named ranges / 命名区域 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Document properties / 文档属性 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Open/modify passwords / 打开/修改密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Formulas / 公式 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Charts / PivotTables / 图表 / 透视表 | 只保真 | 只保真 | 只保真 | ❌ | ❌ |
 
 ## Docs / 文档
 
