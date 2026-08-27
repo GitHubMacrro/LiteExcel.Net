@@ -71,6 +71,33 @@ var read = XlsxReader.Read("output2.xlsx", 0);
 - CSV separator options + auto-detect (2.4.3+): `ExcelReadOptions.Separator` / `ExcelWriteOptions.Separator` (comma/semicolon/tab) / CSV 分隔符选项与自动探测（逗号/分号/Tab）
 - Capability degradation reporting (2.4.2+): `ExcelWriteOptions.OnDegradation` for explicit drops on xls/xlsb/csv / 能力降级回调：写出到 xls/xlsb/csv 时的显式降级上报
 
+<!-- 能力矩阵同步自 docs/USAGE.zh-CN.md §20.1，技术细节详见使用手册 -->
+
+## Capability Matrix / 能力矩阵
+
+Support per format / 各格式支持度（写出到不支持的能力时经 `OnDegradation` 显式降级上报）
+
+| Capability / 能力 | xlsx | xlsm | xlsb | xls | csv |
+|---|---|---|---|---|---|
+| Cell values & headers / 单元格值与表头 | ✔ | ✔ | ✔ | ✔ | ✔ |
+| Styles (font/color/border/alignment/wrap) / 样式 | ✔ | ✔ | 仅 NumberFormat | 仅 NumberFormat | ✘ |
+| Number formats / 数字格式 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Merged cells / 合并单元格 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| AutoFilter / 自动筛选 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Row height / column width / 行高 / 列宽 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Comments / 批注 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Data validation / 数据验证 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Hyperlinks / 超链接 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Freeze panes / 冻结窗格 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Images (Floating/InCell) / 图片 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Conditional formatting / 条件格式 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Excel Tables / 超级表 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Named ranges / 命名区域 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Document properties / 文档属性 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Open/modify passwords / 打开/修改密码 | ✔ | ✔ | ✔ | ✘ | ✘ |
+| Formulas / 公式 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Charts / PivotTables / 图表 / 透视表 | 只保真 | 只保真 | 只保真 | ✘ | ✘ |
+
 ## Docs / 文档
 
 - 📖 [Usage Guide / 使用手册](docs/USAGE.en.md) · [中文使用手册](docs/USAGE.zh-CN.md)
