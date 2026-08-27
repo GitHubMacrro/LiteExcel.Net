@@ -4,7 +4,7 @@
 
 ### Added
 
-- **门面补齐**：`Excel.Append`（对象模型单行追加同 `SheetData` 语义）、`Excel.ReadWithProgress`（进度读取）、`Excel.GetSheetNames(Stream)`（仅 xlsx/xlsm）。
+- **对象API补齐**：`Excel.Append`（对象模型单行追加同 `SheetData` 语义）、`Excel.ReadWithProgress`（进度读取）、`Excel.GetSheetNames(Stream)`（仅 xlsx/xlsm）。
 - **`Worksheet.AutoColumnWidths()`**：实例方法，低层估算后回填 `ColumnWidths`。
 - **`GetSheetNames(path)` 路由修复**：xlsb / xls / csv 不再走 zip 元数据路径（会误读），改经 `Excel.Open` 按格式解析，正确返回表名。
 - **Excel 2021 兼容性修复（两处）**：
