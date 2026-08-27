@@ -1,1731 +1,755 @@
 # LiteExcel 使用手册
 
-**版本**：2.4.2  
-**目标框架**：net48 + net8.0  
-**依赖**：零第三方依赖，仅用 .NET BCL
+> 本手册反映 LiteExcel 当前主线版本的全部公开能力（对象模型 API + 低层 API）
+> 术语约定：**对象模型 API** 指以 `Excel` → `Workbook` → `Worksheet` → `Cell`/`Cells`/`Range` 为主线的日常用法；**低层 API** 指 `SheetData` / `XlsxReader` / `XlsxWriter` / `CsvBackend` / `XlsxStreamWriter` 等裸数据入口，见附录 B。
 
 ---
 
 ## 目录
 
-1. [安装与引用](#1-安装与引用)
-2. [对象模型 API（推荐）](#2-对象模型-api推荐)
-3. [快速上手](#3-快速上手)
-4. [单元格与数据类型](#4-单元格与数据类型)
-5. [读取](#5-读取)
-6. [写出](#6-写出)
-7. [样式](#7-样式)
-8. [合并单元格](#8-合并单元格)
-9. [自动筛选](#9-自动筛选)
-10. [行高与列宽](#10-行高与列宽)
-11. [单元格批注](#11-单元格批注)
-12. [超链接](#12-超链接)
-13. [冻结窗格](#13-冻结窗格)
-14. [图片](#14-图片)
-15. [数据验证（下拉列表）](#15-数据验证下拉列表)
-16. [追加数据](#16-追加数据)
-17. [List&lt;T&gt; 映射（反射，AOT 安全）](#17-listt-映射反射aot-安全)
-18. [DataTable 便利 API（AOT 安全）](#18-datatable-便利-apiaot-安全)
-19. [Stream 读写](#19-stream-读写)
-20. [流式读取与进度回调](#20-流式读取与进度回调)
-21. [文档属性（作者/时间/标题）](#21-文档属性作者时间标题)
-22. [文件级安全（打开密码 / 修改密码）](#22-文件级安全打开密码--修改密码)
-23. [错误处理](#23-错误处理)
-24. [AOT 兼容性](#24-aot-兼容性)
-25. [条件格式（2.4.3+）](#25-条件格式243)
-26. [命名区域（Name Range）](#26-命名区域-name-range)
-27. [能力降级回调（OnDegradation）（2.4.2+）](#27-能力降级回调ondegradation242)
-28. [完整 API 索引](#28-完整-api-索引)
+**第一部分 入门**
+- [1. 安装与引用](#1-安装与引用)
+- [2. 快速上手（一段最小可运行的完整读写）](#2-快速上手一段最小可运行的完整读写)
+
+**第二部分 对象模型API正文**
+- [3. 文件导航：打开 / 创建 / 保存 / 格式（含工作表管理、文档属性）](#3-文件导航打开-创建-保存-格式含工作表管理文档属性)
+- [4. 单元格与取值（Cell / Cells / Range / SetValue）](#4-单元格与取值cell-cells-range-setvalue)
+- [5. 数据类型与转换（文本 / 数字 / 日期 / 布尔 / 公式 / 可空 / Byte[]）](#5-数据类型与转换文本-数字-日期-布尔-公式-可空-byte)
+- [6. 样式（CellStyle / Border / 对齐 / 换行）](#6-样式cellstyle-border-对齐-换行)
+- [7. 合并单元格](#7-合并单元格)
+- [8. 自动筛选](#8-自动筛选)
+- [9. 行高与列宽（含 AutoColumnWidths）](#9-行高与列宽含-autocolumnwidths)
+- [10. 批注](#10-批注)
+- [11. 超链接（外部 / 内部）](#11-超链接外部-内部)
+- [12. 冻结窗格](#12-冻结窗格)
+- [13. 图片（Floating / InCell / 读回）](#13-图片floating-incell-读回)
+- [14. 数据验证](#14-数据验证)
+- [15. 条件格式（cellIs / expression / colorScale / dataBar / 长尾 / iconSet）](#15-条件格式cellis-expression-colorscale-databar-长尾-iconset)
+- [16. 超级表（Table / ListObject，样式枚举 + 任意样式名 + 列格式）](#16-超级表table-listobject样式枚举-任意样式名-列格式)
+- [17. 命名区域](#17-命名区域)
+- [18. 文件级密码（打开 / 修改）](#18-文件级密码打开-修改)
+- [19. 工作表 / 工作簿保护](#19-工作表-工作簿保护)
+
+**第三部分 多格式与平台**
+- [20. 多格式行为（xlsx/xlsm 全能 + xls/xlsb/csv 限制与降级）](#20-多格式行为xlsxxlsm-全能-xlsxlsbcsv-限制与降级)
+- [21. 流式读取 / 进度回调 / 追加数据](#21-流式读取-进度回调-追加数据)
+- [22. 降级回调 OnDegradation](#22-降级回调-ondegradation)
+- [23. AOT 兼容性（DAM、IsAotCompatible、验证方式与成果摘要）](#23-aot-兼容性damisaotcompatible验证方式与成果摘要)
+
+**第四部分 注意事项**
+- [24. 异常处理](#24-异常处理)
+- [25. 大文件注意事项](#25-大文件注意事项)
+
+**附录**
+- 附录 A 对象模型速查（类 / 成员索引表）
+- 附录 B 低层 API 参考（SheetData / XlsxReader / XlsxWriter / CsvBackend / 流式）
 
 ---
-## 1. 安装与引用
 
-### NuGet 安装
+## 第一部分 入门
+
+第 1–2 章：安装引用与最小可运行示例，新读者从这里开始。
+
+### 1. 安装与引用
+
+#### NuGet 安装（推荐）
+
+从 NuGet 发布包安装，适用于大多数生产项目：
 
 ```powershell
 dotnet add package LiteExcel
 ```
 
-### csproj 直接引用
+也可在 Visual Studio 的「管理 NuGet 程序包」中搜索 `LiteExcel` 安装。
+
+#### 从源码本地引用
+
+未发包或需联调库源码时，通过 csproj 项目引用引入：
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.4.2" />
+  <ProjectReference Include="..\src\LiteExcel\LiteExcel.csproj" />
 </ItemGroup>
 ```
 
-### 命名空间
+> **说明**：生产项目请优先使用 NuGet 包；源码引用仅用于本地联调库源码或尚未发版本时。
 
-所有 API 在 `LiteExcel` 命名空间下：
+#### 命名空间
+
+所有类型都位于 `LiteExcel` 命名空间：
 
 ```csharp
 using LiteExcel;
 ```
 
-### 目标框架
+#### 目标框架
 
-- **net48**：老 WinForms 项目可直接引用
-- **net8.0**：新项目可用，支持 AOT
-- C# 12 语法（`<LangVersion>latest</LangVersion>`）
+库同时面向 **net48** 与 **net8.0**。net8.0 目标额外声明 `IsAotCompatible=true`，全部公开 API 兼容 Native AOT / 裁剪（详见第 23 章）。
 
 ---
 
-## 2. 对象模型 API（推荐）
+### 2. 快速上手（一段最小可运行的完整读写）
 
-从 `2.2.0` 起提供直觉化的对象模型 API，自然层级：
-
-```text
-Excel             统一门面（打开 / 新建 / 便利读写 / 流式）
-  -> Workbook     工作簿（工作表集合 / 文档属性 / 保存）
-      -> Worksheet 工作表（单元格 / 区域 / 合并 / 样式）
-          -> Cells / Cell / ExcelRange
-```
-
-对象模型 API 基于同一套读写引擎，但把坐标、取值、保存等细节封装成更接近 Excel 的习惯用法。`XlsxReader / XlsxWriter / SheetData / Cell` 继续保留，新旧 API 可以混用，写出的文件互相兼容。
-
-### 2.1 新建工作簿
+下面用对象模型 API 完成「新建 → 写值 → 保存 → 打开 → 读回」的完整闭环：
 
 ```csharp
 using LiteExcel;
 
-// 默认 xlsx，自带一张名为 "Sheet1" 的工作表
-var wb = Excel.Create();
+var wb = Excel.Create();                       // 新建工作簿（默认含 Sheet1）
 var ws = wb.Worksheets["Sheet1"];
+
+ws.SetValue("A1", "Name");                     // 表头
+ws.SetValue("B1", "Age");
+ws.SetValue("A2", "Zhang San");
+ws.SetValue("B2", 25);
+ws.SetValue("A3", "Li Si");
+ws.SetValue("B3", 30);
+
+wb.SaveAs("people.xlsx");                      // 保存到磁盘
+
+// 读回
+var opened = Excel.Open("people.xlsx");
+var sheet = opened.Worksheets[0];
+Console.WriteLine(sheet.Cell("A2").GetString());   // 输出: Zhang San
+Console.WriteLine(sheet.Cell("B2").GetDouble());   // 输出: 25
 ```
 
-指定格式与初始表名：
+输出：
 
-```csharp
-var wbCsv = Excel.Create(ExcelFormat.Csv);              // 新建 csv 工作簿
-var wb2   = Excel.Create("员工表", ExcelFormat.Xlsx);   // 新建并命名首表
+```
+Zhang San
+25
 ```
 
-支持格式：`Xlsx`、`Xlsm`、`Csv`、`Xls`、`Xlsb`（后两者为历史兼容格式，读取与写入均已实现）。
+---
 
-带数据新建（一步建簿并写入首表，返回的 `Workbook` 可与样式/冻结/条件格式/密码等能力混用）：
+## 第二部分 对象模型API正文
+
+第 3–19 章：对象模型主线能力，日常读写全部集中于此。
+
+### 3. 文件导航：打开 / 创建 / 保存 / 格式（含工作表管理、文档属性）
+
+#### 3.1 打开已有文件
+
+`Excel.Open` 按扩展名自动识别格式，支持 xlsx / xlsm / xls / xlsb / csv：
 
 ```csharp
-// 从 List<T> 新建（首行为表头，反射映射，AOT 安全）
-var wb = Excel.Create(new[] { new Person { Name = "张三", Age = 25 } }, "员工表");
-wb.Worksheets[0].FreezeRows = 1;      // 建完后可继续用工作簿级能力
-wb.SaveAs("out.xlsx");
-
-// 从 DataTable 新建（表名为空时取 DataTable.TableName，再为空则 Sheet1）
-var dt = new DataTable("库存表");
-dt.Columns.Add("货号"); dt.Columns.Add("金额");
-dt.Rows.Add("A1", 12.5m);
-var wb2 = Excel.Create(dt);
-wb2.SaveAs("stock.xlsx");
+var wb = Excel.Open("report.xlsx");            // 自动识别
+var wb2 = Excel.Open("data.csv");              // 自动识别为 Csv
+var wb3 = Excel.Open("legacy.xls");            // 自动识别为 Xls
 ```
 
-### 2.2 打开已有文件
+也可以显式指定格式（适用于扩展名与内容不一致的场景）：
 
 ```csharp
-// 按扩展名自动识别格式（.xlsx / .xlsm / .csv）
-var opened = Excel.Open("data.xlsx");
-
-// 或显式指定格式
-var forced = Excel.Open("data.csv", ExcelFormat.Csv);
+var wb = Excel.Open("data.bin", ExcelFormat.Xlsx);
 ```
 
-`Excel.DetectFormat(path)` 可单独判断文件格式。
+输出：（本示例无控制台输出）
 
-打开加密文件需提供密码：
+#### 3.2 从流打开
+
+流没有扩展名，**必须显式指定格式**。输入流不会被关闭（由调用方管理）；不可定位的流（如网络流）内部会复制到内存：
 
 ```csharp
-var opened = Excel.Open("encrypted.xlsx", new ExcelReadOptions
+using var fs = File.OpenRead("report.xlsx");
+var wb = Excel.Open(fs, ExcelFormat.Xlsx);
+// 打开后 CurrentPath 为 null，需用 SaveAs 指定保存路径
+wb.SaveAs("copy.xlsx");
+```
+
+输出：
+
+```
+已写入 copy.xlsx
+```
+
+从流读取全部表：`Excel.Open(stream, ExcelFormat.Xlsx).Worksheets` 直接遍历多表工作表。
+
+#### 3.3 读取选项 `ExcelReadOptions`
+
+`Open` 的第二参数可传读取选项，含密码、合并填充、CSV 分隔符等：
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
 {
-    OpenPassword = "1",        // 打开密码
-    ModifyPassword = "12",     // 修改密码（可选）
+    OpenPassword = "secret",        // 打开密码（文件加密）
+    ModifyPassword = "write",       // 修改密码（写保护，用于获得编辑权限）
+    FillMergedCells = true,         // 把合并区左上角的值展开到整个区域
+    Separator = ';',                // 仅 CSV 生效；null 时自动探测
 });
 ```
 
-> 文件级安全（打开/修改密码）的完整说明见 [§22 文件级安全](#22-文件级安全打开密码--修改密码)。
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `OpenPassword` | `string?` | 打开密码（文件加密），解密带密码的 xlsx/xlsm/xlsb |
+| `ModifyPassword` | `string?` | 修改密码（写保护），提供后获得编辑/保存权限 |
+| `FillMergedCells` | `bool` | 把合并区左上角的值展开到整个合并区域，默认 `false` |
+| `Separator` | `char?` | 仅 CSV 生效；`null` 时自动探测 |
+| `ReadStyles` | `bool` | 是否读取样式，默认 `true` |
+| `LeaveOpen` | `bool` | Stream 重载读取完成后是否保持输入流打开，默认 `false` |
 
-### 2.3 读写单元格
+输出：（本示例无控制台输出）
 
-坐标为 **1-based**，即 `Cell(1, 1)` 对应 `A1`；也可以直接使用 A1 地址。
+#### 3.4 写入选项 `ExcelWriteOptions`
 
-```csharp
-var ws = wb.Worksheets["Sheet1"];
-
-// 写入
-ws.SetValue("A1", "姓名");
-ws.SetValue("B1", "年龄");
-ws.SetValue(2, 1, "张三");   // A2
-ws.SetValue(2, 2, 25);       // B2
-
-// 读取
-string name = ws.Cell("A2").GetString();   // "张三"
-double age = ws.Cell(2, 2).GetDouble();    // 25
-```
-
-取值方法：
-
-| 方法 | 说明 |
-|---|---|
-| `GetString()` / `TryGetString(out var v)` | 文本取值 |
-| `GetDouble()` / `TryGetDouble(out var v)` | 数值取值 |
-| `GetDateTime()` / `TryGetDateTime(out var v)` | 日期取值 |
-| `GetBoolean()` / `TryGetBoolean(out var v)` | 布尔取值 |
-| `GetValue()` | 按类型返回 `object?` |
-| `SetValue(object? value)` | 写值（字符串/数值/日期/布尔/公式） |
-
-`Cell.Style`、`Cell.NumberFormat` 可读写单元格样式与数字格式；`Cell.IsFormula` 判断是否为公式。
-
-#### 串联场景：改值 + 改样式 + 加备注 + 保存
-
-打开已有文件后，可对**指定单元格**同时做取值、改样式、加备注操作，再保存：
+`Excel.Write` 的第二参数可传写入选项：
 
 ```csharp
-var wb = Excel.Open("report.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// 改 A2 的值
-ws.Cell("A2").SetValue("已完成");
-
-// 改 A2 的背景色与字体
-ws.Cell("A2").Style = new CellStyle
+Excel.Write("out.xlsx", wb, new ExcelWriteOptions
 {
-    FillColor = "#FFFF00",              // 背景色
-    FontName  = "微软雅黑",             // 字体
-    FontSize  = 14,
-    Bold      = true,
-    FontColor = "#FF0000",              // 字体颜色
-};
-
-// 给 A2 加备注
-ws.Comments ??= new();
-ws.Comments["A2"] = "本单元格需要人工复核";
-
-// 区域批量样式（A2:C3 每个单元格都应用）
-ws.Range("A2:C3").Style = new CellStyle { FillColor = "#D9E1F2", Italic = true };
-
-wb.Save();                              // 覆盖保存原文件
-```
-
-> 说明：样式/批注的具体 API 见 [§7 样式](#7-样式) 与 [§11 单元格批注](#11-单元格批注)。
-
-### 2.4 集合式访问 `Cells`
-
-```csharp
-var cells = ws.Cells;
-
-var a1 = cells[1, 1];            // 1-based 坐标
-var b2 = cells["B2"];            // A1 地址
-var r  = cells.Range("A1:C10");  // 区域
-
-foreach (var cell in cells)      // 枚举所有已存储单元格
-{
-    Console.WriteLine($"{cell.Text} / {cell.Number}");
-}
-
-cells.SetValue("D2", "备注");
-cells.Clear();                   // 清空全部
-```
-
-### 2.5 区域操作 `ExcelRange`
-
-`Worksheet.Range(...)` 返回 `ExcelRange`（注意：类名为 `ExcelRange`，不是 `Range`，避免与 BCL 的 `System.Range` 冲突）：
-
-```csharp
-var range = ws.Range("A1:C3");            // 或 ws.Range(1, 1, 3, 3)
-range.Fill(0);                            // 整片填充
-range.Fill(new object?[,] { { 1, 2, 3 }, { 4, 5, 6 } });  // 填充矩阵
-var values = range.ToValues();            // object?[,]
-var cells = range.ToCells();              // Cell[,]
-range.Clear();
-range.Merge();                            // 合并该区域
-range.Unmerge();
-range.Style = new CellStyle { Bold = true };  // 区域样式
-
-foreach (var cell in range) { /* 枚举区域内单元格 */ }
-```
-
-### 2.6 保存与另存
-
-```csharp
-wb.Save();                        // 保存到打开/新建时的路径；无路径则抛 LiteExcelException
-wb.SaveAs("output.xlsx");         // 另存为，更新当前路径
-wb.SaveAs("output.csv", ExcelFormat.Csv);  // 跨格式另存（取决于后端能力）
-wb.Save(stream, ExcelFormat.Xlsx);         // 写 Stream
-```
-
-规则：
-
-- `SaveAs` 成功后，后续 `Save()` 保存到新路径。
-- 跨格式保存是否成功取决于目标格式后端；`csv` 仅支持单表数据。
-- `Excel.Write(path, workbook)` 相当于“另存到指定路径”。
-
-### 2.7 工作表管理
-
-```csharp
-var wb = Excel.Create();
-wb.Worksheets.Add("Sheet2");              // 新增
-wb.Worksheets.Add("Sheet3");
-wb.Worksheets.Move(0, 1);                 // 移动
-wb.Worksheets.Remove("Sheet2");           // 删除
-wb.Worksheets.RemoveAt(0);
-bool has = wb.Worksheets.Contains("Sheet3");
-var names = wb.Worksheets.Names;          // ["Sheet3", ...]
-```
-
-### 2.8 文档属性
-
-```csharp
-var props = wb.Properties;
-props.Creator = "LiteExcel";
-props.Title = "示例报表";
-wb.Save();
-```
-
-### 2.9 List\<T\> / DataTable 便利 API
-
-```csharp
-// List<T> 映射（反射，AOT 安全）
-Excel.Write("out.xlsx", new[] { new Person { Name = "张三", Age = 25 } });
-var list = Excel.Read<Person>("out.xlsx");
-
-// DataTable（AOT 安全）
-var dt = Excel.ReadAsDataTable("out.xlsx");
-Excel.Write("out2.xlsx", dt);
-```
-
-`Excel.GetSheetNames(path)` 可列出所有工作表名。
-
-### 2.10 流式读写大文件
-
-```csharp
-// 流式写出：逐行写入，不驻留内存
-using (var writer = Excel.CreateWriter("large.xlsx"))
-{
-    writer.WriteRow(new object?[] { "姓名", "年龄" });
-    for (int i = 0; i < 100000; i++)
-        writer.WriteRow(new object?[] { $"用户{i}", i });
-}
-
-// 流式读取
-Excel.StreamRows("large.xlsx", "Sheet1", row =>
-{
-    Console.WriteLine(row[0]?.Text);
+    Overwrite = true,           // 目标文件已存在时是否覆盖，默认 true
+    AutoFitColumns = true,      // 写出前自动估算列宽，默认 false
+    FreezeHeader = true,        // 写出时冻结表头，默认 false
+    Properties = new WorkbookProperties { Creator = "Me" },  // 覆盖文档属性
+    OnDegradation = info => Console.WriteLine(info.Capability),  // 降级回调
+    Separator = ';',            // 仅 CSV 生效；null 时默认逗号
 });
 ```
 
-### 2.11 公式与高级能力桥接
-
-```csharp
-ws.SetValue("A1", 1);
-ws.SetValue("A2", 2);
-ws.Cell("A3").SetValue(Cell.FromFormula("SUM(A1:A2)"));  // 写入公式字符串
-bool isFormula = ws.Cell("A3").IsFormula;
-
-ws.Merge("A1:B1");                    // 合并
-ws.FreezeHeader = true;               // 冻结表头（等价于 FreezeRows = 1）
-ws.Range("A1:B1").Style = new CellStyle { Bold = true };
-```
-
-样式、合并、批注、数据验证、自动筛选、行高列宽、超链接、冻结窗格等高级能力均可在 `Worksheet` 层直接使用，与 `SheetData` 能力一一对应。
-
-### 2.12 格式支持矩阵
-
-| 格式 | 读 | 写 | 说明 |
-|---|---|---|---|
-| `xlsx` | ✅ | ✅ | 完整读写；支持 1904 日期系统读/写；含宏工作簿写 `.xlsx` 会抛错（见下方"宏与降级"） |
-| `xlsm` | ✅ | ✅ | 读写保存；宏部件 `vbaProject.bin` 与宿主 codeName 绑定（`workbookPr`/`sheetPr`）保存时保留 |
-| `csv` | ✅ | ✅ | 仅表格数据，无样式/合并等 |
-| `xls` | ✅ | ✅ | 读写（BIFF8，Excel 97+）；写入时公式降级为静态值；含宏工作簿写 `.xls` 会抛错（见下方"宏与降级"） |
-| `xlsb` | ✅ | ✅ | 读写（BIFF12 二进制 OOXML）；公式写入按缓存值降级；支持 1904 日期系统读/写 |
-
-> **xls 读取范围**：`Excel.Open("file.xls")` 可读取 BIFF8 工作簿的数据单元格（文本/数字/日期/布尔）、共享字符串（含跨 CONTINUE 续接）、合并单元格、列宽、行高、冻结表头。公式单元格返回缓存结果值，并解析公式文本（常见单元格引用、运算符与内置函数；数组/3D 引用等不支持的公式仅返回缓存值）。
-
-> **xls 写入范围**：`wb.SaveAs("file.xls", ExcelFormat.Xls)` 可写出 BIFF8 工作簿，支持多工作表（中文名）、文本/数字/日期/布尔、合并单元格、列宽、行高、冻结表头、自定义数字格式。公式单元格按缓存结果值静态写出（公式文本不保留）。已用 Excel 打开验证。
-
-> **xlsb 读取范围**：`Excel.Open("file.xlsb")` 可读取二进制 OOXML 变体的数据单元格（文本/数字/日期/布尔/错误）、共享字符串、合并单元格、列宽、行高、冻结表头、1904 日期系统。公式单元格返回缓存结果值，并解析公式文本。
->
-> **xlsb 写入范围**：`wb.SaveAs("file.xlsb", ExcelFormat.Xlsb)` 可写出 BIFF12 工作簿，支持多工作表（中文名）、文本/数字/日期/布尔、共享字符串、数字格式、合并单元格、列宽、行高、冻结表头。公式单元格按缓存结果值静态写出（公式文本不保留）。已用 Excel 打开验证（无修复提示、另存后读取一致），SheetJS 交叉验证一致。
-
-> **保存保真**：通过 `Excel.Open` 打开后修改再保存时，LiteExcel 会重建已映射的部件（工作表数据、样式、合并、批注、验证、筛选、公式等），并将**未映射的 OOXML 部件按原始字节保留**（如宏 `vbaProject.bin`、主题、绘图、图表、表格、外部链接等）。因此 `xlsm` 打开→修改→保存后宏不会丢失。此外，工作簿与工作表的 VBA 宿主代码名（`workbookPr@codeName` / `sheetPr@codeName`）也会在打开时捕获、保存时按 schema 位置写回，确保 VBA 工程中的模块绑定（`ThisWorkbook`、工作表模块、事件宏）不因宿主被重新命名而错位失效。
->
-> **降级规则**：若打开后新增/删除/重命名/移动了工作表（结构发生变化），工作表级未映射关系（如绘图、超链接）不再复用到新文件，但这些部件的原始字节仍会保留为无害的未引用条目。工作簿级部件（宏、主题）不受结构变化影响。
-
-> **1904 日期系统**：`Excel.Open` 打开 1904 日期系统的工作簿（`workbookPr@date1904` / `BrtWbProp` flags / `DATE1904` 记录）时，日期单元格会按 1904 基准（1904-01-01 = 序列 0）换算。`SaveAs` 到 xlsx/xlsb/xls 时会写回 1904 标志并保持序列一致，因此 1904 工作簿跨格式转换不会偏移 4 年。
-
-> **加密文件识别**：带打开密码的 xlsx/xlsm/xlsb 实际是 OLE CFB 容器（内含 `EncryptionInfo`/`EncryptedPackage` 流）。2.4.0 起支持打开密码读取与密码保存（见 [§22 文件级安全](#22-文件级安全打开密码--修改密码)）；加密 `.xls`（BIFF8 `FILEPASS` 记录）会识别并抛明确异常。
-
-> **宏与降级**：工作簿若含 VBA 宏（打开 xlsm/xlsb 捕获 `vbaProject.bin`），`SaveAs` 到 `.xlsx` 或 `.xls`（不支持宏）会抛 `LiteExcelException` 阻止静默丢失，请在创建文件前拦截。含宏工作簿请保存为 `.xlsm` 或 `.xlsb`。数据单元格的值在任意格式转换中都不会静默丢失；xls 不支持批注/数据验证/自动筛选等元数据时按文档化降级（忽略，不写错文件）。
-
-> **Stream API**：`Excel.Open(Stream, format)` 支持五格式对象模型读取（必须显式指定格式，流无扩展名）；`Workbook.Save(Stream, format)` 支持五格式保存。输入流不会被关闭（由调用方管理）；支持不可定位的流（内部复制到内存）。`XlsxReader.StreamRows(Stream, ...)` 仍是 xlsx/xlsm 专用底层流式逐行读取。从 Stream 打开后 `Workbook.CurrentPath` 为 null，需用 `SaveAs` 指定保存路径。
-
-### 2.13 新旧 API 对照
-
-| 场景 | 对象模型 API | XlsxWriter / XlsxReader |
+| 参数 | 类型 | 说明 |
 |---|---|---|
-| 打开文件 | `Excel.Open(path)` | `XlsxReader.Read(path, 0)` |
-| 新建/写出 | `Excel.Create()` + `SaveAs` | `XlsxWriter.Write(path, sheet)` |
-| 读单表 | `Workbook.Worksheets[i]` | `XlsxReader.Read(path, i)` |
-| 读为 List\<T\> | `Excel.Read<T>(path)` | `XlsxReader.Read<T>(path)` |
-| 读为 DataTable | `Excel.ReadAsDataTable(path)` | `XlsxReader.ReadAsDataTable(path)` |
-| 流式读 | `Excel.StreamRows(path, name, cb)` | `XlsxReader.StreamRows(path, name, cb)` |
-| 流式写 | `Excel.CreateWriter(path)` | `XlsxStreamWriter` |
+| `Overwrite` | `bool` | 目标文件已存在时是否覆盖，默认 `true` |
+| `AutoFitColumns` | `bool` | 写出前自动估算列宽，默认 `false` |
+| `FreezeHeader` | `bool` | 写出时冻结表头，默认 `false` |
+| `Properties` | `WorkbookProperties?` | 覆盖工作簿文档属性 |
+| `OnDegradation` | `Action<DegradationInfo>?` | 能力降级回调（写出到不支持某能力的格式时逐项上报，默认 `null`） |
+| `Separator` | `char?` | 仅 CSV 生效；`null` 时默认逗号 |
+| `LeaveOpen` | `bool` | Stream 重载写入完成后是否保持输出流打开，默认 `false` |
 
----
-## 3. 快速上手
+输出：
 
-### 创建工作簿填充数据（高层 API）
-
-交互式编辑推荐使用对象模型：`Excel.Create` 新建 → `SetValue` 填充 → `SaveAs` 保存 → `Open` 读回：
-
-```csharp
-using LiteExcel;
-
-var wb = Excel.Create();                    // 默认 xlsx，自带 Sheet1
-var ws = wb.Worksheets["Sheet1"];
-
-ws.SetValue("A1", "姓名");  ws.SetValue("B1", "年龄");
-ws.SetValue("A2", "张三");   ws.SetValue("B2", 28);
-ws.SetValue("A3", "李四");   ws.SetValue("B3", 32);
-
-ws.Cell("A1").Style = new CellStyle { Bold = true };   // 表头加粗
-ws.FreezeHeader = true;                                  // 冻结首行
-
-wb.SaveAs("output.xlsx");
-
-var rb = Excel.Open("output.xlsx");        // 读回
-Console.WriteLine(rb.Worksheets[0].Cell("A2").GetString());  // 张三
+```
+已写入 out.xlsx
 ```
 
-### 用自定义类快速写出（List&lt;T&gt; 映射）
+#### 3.5 新建工作簿
 
-批量导出用 `List&lt;T&gt;` 映射，一个类即可声明列名 / 顺序 / 格式 / 公式 / 忽略：
+`Excel.Create` 有多个重载：
 
 ```csharp
-public class Employee
-{
-    [LiteColumn(Name = "姓名", Order = 0)]
-    public string Name { get; set; } = "";
-
-    [LiteColumn(Name = "年龄", Order = 1)]
-    public int Age { get; set; }
-
-    [LiteColumn(Name = "入职日期", Order = 2, Format = "yyyy-MM-dd")]
-    public DateTime HireDate { get; set; }
-
-    [LiteColumn(Name = "薪资", Order = 3, Format = "#,##0.00")]
-    public decimal Salary { get; set; }
-
-    [LiteColumn(Name = "在职", Order = 4)]
-    public bool Active { get; set; }
-
-    [LiteColumn(Name = "平均年龄", Order = 5, IsFormula = true)]
-    public string AvgAgeFormula { get; set; } = "";   // 公式列："=AVERAGE(B2:B3)" 或 "AVERAGE(B2:B3)"
-
-    [LiteColumn(Ignore = true)]
-    public string InternalId { get; set; } = "";       // 不输出
-}
-
-var list = new List<Employee>
-{
-    new() { Name = "张三", Age = 28, HireDate = new DateTime(2020, 3, 15), Salary = 8500.50m, Active = true, AvgAgeFormula = "=AVERAGE(B2:B3)" },
-    new() { Name = "李四", Age = 32, HireDate = new DateTime(2018, 7, 1),  Salary = 12000m,    Active = false, AvgAgeFormula = "AVERAGE(B2:B3)" },
-};
-
-XlsxWriter.Write("employees.xlsx", list, opt => opt.FreezeHeader = true);
+var wb1 = Excel.Create();                    // 空簿，默认 Sheet1
+Console.WriteLine(wb1.Worksheets[0].Name);   // 打印验证：默认表名
+var wb2 = Excel.Create("Data");              // 指定首个工作表名
+var wb3 = Excel.Create(new[] { "Q1", "Q2", "Q3" });   // 批量建表
+var wb4 = Excel.Create(ExcelFormat.Xlsm);    // 指定格式
 ```
 
-`List&lt;T&gt;` 支持的属性类型一览：
+一步建簿并写数据（List\<T\>  DataTable）：
 
-| C# 属性类型 | → Excel 列 | 特性 |
+```csharp
+var people = new List<Person> { new() { Name = "A", Age = 1 } };
+var wb5 = Excel.Create(people, "People");    // 首行为表头
+
+var dt = new System.Data.DataTable("T");
+dt.Columns.Add("X");
+dt.Rows.Add("v");
+var wb6 = Excel.Create(dt);                  // sheetName 为空时用 TableName
+```
+
+输出：
+
+```
+Sheet1
+```
+
+#### 3.6 保存与另存
+
+`Workbook.Save` 保存到当前路径（新建簿无路径时抛 `LiteExcelException`）；`SaveAs` 指定路径：
+
+```csharp
+wb.Save();                    // 保存到 CurrentPath
+wb.SaveAs("out.xlsx");        // 另存，沿用当前格式
+wb.SaveAs("out.xlsm", ExcelFormat.Xlsm);   // 另存并转格式
+wb.Save(new FileStream("s.xlsx", FileMode.Create), ExcelFormat.Xlsx);  // 存到流
+```
+
+输出：
+
+```
+已写入 out.xlsx / out.xlsm / s.xlsx
+```
+
+> ⚠️ **重要**：本库**不创建 / 不编辑图表（Chart）与数据透视表（PivotTable）**。如果你的数据包含这类元素，**不要**用本库保存/另存覆盖源文件，否则这些元素会被**丢弃**（保存为无图表/无透视表的新文件）。你可以在其他工具中另存一份副本后再处理。
+
+- `SaveAs(path, format)` 要求路径扩展名与格式匹配，否则抛 `LiteExcelException`（避免写出内容与扩展名不一致、Excel 无法打开的文件）。
+- 含 VBA 宏的工作簿不允许保存为不支持宏的格式（xlsx / xls），会提前报错。
+- 文件级密码（打开 / 修改）仅支持 xlsx / xlsm / xlsb，保存为 csv / xls 时若带密码会报错。
+
+#### 3.7 格式枚举 `ExcelFormat`
+
+```csharp
+public enum ExcelFormat { Xlsx, Xlsm, Xlsb, Xls, Csv }
+```
+
+- `Excel.DetectFormat(path)` 按扩展名返回格式。
+- `Workbook.Format` 返回当前工作簿格式。
+
+输出：（本示例无控制台输出）
+
+#### 3.8 列出工作表名
+
+```csharp
+var names = Excel.GetSheetNames("report.xlsx");   // List<string>
+using var stream = File.OpenRead("report.xlsx");
+var names2 = Excel.GetSheetNames(stream);         // 仅 xlsx/xlsm（zip 容器的 XML 元数据）
+```
+
+> `Excel.GetSheetNames(path)` 对 xlsx / xlsm 直接读工作簿元数据（轻量）；对 **xlsb / xls / csv** 会走 `Excel.Open` 按格式解析，也能正确返回表名（xlsb 返回其内部 sheet 名，csv 返回单表 "Sheet1"）。`GetSheetNames(Stream)` 只支持 xlsx / xlsm；需要从流取 xlsb 表名时用 `Excel.Open(stream, ExcelFormat.Xlsb).Worksheets.Names`。
+
+输出：（返回一个List<string>类型）
+
+#### 3.9 工作表管理 `Worksheets`
+
+`Workbook.Worksheets` 为 `WorksheetCollection`，支持增删移动、索引与名称访问：
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];         // 按名称访问（不存在抛 LiteExcelException）
+var first = wb.Worksheets[0];             // 按索引访问（0-based）
+Console.WriteLine(wb.Worksheets.Count);   // 数量
+Console.WriteLine(string.Join(", ", wb.Worksheets.Names));   // 所有表名
+Console.WriteLine(wb.Worksheets.Contains("Sheet1"));         // true
+
+wb.Worksheets.Add("Data");                // 新增空表
+wb.Worksheets.Add("People", peopleList);  // 新增表并写 List<T>（首行表头）
+wb.Worksheets.Add("T", dataTable);        // 新增表并写 DataTable（首行列名）
+wb.Worksheets.Move(0, 2);                 // 移动顺序（0-based）
+wb.Worksheets.Remove("Data");             // 按名称删除（存在返回 true）
+wb.Worksheets.RemoveAt(0);                // 按索引删除
+```
+
+遍历工作表：
+
+```csharp
+foreach (var sheet in wb.Worksheets)
+    Console.WriteLine(sheet.Name);
+```
+
+输出：
+
+```
+1
+Sheet1
+True
+Sheet1
+T
+```
+
+> ⚠️ 表名校验规则见第 24 章：不合法表名（含 `\ / ? * [ ] :`、超 31 字符等）在保存时抛 `InvalidSheetNameException`。
+
+#### 3.10 文档属性 `WorkbookProperties`
+
+`Workbook.Properties` 对应 xlsx 包内的 `docProps/core.xml` 与 `docProps/app.xml`：
+
+```csharp
+var wb = Excel.Create();
+wb.Properties.Creator = "JackZ";
+wb.Properties.LastModifiedBy = "Me";
+wb.Properties.Created = DateTime.Now;
+wb.Properties.Modified = DateTime.Now;
+wb.Properties.Title = "季度报告";
+wb.Properties.Subject = "财务";
+wb.Properties.Application = "LiteExcel";
+wb.SaveAs("props.xlsx");
+```
+
+| 参数 | 类型 | 说明 |
 |---|---|---|
-| `string` | 文本 | — |
-| `int` / `double` / `decimal` | 数字 | `Format` |
-| `DateTime` | 日期 | `Format`（显示格式） |
-| `bool` | 布尔 | — |
-| `string` + `IsFormula=true` | 公式 | `IsFormula` |
-| `null` | 空单元格 | — |
-| 任意 + `Ignore=true` | 不输出 | `Ignore` |
+| `Creator` | `string?` | 作者（dc:creator） |
+| `LastModifiedBy` | `string?` | 最后保存者（cp:lastModifiedBy） |
+| `Created` | `DateTime?` | 创建时间 |
+| `Modified` | `DateTime?` | 最后修改时间 |
+| `Title` | `string?` | 标题 |
+| `Subject` | `string?` | 主题 |
+| `Application` | `string?` | 应用程序名；`null` 时写出取宿主程序集名 |
 
-> 超链接、样式、合并、冻结、条件格式、图片等高级能力请用高层 API（`Excel.Create` + `Cell.Hyperlink` / `Cell.Style` 等）或低层 `SheetData`。`List&lt;T&gt;` 映射聚焦"批量纯数据"场景。
-
-### 最简写出
+写出时覆盖属性（`ExcelWriteOptions.Properties`）：
 
 ```csharp
-var sheet = new SheetData
+Excel.Write("out.xlsx", wb, new ExcelWriteOptions
 {
-    SheetName = "员工表",
-    Headers = new() { "姓名", "年龄", "生日" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("张三"), Cell.FromNumber(25), Cell.FromDate(new DateTime(2000, 1, 1)) },
-        new Cell[] { Cell.FromText("李四"), Cell.FromNumber(30), Cell.FromDate(new DateTime(1995, 5, 10)) },
-    },
-};
-
-XlsxWriter.Write("output.xlsx", sheet);
+    Properties = new WorkbookProperties { Creator = "Bot", Title = "Auto" },
+});
 ```
 
-### 最简读取
+读回文档属性：
 
 ```csharp
-var sheet = XlsxReader.Read("output.xlsx", sheetIndex: 0);
-
-Console.WriteLine($"表名: {sheet.SheetName}");
-Console.WriteLine($"表头: {string.Join(", ", sheet.Headers)}");
-foreach (var row in sheet.Rows)
-{
-    foreach (var cell in row)
-    {
-        Console.Write($"{cell.Type} ");
-    }
-    Console.WriteLine();
-}
+var opened = Excel.Open("props.xlsx");
+Console.WriteLine(opened.Properties.Creator);    // JackZ
+Console.WriteLine(opened.Properties.Title);      // 季度报告
 ```
 
-### 读取时如何取值
+输出：
 
-```csharp
-var sheet = XlsxReader.Read("output.xlsx", 0);
-
-foreach (var row in sheet.Rows)
-{
-    string name = row[0].Type == CellType.Text ? row[0].Text! : "";
-    int age = row[1].Type == CellType.Number ? (int)row[1].Number : 0;
-    DateTime birthday = row[2].Type == CellType.Date ? row[2].Date : DateTime.MinValue;
-
-    Console.WriteLine($"{name}, {age}, {birthday:yyyy-MM-dd}");
-}
 ```
-
-**判断单元格类型**：用 `cell.Type` 判断，再用对应字段取值。
-
-| `cell.Type` | 有效字段 |
-|---|---|
-| `CellType.Text` | `cell.Text` |
-| `CellType.Number` | `cell.Number` |
-| `CellType.Date` | `cell.Date` |
-| `CellType.Boolean` | `cell.Boolean` |
-| `CellType.Empty` | （空单元格） |
+JackZ
+季度报告
+```
 
 ---
 
-## 4. 单元格与数据类型
 
-### Cell 类
+### 4. 单元格与取值（Cell / Cells / Range / SetValue）
 
-`Cell` 表示一个单元格，`Type` 属性决定哪个值字段有效。
+#### 4.1 按坐标 / 地址访问单元格
 
-```csharp
-public sealed class Cell
-{
-    public CellType Type { get; set; }
-    public string? Text { get; set; }          // CellType.Text 时有效
-    public double Number { get; set; }           // CellType.Number 时有效
-    public DateTime Date { get; set; }           // CellType.Date 时有效
-    public bool Boolean { get; set; }            // CellType.Boolean 时有效
-    public CellStyle? Style { get; set; }        // 单元格样式（可选）
-    public string? NumberFormat { get; set; }    // 数字格式（写出用）
-    public bool IsEmpty { get; }                 // 是否为空
-}
-```
-
-### 创建单元格的工厂方法
+坐标统一 **1-based**。`Worksheet.Cell` 提供按行列或 A1 地址访问：
 
 ```csharp
-// 文本
-var textCell = Cell.FromText("你好");
-var emptyTextCell = Cell.FromText("");  // → CellType.Empty
-var nullTextCell = Cell.FromText(null); // → CellType.Empty
+var ws = Excel.Create().Worksheets["Sheet1"];
 
-// 数字（可选指定数字格式）
-var numCell = Cell.FromNumber(3.14);
-var moneyCell = Cell.FromNumber(9999.50, "#,##0.00");  // 千分位 + 两位小数
-
-// 日期（可选指定格式，默认 "yyyy-MM-dd"）
-var dateCell = Cell.FromDate(new DateTime(2024, 6, 1));
-var dateCell2 = Cell.FromDate(DateTime.Now, "yyyy/MM/dd HH:mm:ss");
-
-// 布尔
-var boolCell = Cell.FromBoolean(true);
-
-// 空单元格
-var emptyCell = Cell.Empty;
+var c1 = ws.Cell(1, 1);        // A1
+var c2 = ws.Cell("B3");        // B3
+Console.WriteLine(c1.IsEmpty);   // True（尚未赋值）
 ```
 
-### 支持的单元格类型
+`Cell` 是引用类型，访问不存在的单元格返回一个 `Empty` 占位；一旦赋值即落入网格。
 
-| 类型 | 说明 |
+输出：
+
+```
+True
+```
+
+#### 4.2 设置值 `SetValue`
+
+`SetValue` 越界自动扩展网格；`null` / `DBNull` 写空单元格：
+
+```csharp
+ws.SetValue(1, 1, "Header");
+ws.SetValue("A2", 42);
+ws.SetValue("B2", null);       // 清空 B2
+Console.WriteLine(ws.Cell("A2").GetString());   // 42
+```
+
+输出：
+
+```
+42
+```
+
+#### 4.3 集合式访问 `Cells`
+
+`Worksheet.Cells` 提供整表入口，支持索引器、区域提取、枚举与批量清空：
+
+```csharp
+ws.Cells[1, 1] = "A1 via cells";      // 索引器（行列）
+ws.Cells["B1"] = "B1 via cells";      // 索引器（A1 地址）
+ws.Cells.SetValue("C1", 3.14);        // 便捷写值
+
+var range = ws.Cells.Range("A1:D10"); // 提取区域
+foreach (var cell in ws.Cells)        // 枚举网格中已有单元格
+    Console.WriteLine(cell.GetString());
+ws.Cells.Clear();                     // 清空整表值（不删行列）
+```
+
+输出：
+
+```
+A1 via cells
+B1 via cells
+3.14
+```
+
+#### 4.4 区域操作 `ExcelRange`
+
+`Worksheet.Range` 返回连续矩形区域（1-based，含端点），支持批量读写、样式、合并、清空、枚举：
+
+```csharp
+var r = ws.Range("A1:D10");          // 或 ws.Range(1, 1, 10, 4)
+Console.WriteLine(r.Address);        // "A1:D10"
+Console.WriteLine($"{r.RowCount} x {r.ColumnCount}");  // 10 x 4
+
+r.Fill("x");                          // 整区填相同值
+r.Fill(new object?[,] { { "a", "b" }, { "c", "d" } }); // 二维数组写入
+var vals = r.ToValues();              // object?[,] 读回
+var cells = r.ToCells();              // Cell[,] 读回
+r.Style = new CellStyle { Bold = true };  // 整区统一样式
+r.Merge();                            // 合并该区域
+r.Unmerge();                          // 取消合并
+r.Clear();                            // 清空区域内值
+
+var single = r.Cell(0, 0);            // 区域内相对偏移（0-based）
+```
+
+输出：
+
+```
+A1:D10
+10 x 4
+```
+
+#### 4.5 单元格读取方法
+
+`Cell` 提供强类型与 Try 风格读取：
+
+```csharp
+var cell = ws.Cell("A1");
+string? s = cell.GetString();        // 文本 / 数字 / 日期 / 布尔按惯例格式化
+double d = cell.GetDouble();         // 类型不匹配抛 InvalidCastException
+DateTime dt = cell.GetDateTime();
+bool b = cell.GetBoolean();
+object? raw = cell.GetValue();       // 原始对象，Empty 返回 null
+
+bool ok = cell.TryGetString(out var s2);   // 空单元格返回 false
+bool ok2 = cell.TryGetDouble(out double d2);
+bool ok3 = cell.TryGetDateTime(out DateTime dt2);
+bool ok4 = cell.TryGetBoolean(out bool b2);
+```
+
+输出：（单元格原值）
+
+---
+
+### 5. 数据类型与转换（文本 / 数字 / 日期 / 布尔 / 公式 / 可空 / Byte[]）
+
+#### 5.1 单元格类型 `CellType`
+
+```csharp
+public enum CellType { Text, Number, Date, Boolean, Empty }
+```
+
+`Cell.Type` 决定哪个值字段有效：`Text` / `Number` / `Date` / `Boolean`。`IsEmpty` 表示空单元格。
+
+输出：（本示例无控制台输出）
+
+#### 5.2 工厂方法
+
+```csharp
+var t = Cell.FromText("hello");
+var n = Cell.FromNumber(42, "#,##0.00");      // 可带数字格式
+var d = Cell.FromDate(new DateTime(2024, 1, 1));  // 默认格式 yyyy-MM-dd
+var b = Cell.FromBoolean(true);
+var f = Cell.FromFormula("SUM(A1:A3)");        // 公式单元格
+var e = Cell.Empty;
+Console.WriteLine(d.GetString());   // 默认日期格式 yyyy-MM-dd
+```
+
+输出：
+
+```
+2024-01-01
+```
+
+#### 5.3 自动类型转换
+
+`SetValue(object?)` 会按 CLR 类型自动映射：
+
+| CLR 类型 | 单元格类型 |
 |---|---|
-| `Text` | 文本（共享字符串或内联字符串） |
-| `Number` | 数字（整数精确到 long，12 位以内无损） |
-| `Date` | 日期（Excel 存为数字 + 格式码，库自动转换） |
-| `Boolean` | 布尔值（`t="b"`） |
-| `Empty` | 空单元格 |
+| `bool` | `Boolean` |
+| `DateTime` | `Date`（默认 `yyyy-MM-dd`） |
+| `sbyte/byte/short/ushort/int/uint/long/ulong/float/double/decimal` | `Number` |
+| `null` / `DBNull` | `Empty` |
+| 其他（含 `string`） | `Text` |
 
-### 数字格式速查
+```csharp
+ws.SetValue("A1", 3.14);        // Number
+ws.SetValue("A2", true);        // Boolean
+ws.SetValue("A3", DateTime.Now); // Date
+ws.SetValue("A4", "text");      // Text
+ws.SetValue("A5", null);        // Empty
 
-常用格式字符串：
+Console.WriteLine(ws.Cell("A1").Type);   // Number
+Console.WriteLine(ws.Cell("A2").Type);   // Boolean
+Console.WriteLine(ws.Cell("A3").Type);   // Date
+Console.WriteLine(ws.Cell("A4").Type);   // Text
+Console.WriteLine(ws.Cell("A5").Type);   // Empty
+```
 
-| 格式 | 效果 |
+输出：
+
+```
+Number
+Boolean
+Date
+Text
+Empty
+```
+
+#### 5.4 可空类型
+
+`SetValue` 接受 `object?`，可空值类型（`int?` / `DateTime?` 等）装箱后按底层值处理；`null` 写空单元格：
+
+```csharp
+int? maybe = null;
+ws.SetValue("A1", maybe);        // 写空
+maybe = 7;
+ws.SetValue("A2", maybe);        // Number 7
+Console.WriteLine(ws.Cell("A1").IsEmpty);     // True（null 写空）
+Console.WriteLine(ws.Cell("A2").GetDouble()); // 7
+```
+
+输出：
+
+```
+True
+7
+```
+
+#### 5.5 数字格式速查
+
+`NumberFormat` 使用 Excel 格式代码字符串，常见示例：
+
+| 格式代码 | 效果 |
 |---|---|
 | `"0"` | 整数 |
 | `"0.00"` | 两位小数 |
-| `"#,##0"` | 千分位整数 |
 | `"#,##0.00"` | 千分位 + 两位小数 |
-| `"0.00%"` | 百分比 |
-| `"yyyy-MM-dd"` | 日期（默认） |
-| `"yyyy/MM/dd"` | 日期 |
-| `"HH:mm:ss"` | 时间 |
-| `"yyyy-MM-dd HH:mm:ss"` | 日期时间 |
-
-### 读取时日期自动识别
-
-读取时，库会查 `styles.xml` 的数字格式 ID（numFmtId），自动把日期格式的数字转成 `CellType.Date`。内置日期格式 ID（14-22, 27-36, 45-47, 50-58）会被识别为日期。
-
----
-
-## 5. 读取
-
-### 列出所有工作表名
+| `"0%"` | 百分比 |
+| `"yyyy/m/d"` / `"yyyy-MM-dd"` | 日期 |
+| `"hh:mm"` | 时间 |
+| `"@"` | 文本 |
 
 ```csharp
-var names = XlsxReader.GetSheetNames("file.xlsx");
-// ["员工表", "工资表", "部门表"]
+ws.Cell("A1").SetValue(12345.678);
+ws.Cell("A1").NumberFormat = "#,##0.00";   // 显示 12,345.68
+Console.WriteLine(ws.Cell("A1").GetString());  // 按格式读回
 ```
 
-### 按索引读取单表
+输出：
+
+```
+12,345.68
+```
+
+#### 5.6 读取时日期自动识别
+
+读取 xlsx / xlsm / xlsb 时，单元格数字格式为 Excel 内置日期格式（ID 14-22、27-36、45-47、50-58 等）时，自动读为 `CellType.Date`：
 
 ```csharp
-// sheetIndex 从 0 开始，firstRowIsHeader 默认 true
-var sheet = XlsxReader.Read("file.xlsx", sheetIndex: 0);
-
-// 不把第一行当表头
-var sheet = XlsxReader.Read("file.xlsx", sheetIndex: 0, firstRowIsHeader: false);
+var opened = Excel.Open("dates.xlsx");
+var cell = opened.Worksheets[0].Cell("A1");
+if (cell.Type == CellType.Date)
+    Console.WriteLine(cell.GetDateTime().ToString("yyyy-MM-dd"));
 ```
 
-### 按名称读取单表
+打开时捕获的 1904 日期系统标志（`Date1904`）会在保存时写回对应格式标志，保证日期序列值基准一致。
+
+输出：
+
+```
+2024-01-01
+```
+
+#### 5.7 公式
+
+`Cell.Formula` 与缓存值字段分离（公式串不再占用 `Text`，避免覆盖文本公式的缓存结果值）。旧代码把公式写进 `Text` 且设 `IsFormula=true` 的写法仍兼容：
 
 ```csharp
-var sheet = XlsxReader.Read("file.xlsx", sheetName: "员工表");
+var cell = ws.Cell("C1");
+cell.Formula = "SUM(A1:B1)";     // 仅写公式字符串，不计算结果
+cell.IsFormula = true;           // 写出时按公式处理（兼容垫片）
+
+// 或直接给单元格赋一个公式 Cell（SetValue 支持传 Cell，会复制其内容）
+ws.Cell("C2").SetValue(Cell.FromFormula("A1*2"));
+Console.WriteLine(cell.Formula);             // SUM(A1:B1)
+Console.WriteLine(ws.Cell("C2").Formula);    // A1*2
 ```
 
-### 读取所有工作表
-
-```csharp
-var allSheets = XlsxReader.ReadAll("file.xlsx");
-foreach (var sheet in allSheets)
-{
-    Console.WriteLine($"{sheet.SheetName}: {sheet.Rows.Count} 行");
-}
-```
-
-### 流式读取大文件（不驻留内存）
-
-```csharp
-XlsxReader.StreamRows("bigfile.xlsx", "Sheet1", row =>
-{
-    // row 是 IReadOnlyList<Cell>，逐行回调
-    foreach (var cell in row)
-    {
-        // 处理单元格
-    }
-});
-```
-
-> **注意**：`StreamRows` 会自动跳过表头行（第一行）。只处理数据行。
-
-### 带进度的读取
-
-```csharp
-XlsxReader.ReadWithProgress("bigfile.xlsx", sheetIndex: 0, (current, total) =>
-{
-    Console.WriteLine($"进度: {current}/{total} ({current * 100 / total}%)");
-});
-```
-
-> `current` 从 1 递增到 `total`（数据行数，不含表头）。
-
-### 读取结果的 SheetData 结构
-
-```csharp
-public sealed class SheetData
-{
-    public string SheetName { get; set; }            // 表名
-    public List<string> Headers { get; set; }         // 表头（firstRowIsHeader=true 时填充）
-    public List<IReadOnlyList<Cell>> Rows { get; set; } // 数据行
-    public List<CellRange> MergedRanges { get; set; }   // 合并单元格区域
-    public AutoFilter? Filter { get; set; }              // 自动筛选
-    public CellStyle? HeaderStyle { get; set; }          // 表头样式（读出时可能为空）
-    public CellStyle? DefaultStyle { get; set; }         // 全表默认样式
-    public Dictionary<int, CellStyle>? RowStyles { get; set; }      // 行级样式
-    public Dictionary<int, CellStyle>? ColumnStyles { get; set; }  // 列级样式
-    public Dictionary<int, double>? RowHeights { get; set; }       // 行高
-    public Dictionary<string, string>? Comments { get; set; }      // 单元格批注
-    public List<DataValidation>? Validations { get; set; }          // 数据验证
-}
-```
-
----
-
-## 6. 写出
-
-### 写单表
-
-```csharp
-var sheet = new SheetData { ... };
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-### 写多表
-
-```csharp
-var sheets = new List<SheetData>
-{
-    new() { SheetName = "表1", Headers = new() { "A" }, Rows = ... },
-    new() { SheetName = "表2", Headers = new() { "B" }, Rows = ... },
-};
-XlsxWriter.Write("multi.xlsx", sheets);
-```
-
-### 冻结表头
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    FreezeHeader = true,  // 第一行冻结（等价于 FreezeRows = 1）
-};
-```
-
-### 任意行列冻结
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B", "C" },
-    Rows = ...,
-    FreezeRows = 2,       // 冻结前 2 行
-    FreezeColumns = 1,    // 冻结第 1 列
-};
-```
-
-### 列宽设置
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "姓名", "年龄", "备注" },
-    Rows = ...,
-    ColumnWidths = new() { 15, 8, 30 },  // 列宽（Excel 字符宽度单位）
-};
-```
-
-### 列宽自适应
-
-```csharp
-var sheet = new SheetData { ... };
-
-// 自动估算列宽（中文字符算 2，英文/数字算 1，范围 8~50）
-XlsxWriter.AutoColumnWidths(sheet);
-
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-> 在 `Write` 之前调用 `AutoColumnWidths`，它会填充 `sheet.ColumnWidths`。
-
-### Sheet 名校验
-
-写出时自动校验 Sheet 名，不合法会抛 `InvalidSheetNameException`：
-- 不能为空
-- 不超过 31 字符
-- 不能包含 `\ / ? * [ ] :` 字符
-
-```csharp
-try
-{
-    XlsxWriter.Write("bad.xlsx", new SheetData { SheetName = "test[1]" });
-}
-catch (InvalidSheetNameException ex)
-{
-    Console.WriteLine(ex.Message);
-}
-```
-
----
-
-### CSV 写出分隔符（2.4.3+）
-
-默认 CSV 写出使用逗号分隔。切换到分号或 Tab（国内中文 Excel 常见分号）：
-
-```csharp
-Excel.Write("out.csv", wb, new ExcelWriteOptions { Separator = ';' });
-```
-
-指定后在该工作簿生命周期内永久生效（若次存仍如需保持同一选项，需在同一次 `Excel.Write` 传参）。
-
-> 仅 CSV 支持自定义分隔符。其他格式忽略该项。
-> 其他 Excel 专有能力（批注/合并/筛选/图片/样式等）在 CSV 写出会被降级上报，见 [§25 能力降级回调](#25-capability-degradation-callback-ondegradation-242)。
-
----
-
-## 7. 样式
-
-### 样式优先级（覆盖式）
+输出：
 
 ```
-单元格 Cell.Style  >  行 RowStyles[row]  >  列 ColumnStyles[col]  >  全表 DefaultStyle
+SUM(A1:B1)
+A1*2
 ```
 
-> **覆盖式**：单元格有自己的 Style 就完全用单元格的，不继承行/列/全表。没有单元格样式才看行级，行级没有才看列级，列级没有才用全表默认。
+List\<T\> 映射中可用 `[LiteColumn(IsFormula = true)]` 把字符串属性当作公式列（见第 5.9 节）。
 
-### 单元格样式
+#### 5.8 Byte[]
 
-```csharp
-var style = new CellStyle
-{
-    FontName = "微软雅黑",
-    FontSize = 14,
-    Bold = true,
-    Italic = true,
-    Underline = false,
-    Strikeout = false,
-    FontColor = "#FF0000",      // 红色字体
-    FillColor = "#FFFF00",      // 黄底
-    HorizontalAlignment = HorizontalAlignment.Center,
-    VerticalAlignment = VerticalAlignment.Center,
-    WrapText = true,
-    Border = new BorderStyle
-    {
-        Top = new BorderEdge { Style = "thin", Color = "#000000" },
-        Bottom = new BorderEdge { Style = "thin", Color = "#000000" },
-        Left = new BorderEdge { Style = "medium", Color = "#000000" },
-        Right = new BorderEdge { Style = "medium", Color = "#000000" },
-    },
-};
-
-var cell = new Cell { Type = CellType.Text, Text = "带样式", Style = style };
-```
-
-### 修改指定单元格 / 区域样式（对象模型 API）
-
-打开已有文件后修改**指定单元格**或**指定区域**的样式，直接对 `Cell.Style` / `ExcelRange.Style` 赋值即可（`Style` 为覆盖式替换，未设置的字段保持 Excel 默认）：
-
-```csharp
-var wb = Excel.Open("styled.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// 单个单元格：改背景色 + 字体 + 字体颜色
-ws.Cell("A2").Style = new CellStyle
-{
-    FillColor = "#FFFF00",          // 背景色（#RRGGBB）
-    FontName  = "微软雅黑",         // 字体名
-    FontSize  = 14,                 // 字号（磅）
-    Bold      = true,
-    FontColor = "#FF0000",          // 字体颜色
-};
-
-// 区域：A2:C3 内每个单元格统一应用
-ws.Range("A2:C3").Style = new CellStyle
-{
-    FillColor = "#D9E1F2",
-    Italic    = true,
-    HorizontalAlignment = HorizontalAlignment.Center,
-};
-
-// 同时改值和样式
-ws.Cell("B2").SetValue("新值");
-ws.Cell("B2").Style = new CellStyle { FillColor = "#92D050", Bold = true };
-
-wb.Save();   // 或 wb.SaveAs("styled2.xlsx")
-```
-
-> `ExcelRange.Style` 会遍历区域内所有单元格逐个应用；`Style` 是**整体替换**而非合并增量，需要"保留已有样式只改某一项"时应先读出再复制（`CellStyle` 提供 `Clone()`）。
-
-### 表头样式
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    HeaderStyle = new CellStyle
-    {
-        Bold = true,
-        FontColor = "#FFFFFF",
-        FillColor = "#4472C4",
-        HorizontalAlignment = HorizontalAlignment.Center,
-    },
-    Rows = ...,
-};
-```
-
-> 表头样式优先级：`HeaderStyle > ColumnStyles > DefaultStyle`
-
-### 全表默认样式
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    DefaultStyle = new CellStyle { FontName = "Arial", FontSize = 11 },
-};
-```
-
-### 行级样式
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("行0"), Cell.FromText("x") },
-        new Cell[] { Cell.FromText("行1"), Cell.FromText("y") },  // 黄底
-    },
-    RowStyles = new()
-    {
-        { 1, new CellStyle { FillColor = "#FFFF00" } },  // key=0-based 行索引
-    },
-};
-```
-
-### 列级样式
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    ColumnStyles = new()
-    {
-        { 1, new CellStyle { Italic = true, FontColor = "#0000FF" } },  // key=0-based 列索引
-    },
-};
-```
-
-### 颜色格式
-
-所有颜色使用 `#RRGGBB` 格式（6 位十六进制），不含 alpha 通道。
-
-### 边框样式
-
-边框 `Style` 可选值（Excel 标准）：
-
-| 值 | 说明 |
-|---|---|
-| `"thin"` | 细线 |
-| `"medium"` | 中等 |
-| `"thick"` | 粗 |
-| `"dotted"` | 点线 |
-| `"dashed"` | 虚线 |
-| `"double"` | 双线 |
-| `"none"` | 无 |
-
-### 对齐方式
-
-| 水平对齐 | 垂直对齐 |
-|---|---|
-| `HorizontalAlignment.General` | `VerticalAlignment.Top` |
-| `HorizontalAlignment.Left` | `VerticalAlignment.Center` |
-| `HorizontalAlignment.Center` | `VerticalAlignment.Bottom` |
-| `HorizontalAlignment.Right` | |
-
----
-## 8. 合并单元格
-
-### 写出合并
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B", "C" },
-    Rows = ...,
-    MergedRanges = new()
-    {
-        new CellRange(0, 0, 0, 2),  // 合并第一数据行的 A1:C1
-        new CellRange(1, 3, 0, 0),  // 合并 A2:A4（跨 3 行）
-    },
-};
-```
-
-### CellRange 说明
-
-```csharp
-public sealed class CellRange
-{
-    public int FirstRow { get; set; }  // 0-based 行索引
-    public int LastRow { get; set; }
-    public int FirstCol { get; set; }  // 0-based 列索引
-    public int LastCol { get; set; }
-}
-```
-
-> 行索引对应 `Rows` 列表（不包含表头行）。列索引从 0 开始。
-
-### 读取合并
-
-读取时自动还原到 `sheet.MergedRanges`，无需额外调用。
-
-```csharp
-var sheet = XlsxReader.Read("file.xlsx", 0);
-foreach (var range in sheet.MergedRanges)
-{
-    Console.WriteLine($"合并: 行{range.FirstRow}-{range.LastRow} 列{range.FirstCol}-{range.LastCol}");
-}
-```
-
----
-
-## 9. 自动筛选
-
-### 写出筛选（方式 1：传筛选条件）
-
-库自动遍历 Rows 求值，计算哪些行该 hidden。
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "姓名", "城市", "分数" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("张三"), Cell.FromText("北京"), Cell.FromNumber(85) },
-        new Cell[] { Cell.FromText("李四"), Cell.FromText("上海"), Cell.FromNumber(72) },
-        new Cell[] { Cell.FromText("王五"), Cell.FromText("北京"), Cell.FromNumber(90) },
-    },
-    Filter = new AutoFilter
-    {
-        Range = "A1:C4",  // 筛选范围（表头 + 数据行）
-        Columns = new()
-        {
-            new FilterColumn
-            {
-                ColumnIndex = 1,                    // 第 2 列（城市）
-                Type = FilterType.Equals,
-                Values = new() { "北京" },         // 只显示北京
-            },
-        },
-    },
-};
-
-XlsxWriter.Write("filtered.xlsx", sheet);
-// 结果：李四那行被 hidden
-```
-
-### 写出筛选（方式 2：手动指定 hidden 行）
-
-```csharp
-sheet.Filter = new AutoFilter
-{
-    Range = "A1:C4",
-    HiddenRows = new() { 1 },  // 0-based 行索引，第 2 行 hidden
-};
-```
-
-### 筛选条件类型
-
-| `FilterType` | 说明 | `Values` | `Operator`/`MinValue`/`MaxValue` |
-|---|---|---|---|
-| `Equals` | 等于（多选） | 候选值列表 | 不用 |
-| `Compare` | 比较/区间 | 比较值 | `Operator` 必填 |
-| `Contains` | 文本包含 | 子串列表 | 不用 |
-| `BeginsWith` | 以...开头 | 前缀列表 | 不用 |
-| `EndsWith` | 以...结尾 | 后缀列表 | 不用 |
-| `Blank` | 空白/非空白 | 空=空白，有值=非空白 | 不用 |
-
-### Compare 操作符
-
-| `FilterOperator` | 说明 |
-|---|---|
-| `GreaterThan` | 大于 |
-| `GreaterThanOrEqual` | 大于等于 |
-| `LessThan` | 小于 |
-| `LessThanOrEqual` | 小于等于 |
-| `Between` | 区间（需设 `MinValue` 和 `MaxValue`） |
-
-### Between 示例
-
-```csharp
-new FilterColumn
-{
-    ColumnIndex = 2,
-    Type = FilterType.Compare,
-    Operator = FilterOperator.Between,
-    MinValue = "60",   // 下限
-    MaxValue = "90",   // 上限
-},
-```
-
-### 多条件（AND 逻辑）
-
-所有列的条件必须同时满足（AND），该行才显示。
-
-```csharp
-Columns = new()
-{
-    new FilterColumn { ColumnIndex = 0, Type = FilterType.Equals, Values = new() { "张三" } },
-    new FilterColumn { ColumnIndex = 1, Type = FilterType.Equals, Values = new() { "北京" } },
-},
-// 只有 张三+北京 的行显示
-```
-
-### 读取筛选
-
-```csharp
-var sheet = XlsxReader.Read("filtered.xlsx", 0);
-if (sheet.Filter is not null)
-{
-    Console.WriteLine($"范围: {sheet.Filter.Range}");
-    Console.WriteLine($"Hidden 行: {string.Join(", ", sheet.Filter.HiddenRows)}");
-}
-```
-
----
-
-## 10. 行高与列宽
-
-### 设置行高
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("x"), Cell.FromText("y") },
-        new Cell[] { Cell.FromText("z"), Cell.FromText("w") },
-    },
-    RowHeights = new()
-    {
-        { 0, 30.0 },   // 第一数据行高 30 磅
-        { 1, 14.25 },  // 第二数据行高 14.25 磅
-    },
-};
-```
-
-> `RowHeights` 的 key 是 0-based 数据行索引（对应 `Rows` 列表，不含表头行）。
-
-### 列宽自适应
-
-```csharp
-var sheet = new SheetData { ... };
-
-XlsxWriter.AutoColumnWidths(sheet);
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-估算规则：
-- 中文字符宽度算 2，英文/数字算 1
-- 最小 8，最大 50
-- 含表头行宽度比较
-
----
-
-## 11. 单元格批注
-
-### 写出批注
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("x"), Cell.FromText("y") },
-    },
-    Comments = new()
-    {
-        { "A1", "这是 A1 的批注" },
-        { "B1", "这是 B1 的批注 <含特殊字符>" },
-    },
-};
-
-XlsxWriter.Write("comments.xlsx", sheet);
-```
-
-> key 是 A1 格式的单元格引用（`列字母 + 行号`，如 `A1`、`B2`、`AA10`）。
-
-### 对象模型 API：给指定单元格加/读批注
-
-打开已有文件后，对指定单元格添加、修改、读取批注：
-
-```csharp
-var wb = Excel.Open("comments.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// 加批注（Comments 为 null 时先初始化）
-ws.Comments ??= new();
-ws.Comments["A2"] = "这是 A2 的批注";
-
-// 修改已存在的批注
-ws.Comments["A2"] = "批注已更新";
-
-// 读取批注
-if (ws.Comments is not null && ws.Comments.TryGetValue("A2", out var text))
-    Console.WriteLine($"A2 批注：{text}");
-
-// 删除批注
-ws.Comments.Remove("A2");
-
-wb.Save();
-```
-
-### 读取批注
-
-```csharp
-var sheet = XlsxReader.Read("comments.xlsx", 0);
-if (sheet.Comments is not null)
-{
-    foreach (var (ref, text) in sheet.Comments)
-    {
-        Console.WriteLine($"{ref}: {text}");
-    }
-}
-```
-
----
-## 12. 超链接
-
-### 写出超链接
-
-超链接支持 xlsx/xlsm/xlsb/xls 四格式。通过 `Cell.Hyperlink` 属性设置：
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "姓名", "主页" },
-    Rows = new()
-    {
-        new Cell[]
-        {
-            Cell.FromText("张三"),
-            new Cell { Type = CellType.Text, Text = "点击访问", Hyperlink = new Hyperlink
-            {
-                Target = "https://example.com",
-                Tooltip = "张三的个人主页",
-            }},
-        },
-    },
-};
-
-XlsxWriter.Write("links.xlsx", sheet);
-```
-
-### Hyperlink 属性
-
-| 属性 | 类型 | 说明 |
-|---|---|---|
-| `Target` | `string` | 链接目标 URL（必填） |
-| `Tooltip` | `string?` | 悬停提示文本（可选） |
-| `IsInternal` | `bool` | 是否为内部链接（如 `Sheet1!A1`） |
-
-### 对象模型 API：设置超链接
-
-```csharp
-var wb = Excel.Open("links.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// 设置超链接
-ws.Cell("B2").Hyperlink = new Hyperlink
-{
-    Target = "https://example.com",
-    Tooltip = "点击访问",
-};
-
-wb.Save();
-```
-
-### 读取超链接
-
-```csharp
-var sheet = XlsxReader.Read("links.xlsx", 0);
-var cell = sheet.Rows[0][1];  // B2
-if (cell.Hyperlink is not null)
-{
-    Console.WriteLine($"目标: {cell.Hyperlink.Target}");
-    Console.WriteLine($"提示: {cell.Hyperlink.Tooltip}");
-}
-```
-
-> 超链接支持 xlsx/xlsm/xlsb/xls 四格式读写（外部 URL/文件/mailto/UNC 与内部 `#Sheet!A1` 跳转）；csv 不支持超链接。内部链接 `IsInternal=true` 时 Target 形如 `#Sheet1!A1`。
-
----
-
-## 13. 冻结窗格
-
-### 设置冻结行/列
-
-通过 `SheetData.FreezeRows` 和 `FreezeColumns` 属性控制：
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B", "C", "D" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("数据1"), Cell.FromText("x"), Cell.FromText("y"), Cell.FromText("z") },
-        new Cell[] { Cell.FromText("数据2"), Cell.FromText("a"), Cell.FromText("b"), Cell.FromText("c") },
-    },
-    FreezeRows = 2,       // 冻结前 2 行
-    FreezeColumns = 1,    // 冻结第 1 列
-};
-```
-
-### FreezeHeader 兼容
-
-`FreezeHeader = true` 等价于 `FreezeRows = 1`：
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    FreezeHeader = true,   // 等价于 FreezeRows = 1
-};
-```
-
-### 对象模型 API
-
-```csharp
-var wb = Excel.Open("report.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// 冻结前 2 行
-ws.FreezeRows = 2;
-
-// 冻结第 1 列
-ws.FreezeColumns = 1;
-
-// 或用 FreezeHeader 兼容语法
-ws.FreezeHeader = true;   // 等价于 FreezeRows = 1
-
-wb.Save();
-```
-
-### 读取冻结
-
-```csharp
-var sheet = XlsxReader.Read("frozen.xlsx", 0);
-Console.WriteLine($"冻结行数: {sheet.FreezeRows}");      // 0 表示未冻结
-Console.WriteLine($"冻结列数: {sheet.FreezeColumns}");   // 0 表示未冻结
-Console.WriteLine($"冻结表头: {sheet.FreezeHeader}");    // FreezeRows > 0 时 true
-```
-
----
-
-## 14. 图片
-
-### 浮动图片
-
-图片仅支持 xlsx/xlsm 格式。通过 `Worksheet.AddImage` 添加浮动图片：
+`SetValue` 遇到非数值类型一律按 `Text` 处理（`value.ToString()`）。**二进制数据请走图片 API**（`Worksheet.AddImage`，见第 13 章）或自行编码为文本。库本身不把 `byte[]` 映射为二进制单元格类型。
 
 ```csharp
 var wb = Excel.Create();
 var ws = wb.Worksheets["Sheet1"];
-
-// 读取图片数据
-byte[] imageData = File.ReadAllBytes("logo.png");
-
-// 添加浮动图片到 A1 单元格位置
-ws.AddImage(imageData, row: 1, column: 1, widthPx: 200, heightPx: 100);
-
-wb.SaveAs("image.xlsx");
+ws.SetValue("A1", Convert.ToBase64String(new byte[] { 1, 2, 3 }));  // 自行编码为文本
+Console.WriteLine(ws.Cell("A1").GetString());                       // AQID
 ```
 
-### 单元格内嵌图片（InCell）
+输出：
 
-```csharp
-// 单元格内嵌模式（图片随单元格大小变化）
-ws.AddImage(imageData, row: 1, column: 1,
-    placement: ImagePlacement.InCell);
+```
+AQID
 ```
 
-### ImagePlacement 枚举
+#### 5.9 List\<T\> 映射与 `[LiteColumn]`
 
-| 值 | 说明 |
-|---|---|
-| `Floating` | 浮动图片，可指定位置和尺寸（默认） |
-| `InCell` | 单元格内嵌，图片随单元格自适应 |
-
-### 坐标与尺寸
-
-- 坐标（row, column）为 **1-based**
-- 宽高单位为像素，缺省时按图片原始尺寸
-- 自动探测扩展名（png/jpg/gif/bmp）与像素尺寸
-
-```csharp
-// 省略宽高 → 使用原始图片尺寸
-ws.AddImage(imageData, row: 2, column: 3, placement: ImagePlacement.Floating);
-
-// 指定扩展名和名称
-ws.AddImage(imageData, row: 1, column: 1,
-    widthPx: 300, heightPx: 200,
-    extension: "png", name: "产品图");
-```
-
-### 多 Sheet 混合使用
-
-```csharp
-var ws1 = wb.Worksheets["Sheet1"];
-var ws2 = wb.Worksheets.Add("Sheet2");
-
-ws1.AddImage(logoData, row: 1, column: 1, widthPx: 100, heightPx: 50);
-ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
-```
-
-> 图片仅支持 xlsx/xlsm 格式。xls/xlsb/csv 不支持图片。InCell 嵌入图片在 Excel 中单元格显示为 `#VALUE!`（与 Excel 原生真实样本一致）。
-> 读取：**浮动图片支持读回**（2.4.3+，xlsx/xlsm 打开后 `Images` 自动填充）；InCell 图片读回将在后续版本提供。
-
-### 图片读回（2.4.3+）
-
-打开含浮动图片的 xlsx/xlsm 后，`Worksheet.Images` 已回填：
-
-```csharp
-var wb = Excel.Open("hasImage.xlsx");
-foreach (var img in wb.Worksheets[0].Images)
-{
-    Console.WriteLine($"位置: {img.Row},{img.Column}  类型: {img.Placement}  尺寸: {img.Anchor?.WidthPixels}x{img.Anchor?.HeightPixels}");
-    Console.WriteLine($"altText: {img.AltText}  name: {img.Name}  bytes: {img.Data.Length}");
-}
-```
-
-支持字段：Row / Column（1-based）、Placement（目前仅读回 Floating）、Name、AltText、Anchor（TopLeftCell/偏移/尺寸/MoveMode）、Extension（png/jpg/gif/bmp 自动）、Data（byte[]）。
-
-InCell 图片读回后续版本（2.4.4）。写回保持原能力不清除已有图片。
-
-### 图片锚点与移动方式（2.4.1+）
-
-浮动图片支持高精度锚点，可指定左上单元格 + EMU 偏移 + 显示尺寸 + 随单元格的移动/缩放方式，以及无障碍替换文本（AltText）：
-
-```csharp
-ws.AddImage(logoData, new ImageAnchor
-{
-    TopLeftCell = "B2",           // 左上单元格 A1 引用
-    TopLeftOffsetX = 9525,       // 水平偏移（EMU，1px≈9525）
-    TopLeftOffsetY = 0,           // 垂直偏移
-    WidthPixels = 200,
-    HeightPixels = 120,
-    MoveMode = ImageMoveMode.MoveAndSizeWithCells, // 随格移动+缩放
-}, extension: "png", name: "logo", altText: "公司 Logo");
-```
-
-`ImageMoveMode` 三种模式：
-
-| 模式 | OOXML | 行为 |
-|---|---|---|
-| `MoveButDontSizeWithCells`（默认） | oneCellAnchor | 随单元格移动，不缩放 |
-| `MoveAndSizeWithCells` | twoCellAnchor | 随单元格移动并缩放（图片跟随格子拉伸） |
-| `FixedPosition` | oneCellAnchor editAs="absolute" | 固定位置，不随单元格移动/缩放 |
-
-> `twoCellAnchor` 的终止位置按默认列宽≈64px/行高≈20px 估算，非默认格子下图片按格子缩放。`ImageAnchor` 仅 Floating 生效；InCell 忽略锚点。
-
----
-## 15. 数据验证（下拉列表）
-
-### 写出数据验证
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "姓名", "部门", "分数" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("Alice"), Cell.FromText("IT"), Cell.FromNumber(85) },
-    },
-    Validations = new()
-    {
-        // 下拉列表
-        new DataValidation
-        {
-            Type = DataValidationType.List,
-            Sqref = "B2:B100",                          // 应用范围
-            Formula1 = "\"IT,HR,Finance,Sales\"",       // 下拉选项（用双引号包裹）
-            AllowBlank = true,
-            PromptTitle = "部门",
-            Prompt = "请从列表选择部门",
-        },
-        // 整数范围 0-100
-        new DataValidation
-        {
-            Type = DataValidationType.WholeNumber,
-            Sqref = "C2:C100",
-            Formula1 = "0",
-            Formula2 = "100",
-            AllowBlank = false,
-        },
-    },
-};
-
-XlsxWriter.Write("validation.xlsx", sheet);
-```
-
-### 数据验证类型
-
-| `DataValidationType` | 说明 | `Formula1` | `Formula2` |
-|---|---|---|---|
-| `List` | 下拉列表 | `"\"选项1,选项2\""` | 不用 |
-| `WholeNumber` | 整数 | 下限 | 上限 |
-| `Decimal` | 小数 | 下限 | 上限 |
-| `Date` | 日期 | 起始日期 | 结束日期 |
-
-### 读取数据验证
-
-```csharp
-var sheet = XlsxReader.Read("validation.xlsx", 0);
-if (sheet.Validations is not null)
-{
-    foreach (var v in sheet.Validations)
-    {
-        Console.WriteLine($"类型: {v.Type}, 范围: {v.Sqref}, 公式: {v.Formula1}");
-    }
-}
-```
-
----
-
-## 16. 追加数据
-
-### 追加到已有文件
-
-```csharp
-// 先写 3 行
-XlsxWriter.Write("data.xlsx", new SheetData
-{
-    SheetName = "数据",
-    Headers = new() { "ID" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromNumber(1) },
-        new Cell[] { Cell.FromNumber(2) },
-        new Cell[] { Cell.FromNumber(3) },
-    },
-});
-
-// 追加 2 行
-XlsxWriter.Append("data.xlsx", new SheetData
-{
-    SheetName = "数据",  // 同名 → 追加到该 sheet
-    Headers = new() { "ID" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromNumber(4) },
-        new Cell[] { Cell.FromNumber(5) },
-    },
-});
-
-// 读回 → 5 行
-var sheet = XlsxReader.Read("data.xlsx", 0);
-Console.WriteLine(sheet.Rows.Count);  // 5
-```
-
-### 追加到不存在的 sheet
-
-如果 `newData.SheetName` 在原文件中不存在，会作为新 sheet 加入。
-
-### 原文件不存在
-
-如果原文件不存在，`Append` 等同于 `Write`，直接创建新文件。
-
-> 对已有文件执行 `Append` 时，LiteExcel 会保留现有的文档属性（作者、标题、主题、创建时间等），并自动将最后修改时间更新为当前时间。
-
-> `Append` 会基于 LiteExcel 已读取的模型重新生成工作簿。样式、合并单元格、筛选、批注、数据验证等已支持数据会被保留；Excel Table、Theme、透视表、图表等尚未映射到 LiteExcel 模型的 OOXML 部件不保证保留。
-
-可选传入第三个参数覆盖指定属性：
-
-```csharp
-XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
-{
-    LastModifiedBy = "张三",
-    Title = "更新后的报表",
-});
-```
-
-### 表头对齐
-
-追加时，如果新数据的表头和原表头不一致：
-- 新表头中不存在于原表头的列，会追加到原表头末尾
-- 数据行按列名对齐（新增列补 Empty）
-
----
-
-## 17. List&lt;T&gt; 映射（反射，AOT 安全）
-
-> **注意**：List&lt;T&gt; API 使用反射，已用 `[DynamicallyAccessedMembers]` 标注，兼容 AOT/裁剪（详见 §24）。调用时请使用具体类型（如 `Excel.Write<Person>`）。
-
-### 基本写出
+`[LiteColumn]` 特性控制 List\<T\> 映射时的列名 / 顺序 / 格式 / 忽略 / 公式：
 
 ```csharp
 public class Person
 {
+    [LiteColumn(Name = "姓名", Order = 0)]
     public string Name { get; set; } = "";
+
+    [LiteColumn(Name = "年龄", Order = 1, Format = "0")]
     public int Age { get; set; }
-    public DateTime Birthday { get; set; }
-}
 
-var list = new List<Person>
-{
-    new() { Name = "张三", Age = 25, Birthday = new DateTime(2000, 1, 1) },
-    new() { Name = "李四", Age = 30, Birthday = new DateTime(1995, 5, 10) },
-};
-
-XlsxWriter.Write("people.xlsx", list);
-```
-
-### 基本读取
-
-```csharp
-var list = XlsxReader.Read<Person>("people.xlsx");
-```
-
-### 建簿并写入（Excel.Create）
-
-```csharp
-// 返回可继续使用的工作簿（样式/冻结/条件格式/密码等都能加）
-var wb = Excel.Create(list, "员工表");
-wb.Worksheets[0].HeaderStyle = new CellStyle { Bold = true };
-wb.SaveAs("people.xlsx");
-
-// 批量加表并写入
-wb.Worksheets.Add("历史", moreList);
-```
-
-### 导入到已有工作表（Worksheet.ImportData）
-
-```csharp
-var wb = Excel.Open("people.xlsx");
-var ws = wb.Worksheets[0];
-ws.ImportData(newList);                 // 清空现有内容，从 A1 重建（首行表头）
-ws.ImportData(dataTable, includeHeader: false);   // DataTable 版，可不写表头
-wb.Save();
-```
-
-`ImportData` 清空整表后重建（合并区一并清除），导入后仍可继续修改单元格样式。
-
-### [LiteColumn] 特性
-
-```csharp
-public class Product
-{
-    [LiteColumn(Name = "产品编码", Order = 0)]
-    public string Code { get; set; } = "";
-
-    [LiteColumn(Name = "产品名称", Order = 1)]
-    public string Name { get; set; } = "";
-
-    [LiteColumn(Name = "单价", Order = 2, Format = "#,##0.00")]
-    public decimal Price { get; set; }
-
-    [LiteColumn(Order = 3, Format = "yyyy-MM-dd")]
-    public DateTime CreatedAt { get; set; }
+    [LiteColumn(Name = "总额", Order = 2, Format = "#,##0.00", IsFormula = true)]
+    public string Total { get; set; } = "";   // 值可带或不带前导 "="
 
     [LiteColumn(Ignore = true)]
-    public string? InternalRemark { get; set; }  // 不输出
-
-    public int Stock { get; set; }  // 无特性，默认输出
+    public string Secret { get; set; } = "";  // 不输出
 }
 ```
 
-| 属性 | 说明 |
-|---|---|
-| `Name` | 列名（默认用属性名） |
-| `Order` | 列顺序（-1 按声明顺序） |
-| `Format` | 数字/日期格式 |
-| `IsFormula` | true 则把该字符串属性当公式写出（值可带或不带 `=`） |
-| `Ignore` | true 则不输出/读取 |
-
-### Fluent 配置（写出）
-
 ```csharp
-XlsxWriter.Write("people.xlsx", list, opt => opt
-    .Column(x => x.Name, "姓名")
-    .Column(x => x.Age, "年龄")
-    .Column(x => x.Birthday, "生日", "yyyy-MM-dd")
-    .Column(x => x.SumFormula, "合计", isFormula: true)   // 公式列
-    .Ignore(x => x.InternalRemark));
-
-// 也可设 SheetName 和 FreezeHeader
-XlsxWriter.Write("people.xlsx", list, opt =>
-{
-    opt.Column(x => x.Name, "姓名");
-    opt.FreezeHeader = true;
-    opt.SheetName = "员工";
-});
+var people = new List<Person> { new() { Name = "张三", Age = 30, Total = "=100*2", Secret = "隐藏" } };
+var wb = Excel.Create(people, "People");   // 表头：姓名 | 年龄 | 总额；Secret 列忽略
+wb.SaveAs("people.xlsx");
 ```
 
-### Fluent 配置（读取）
+输出：
 
-```csharp
-var list = XlsxReader.Read<Person>("people.xlsx", 0, opt => opt
-    .Column(x => x.Name, "Full Name")
-    .Column(x => x.Age, "Years"));
+```
+已写入 people.xlsx
 ```
 
-### 字典映射
+List\<T\> 映射自动转换的 CLR 类型：
+
+| CLR 类型 | 单元格类型 | 说明 |
+|---|---|---|
+| `int` / `long` / `short` / `byte` | `Number` | 整数 |
+| `double` / `float` / `decimal` | `Number` | 小数 |
+| `DateTime` | `Date` | 日期时间 |
+| `bool` | `Boolean` | 布尔值 |
+| `string` | `Text` | 文本 |
+
+以上类型均支持可空版本（`int?` / `DateTime?` 等），null 写为空单元格。
+
+#### 5.10 List\<T\> Fluent 配置（WriteOptions\<T\> / ReadOptions\<T\>）
+
+除了 `[LiteColumn]` 特性，还支持 Fluent API 与字典映射，适合临时调整列名 / 格式 / 忽略 / 公式：
 
 ```csharp
-var mapping = new Dictionary<string, string>
-{
-    { "Name", "姓名" },
-    { "Age", "年龄" },
-};
+// 写出时 Fluent 配置
+Excel.Write("people.xlsx", people, "Employees", opt => opt
+    .Column(p => p.Name, "姓名")                    // 指定列名
+    .Column(p => p.Age, "年龄", format: "0")        // 指定列名 + 数字格式
+    .Column(p => p.Total, "总额", isFormula: true)  // 公式列（值可带或不带前导 "="）
+    .Ignore(p => p.Secret)                          // 忽略属性
+);
 
-XlsxWriter.Write("people.xlsx", list, opt => opt.Map(mapping));
-var list = XlsxReader.Read<Person>("people.xlsx", 0, opt => opt.Map(mapping));
+// 读取时 Fluent 配置
+var list = Excel.Read<Person>("people.xlsx", "Employees", opt => opt
+    .Column(p => p.Name, "姓名")                    // 指定表头名 -> 属性映射
+    .Column(p => p.Age, "年龄")
+);
+
+// 字典映射（老项目常见）；configure 用命名参数，sheetName 取默认 "Sheet1"
+Excel.Write("people.xlsx", people, configure: opt => opt
+    .Map(new Dictionary<string, string> { { "Name", "姓名" }, { "Age", "年龄" } })
+);
 ```
 
-### 支持的数据类型
+输出：（直接输出一个people.xlsx文件）
 
-自动转换：`int`/`long`/`double`/`float`/`decimal`/`DateTime`/`bool`/`string` 及其可空版本。
+#### 5.11 DataTable 便利 API
 
-### 超级表（Table / ListObject）
-
-超级表是 Excel 的"插入 ▸ 表"——带条纹样式、表头筛选、结构化范围的区域。
-
-```csharp
-var wb = Excel.Create();
-var ws = wb.Worksheets[0];
-
-// 先准备数据（首行为表头）
-ws.SetValue("A1", "姓名"); ws.SetValue("B1", "薪资"); ws.SetValue("C1", "入职日期");
-for (int i = 2; i <= 501; i++) { ws.SetValue($"A{i}", $"员工{i}"); ws.SetValue($"B{i}", i * 100); }
-
-// 建表（区域至少 2 行：表头 + 1 行数据）
-var tbl = ws.AddTable("A1:C501", "员工表");          // 默认 TableStyleMedium9
-ws.AddTable("E1:F10", "历史表", TableStyleStyle.Medium6);  // 或指定枚举
-
-// 列格式（用户自定义）：映射到列 dxf
-tbl.Column("薪资").NumberFormat = "#,##0.00";
-tbl.Column("入职日期").NumberFormat = "yyyy/m/d";
-tbl.Column("姓名").Style = new CellStyle { FontColor = "#FF0000", Bold = true };
-
-// 样式开关
-tbl.ShowRowStripes = true;      // 斑马线（默认 true）
-tbl.ShowFirstColumn = false;    // 首列强调
-tbl.ShowLastColumn = false;     // 末列强调
-tbl.ShowColumnStripes = false;  // 列条纹
-tbl.AutoFilter = true;          // 表头筛选下拉（默认 true）
-tbl.CustomStyleName = "TableStyleDark3";   // 或用任意样式名字符串（优先生效）
-
-wb.SaveAs("table.xlsx");
-
-// 读回
-foreach (var t in Excel.Open("table.xlsx").Worksheets[0].Tables)
-    Console.WriteLine($"{t.Name} {t.Ref} {t.StyleName}");
-
-// 删除
-ws.RemoveTable("员工表");
-```
-
-> **条纹样式机理**：条纹长什么样由 Excel 程序内置渲染，**文件里只存样式名字符串**。Excel 内置 60 种样式名：`TableStyleLight1~21`、`TableStyleMedium1~28`、`TableStyleDark1~11`（`None` 表示无样式）。名字写错/大小写错时 Excel 静默退化为无样式（不报错）；库侧用字符串重载写了未知名字会经 `OnDegradation` 上报提示。
-
-> **命名规则**：表名全簿唯一；不能以数字开头、不能含空格、不能是单元格地址（如 `C1`）；允许中文。
-
-> **支持范围**：仅 xlsx/xlsm 写出与读回；xls/xlsb/csv 走 `OnDegradation` 降级上报（不写表）。暂不支持：汇总行、结构化引用（`表名[#All]`）、自定义条纹配色定义。
-
----
-## 18. DataTable 便利 API（AOT 安全）
-
-> DataTable 自带 schema，无需反射，AOT 安全。
-
-### 从 DataTable 写出
+DataTable 自带列结构，**无需反射**（不触发反射映射），AOT 安全。首行自动写为列名：
 
 ```csharp
 var dt = new DataTable("订单");
@@ -1733,409 +757,1063 @@ dt.Columns.Add("OrderID", typeof(int));
 dt.Columns.Add("Customer", typeof(string));
 dt.Columns.Add("Amount", typeof(decimal));
 dt.Columns.Add("Date", typeof(DateTime));
-
 dt.Rows.Add(1001, "Alice", 599.99m, new DateTime(2024, 6, 1));
 dt.Rows.Add(1002, "Bob", 1299.50m, new DateTime(2024, 6, 15));
 
-XlsxWriter.Write("orders.xlsx", dt, "Orders");
-```
+Excel.Write("orders.xlsx", dt, "Orders");   // 一步写出
 
-### 读为 DataTable
+var back = Excel.ReadAsDataTable("orders.xlsx", "Orders");   // 读回（首行为表头）
+foreach (DataRow row in back.Rows)
+    Console.WriteLine($"#{row["OrderID"]} | {row["Customer"]} | {row["Amount"]:0.00}");
 
-```csharp
-var dt = XlsxReader.ReadAsDataTable("orders.xlsx", sheetIndex: 0);
-// 或按名
-var dt = XlsxReader.ReadAsDataTable("orders.xlsx", "Orders");
+var wb = Excel.Create(dt);        // 一步建簿；sheetName 缺省取 DataTable.TableName（再空则 Sheet1）
+Console.WriteLine("sheet: " + wb.Worksheets[0].Name);
+wb.SaveAs("orders2.xlsx");
 
-foreach (DataRow row in dt.Rows)
-{
-    Console.WriteLine($"#{row["OrderID"]} | {row["Customer"]} | {row["Amount"]:C}");
-}
-```
-
-### 建簿并导入
-
-```csharp
-// 一步建簿并写 DataTable（表名空则取 DataTable.TableName，再空则 Sheet1）
-var wb = Excel.Create(dt);
-wb.SaveAs("orders.xlsx");
-
-// 或导入到已有工作表（清空整表后从 A1 重建；includeHeader=false 不写列名行）
 var opened = Excel.Open("orders.xlsx");
+// 导入到已有工作表：清空现有内容后从 A1 重建；includeHeader=false 不写列名行
 opened.Worksheets[0].ImportData(dt, includeHeader: false);
-opened.Save();
+opened.SaveAs("orders3.xlsx");
+Console.WriteLine("imported rows: " + Excel.ReadAsDataTable("orders3.xlsx", "Orders", firstRowIsHeader: false).Rows.Count);
 ```
+
+重要参数：
+
+| API | 参数 | 类型 | 说明 |
+|---|---|---|---|
+| `Excel.Write` | `sheetName` | `string` | 目标工作表名，默认 `"Sheet1"` |
+| `Excel.Write` | `options` | `ExcelWriteOptions?` | 写入选项（见 3.4） |
+| `Excel.Create` | `sheetName` | `string?` | 空则取 `DataTable.TableName`，再空则 `"Sheet1"` |
+| `Excel.ReadAsDataTable` | `sheetName` | `string?` | 目标工作表，null 读第一张表 |
+| `Excel.ReadAsDataTable` | `firstRowIsHeader` | `bool` | 首行是否作为列名，默认 `true` |
+| `ImportData` | `includeHeader` | `bool` | 是否写列名行，默认 `true`；导入会清空整表后从 A1 重建 |
+
+输出：
+
+```
+#1001 | Alice | 599.99
+#1002 | Bob | 1299.50
+sheet: 订单
+imported rows: 2
+```
+
+> ⚠️ DataTable 路径不经过反射映射（`[LiteColumn]` / Fluent 配置不适用）；首行始终为列名（`includeHeader=false` 除外）。
 
 ---
 
-## 19. Stream 读写
+### 6. 样式（CellStyle / Border / 对齐 / 换行）
 
-所有读写 API 都有 Stream 重载，适合内存流/网络流场景。
+#### 6.1 单元格样式 `CellStyle`
 
-### Stream 写出
-
-```csharp
-using var ms = new MemoryStream();
-XlsxWriter.Write(ms, sheet);
-// ms 现在包含 xlsx 字节
-File.WriteAllBytes("output.xlsx", ms.ToArray());
-```
-
-### Stream 读取
+颜色统一使用 `"#RRGGBB"` 格式：
 
 ```csharp
-using var fs = File.OpenRead("output.xlsx");
-var sheet = XlsxReader.Read(fs, sheetIndex: 0);
-```
-
-### Stream 写出多表
-
-```csharp
-using var ms = new MemoryStream();
-XlsxWriter.Write(ms, new[] { sheet1, sheet2 });
-```
-
-### Stream 读取全部表
-
-```csharp
-using var fs = File.OpenRead("output.xlsx");
-var allSheets = XlsxReader.ReadAll(fs);
-```
-
-### Stream 流式读取
-
-```csharp
-using var fs = File.OpenRead("bigfile.xlsx");
-XlsxReader.StreamRows(fs, "Sheet1", row => { /* 处理行 */ });
-```
-
-### Stream 读为 DataTable
-
-```csharp
-using var fs = File.OpenRead("output.xlsx");
-var dt = XlsxReader.ReadAsDataTable(fs, 0);
-```
-
-> **注意**：Stream 重载不会关闭传入的 Stream（`leaveOpen: true`），调用方负责 Stream 生命周期。
-
----
-
-## 20. 流式读取与进度回调
-
-### StreamRows（逐行回调）
-
-```csharp
-XlsxReader.StreamRows("bigfile.xlsx", "Sheet1", row =>
+var style = new CellStyle
 {
-    // row 类型是 IReadOnlyList<Cell>
-    // 第一行（表头）会被自动跳过
-    string name = row[0].Text!;
-    int age = (int)row[1].Number;
-    // 处理数据...
-});
-```
-
-### ReadWithProgress（带进度）
-
-```csharp
-XlsxReader.ReadWithProgress("bigfile.xlsx", 0, (current, total) =>
-{
-    // current: 当前处理到第几行（从 1 开始）
-    // total: 数据行总数（不含表头）
-    Console.WriteLine($"进度: {current}/{total}");
-});
-
-// 也可读出结果
-var sheet = XlsxReader.ReadWithProgress("bigfile.xlsx", 0, (current, total) =>
-{
-    if (current % 100 == 0 || current == total)
-        Console.WriteLine($"读取 {current}/{total}");
-});
-```
-
----
-
-## 21. 文档属性（作者/时间/标题）
-
-文件属性对话框里显示的信息（作者、最后保存者、创建时间、标题等）。
-
-### 写出时携带文档属性
-
-```csharp
-var props = new WorkbookProperties
-{
-    Creator = "张三",                                    // 作者
-    LastModifiedBy = "李四",                              // 最后保存者
-    Created = DateTime.Now,                               // 创建时间
-    Modified = DateTime.Now,                              // 修改时间
-    Title = "月度报表",                                   // 标题
-    Subject = "财务",                                     // 主题
-    Application = "MyApp",                                // 应用程序名（可选）
+    FontName = "Arial",
+    FontSize = 12,
+    Bold = true,
+    Italic = true,
+    Underline = false,
+    Strikeout = false,
+    FontColor = "#FF0000",
+    FillColor = "#FFFF00",
+    HorizontalAlignment = HorizontalAlignment.Center,
+    VerticalAlignment = VerticalAlignment.Center,
+    WrapText = true,
+    NumberFormat = "#,##0.00",   // 用于 dxf 读回（超级表列格式 / 条件格式）
+    Border = new BorderStyle
+    {
+        Top = new BorderEdge { Style = "thin", Color = "#000000" },
+    },
 };
-
-XlsxWriter.Write("report.xlsx", sheet, props);
 ```
 
-> `Application` 为 null 时，默认取宿主程序集名（`Assembly.GetEntryAssembly().GetName().Name`）。
-
-### 读取文档属性
-
-```csharp
-var props = XlsxReader.ReadProperties("report.xlsx");
-Console.WriteLine($"作者: {props.Creator}");
-Console.WriteLine($"最后保存者: {props.LastModifiedBy}");
-Console.WriteLine($"创建时间: {props.Created}");
-Console.WriteLine($"修改时间: {props.Modified}");
-Console.WriteLine($"标题: {props.Title}");
-Console.WriteLine($"主题: {props.Subject}");
-Console.WriteLine($"应用程序: {props.Application}");
-```
-
-> 文件无 docProps 时不抛异常，返回空对象（所有字段为 null）。
-
-### 不带属性的写出（向后兼容）
-
-```csharp
-// 不传 props，不生成 docProps（行为与旧版一致）
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-### WorkbookProperties 字段说明
-
-| 字段 | 类型 | 对应 XML |
+| 参数 | 类型 | 说明 |
 |---|---|---|
-| `Creator` | `string?` | dc:creator |
-| `LastModifiedBy` | `string?` | cp:lastModifiedBy |
-| `Created` | `DateTime?` | dcterms:created |
-| `Modified` | `DateTime?` | dcterms:modified |
-| `Title` | `string?` | dc:title |
-| `Subject` | `string?` | dc:subject |
-| `Application` | `string?` | app.xml Application |
+| `FontName` | `string?` | 字体名，如 `"Arial"` |
+| `FontSize` | `double` | 字号，默认 11 |
+| `Bold` | `bool` | 加粗 |
+| `Italic` | `bool` | 斜体 |
+| `Underline` | `bool` | 下划线 |
+| `Strikeout` | `bool` | 删除线 |
+| `FontColor` | `string?` | 字体颜色，`"#RRGGBB"` 格式 |
+| `FillColor` | `string?` | 填充颜色，`"#RRGGBB"` 格式 |
+| `HorizontalAlignment` | `HorizontalAlignment` | 水平对齐，默认 `General` |
+| `VerticalAlignment` | `VerticalAlignment` | 垂直对齐，默认 `Bottom` |
+| `WrapText` | `bool` | 自动换行 |
+| `NumberFormat` | `string?` | 数字格式代码（用于 dxf 读回） |
+| `Border` | `BorderStyle?` | 边框 |
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.Cell("A1").Style = style;
+Console.WriteLine(ws.Cell("A1").Style.Bold);   // True
+```
+
+输出：
+
+```
+True
+```
+
+#### 6.2 边框 `BorderStyle` / `BorderEdge`
+
+```csharp
+var style = new CellStyle
+{
+    Border = new BorderStyle
+    {
+        Top = new BorderEdge { Style = "thin", Color = "#000000" },
+        Bottom = new BorderEdge { Style = "double" },
+        Left = new BorderEdge { Style = "medium", Color = "#333333" },
+        Right = new BorderEdge { Style = "dashed" },
+    },
+};
+```
+
+`BorderEdge.Style` 为字符串，常用值：`thin` / `medium` / `thick` / `double` / `dashed` / `dotted` 等。
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.Cell("A1").Style = style;
+Console.WriteLine(ws.Cell("A1").Style.Border.Top.Style);   // thin
+```
+
+输出：
+
+```
+thin
+```
+
+#### 6.3 对齐与换行
+
+```csharp
+public enum HorizontalAlignment { General, Left, Center, Right }
+public enum VerticalAlignment { Top, Center, Bottom }
+```
+
+`WrapText = true` 启用单元格内自动换行。
+
+输出：（本示例无控制台输出）
+
+#### 6.4 设置单元格 / 区域样式（对象模型 API）
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// 单格
+ws.Cell("A1").Style = new CellStyle { Bold = true, FillColor = "#D9E1F2" };
+ws.Cell("A1").NumberFormat = "yyyy/m/d";
+
+// 区域统一样式
+ws.Range("A1:C10").Style = new CellStyle { HorizontalAlignment = HorizontalAlignment.Center };
+Console.WriteLine(ws.Cell("A1").NumberFormat);   // yyyy/m/d
+```
+
+输出：
+
+```
+yyyy/m/d
+```
+
+#### 6.5 表头样式 `HeaderStyle`
+
+作用于 `SheetData.Headers` 表头行。
+
+> ⚠️ **生效条件**：`HeaderStyle` 仅在有独立表头行（List\<T\> / DataTable 写入，或低层 `SheetData.Headers`（见附录 B.1））时生效。由于**对象模型是"整表网格"模型**（`ws.SetValue` 写入的所有行都算数据行，没有独立表头行），直接 `ws.HeaderStyle = ...` **不会**产生效果。对象模型下要给首行加样式，用 `RowStyles` 指定第 0 行：
+
+```csharp
+// 方式一：低层 / List<T> / DataTable 路径（有 Headers）
+ws.HeaderStyle = new CellStyle { Bold = true, FillColor = "#4472C4", FontColor = "#FFFFFF" };
+```
+
+```csharp
+// 方式二：对象模型网格（首行当表头 → 用 RowStyles 第 0 行）
+ws.SetValue("A1", "Name"); ws.SetValue("B1", "Age");
+ws.RowStyles = new Dictionary<int, CellStyle>
+{
+    { 0, new CellStyle { Bold = true, FillColor = "#4472C4", FontColor = "#FFFFFF" } },
+};
+Console.WriteLine(ws.RowStyles[0].Bold);   // True
+```
+
+输出：
+
+```
+True
+```
+
+#### 6.6 全表默认样式 `DefaultStyle`
+
+优先级最低：
+
+```csharp
+ws.DefaultStyle = new CellStyle { FontName = "Consolas", FontSize = 10 };
+Console.WriteLine(ws.DefaultStyle.FontName);   // Consolas
+```
+
+输出：
+
+```
+Consolas
+```
+
+#### 6.7 行级样式 `RowStyles`
+
+key 为 **0-based 行索引**：
+
+```csharp
+ws.RowStyles = new Dictionary<int, CellStyle>
+{
+    { 1, new CellStyle { FillColor = "#FCE4D6" } },   // 第 2 行（0-based 1）
+};
+Console.WriteLine(ws.RowStyles[1].FillColor);   // #FCE4D6
+```
+
+输出：
+
+```
+#FCE4D6
+```
+
+#### 6.8 列级样式 `ColumnStyles`
+
+key 为 **0-based 列索引**：
+
+```csharp
+ws.ColumnStyles = new Dictionary<int, CellStyle>
+{
+    { 2, new CellStyle { HorizontalAlignment = HorizontalAlignment.Right } },  // 第 3 列
+};
+Console.WriteLine(ws.ColumnStyles[2].HorizontalAlignment);   // Right
+```
+
+输出：
+
+```
+Right
+```
+
+#### 6.9 样式优先级（覆盖式）
+
+写出时按如下优先级解析（**行列级样式优先级更明确**）：
+
+- **数据行**：`Cell.Style` > `RowStyle` > `ColumnStyle` > `DefaultStyle`
+- **表头行**：`HeaderStyle` > `ColumnStyle` > `DefaultStyle`
+
+```csharp
+// 示例：单元格样式覆盖行样式，行样式覆盖列样式，列样式覆盖默认样式
+ws.DefaultStyle = new CellStyle { FontSize = 10 };
+ws.ColumnStyles = new Dictionary<int, CellStyle> { { 0, new CellStyle { Bold = true } } };
+ws.RowStyles = new Dictionary<int, CellStyle> { { 0, new CellStyle { Italic = true } } };
+ws.Cell("A1").Style = new CellStyle { Underline = true };
+// A1 最终：Underline（单元格） + Italic（行） + Bold（列） + FontSize 10（默认）
+```
+
+输出：（本示例无控制台输出）
 
 ---
-## 22. 文件级安全（打开密码 / 修改密码）
 
-### 打开加密文件
+### 7. 合并单元格
 
-读取带打开密码的 xlsx/xlsm/xlsb 文件时，需通过 `ExcelReadOptions` 提供密码：
-
-```csharp
-var wb = Excel.Open("encrypted.xlsx", new ExcelReadOptions
-{
-    OpenPassword = "1",           // 打开密码
-    ModifyPassword = "12",        // 修改密码（可选）
-});
-```
-
-> 仓库内加密样本（`files/` 目录下）的密码约定：打开密码 = `1`，修改密码 = `12`。例如 `打开修改都需要密码.xlsx`（打开=1、修改=12）、`12.*`（仅修改=12）、`*.`（仅打开=1）。
-
-### 读取安全状态
-
-打开后可通过 `Workbook.Security` 查询文件安全状态：
+#### 7.1 写出合并
 
 ```csharp
-var security = wb.Security;
+var ws = Excel.Create().Worksheets["Sheet1"];
 
-bool hasOpenPwd = security.HasOpenPassword;     // 是否有打开密码
-bool hasModPwd  = security.HasModifyPassword;   // 是否有修改密码（写保护）
-bool hasModAcc  = security.HasModifyAccess;     // 是否已获得修改授权（乐观授权）
-bool isReadOnly = security.IsReadOnly;          // 是否只读
-bool canSave    = security.CanSave;             // 当前能否保存
+ws.SetValue("A1", "Merged Title");
+ws.Merge("A1:D1");                    // A1 地址
+ws.Merge(2, 1, 2, 3);                 // 1-based 行列（合并 A2:C2）
+ws.Merge("A3:B4");
+
+// 区域方式
+ws.Range("C5:E5").Merge();
+Console.WriteLine(ws.MergedRanges.Count);   // 4
 ```
 
-### 设置密码
+输出：
+
+```
+4
+```
+
+#### 7.2 取消合并
 
 ```csharp
-// 设置打开密码（保存时对文件加密）
-wb.Security.SetOpenPassword("mySecret");
-
-// 设置修改密码（写保护，fileSharing，非 zip 加密）
-wb.Security.SetModifyPassword("myModSecret");
-
-wb.SaveAs("protected.xlsx");
+ws.Unmerge("A1:D1");
+ws.Range("C5:E5").Unmerge();
 ```
 
-### 移除密码
+输出：（本示例无控制台输出）
+
+#### 7.3 读取合并区域
+
+`Worksheet.MergedRanges` 返回 `IReadOnlyList<CellRange>`（**0-based**，与低层模型一致（见附录 B.1））：
 
 ```csharp
-// 移除打开密码
-wb.Security.RemoveOpenPassword();
-
-// 移除修改密码（需已获得修改授权，即打开时提供了 ModifyPassword）
-wb.Security.RemoveModifyPassword();
-
-wb.SaveAs("plain.xlsx");
+var opened = Excel.Open("merged.xlsx");
+var ws = opened.Worksheets[0];
+foreach (var m in ws.MergedRanges)
+    Console.WriteLine($"{m.FirstRow},{m.FirstCol} - {m.LastRow},{m.LastCol}");
 ```
 
-### 密码继承与授权规则
+输出：
 
-- 打开加密文件后，`SaveAs` **默认继承打开密码**；如需移除，保存前调用 `Security.RemoveOpenPassword()`。
-- 修改密码是写保护（`<fileSharing>`），不是 zip 加密；读取时提供 `ModifyPassword` 即视为已授权（乐观授权，不校验样本值）。
-- 密码**绝不会**出现在异常消息、日志或测试输出中。
-- 仅支持 xlsx/xlsm/xlsb；csv/xls 不支持密码。
+```
+0,0 - 0,3
+1,0 - 1,2
+2,0 - 3,1
+4,2 - 4,4
+```
 
-### 工作表 / 工作簿保护（2.4.6+）
+#### 7.4 合并区域填充
 
-工作表保护（`sheetProtection`）与工作簿保护（`workbookProtection`）是**编辑限制**（区别于上面的文件级密码）：
+读取时设置 `FillMergedCells = true` 会把左上角的值展开到整个合并区域：
 
 ```csharp
-// 工作表保护：锁定后按标志位限制编辑，可选密码
-wb.Worksheets[0].Protection = new SheetProtection
-{
-    Enabled = true,
-    SelectLockedCells = true,
-    SelectUnlockedCells = false,   // 不允许选定未锁定单元格
-    Sort = false,                  // 不允许排序
-    AutoFilter = false,            // 不允许自动筛选
-};
-wb.Worksheets[0].Protection.SetPassword("pw");
-
-// 工作簿保护：锁定结构（禁止增删/移动/重命名工作表）
-wb.Protection = new WorkbookProtection
-{
-    Enabled = true,
-    LockStructure = true,
-    LockWindows = false,
-};
-wb.Protection.SetPassword("wb");
-
-wb.SaveAs("protected.xlsx");
+var wb = Excel.Open("merged.xlsx", new ExcelReadOptions { FillMergedCells = true });
+// 合并区非左上角单元格现在也有值
 ```
 
-- 读回：`wb.Worksheets[i].Protection` / `wb.Protection` 自动填充；`VerifyPassword(pwd)` 校验保护密码。
-- 密码以 SHA-512 + salt 哈希写出（与 `fileSharing` 同机制），不含明文。
-- 仅支持 xlsx/xlsm 写出；xls/xlsb 走既有降级上报。
-- 已由 Excel COM 真实验证：打开后 `ProtectContents` / `ProtectStructure` 为 True。
+输出：（本示例无控制台输出）
 
 ---
 
-## 23. 错误处理
+### 8. 自动筛选
 
-### LiteExcelException
+#### 8.1 写出筛选
 
-所有面向用户的错误统一抛 `LiteExcelException`：
-
-```csharp
-try
-{
-    var sheet = XlsxReader.Read("not-an-xlsx.txt", 0);
-}
-catch (LiteExcelException ex)
-{
-    Console.WriteLine($"读取失败: {ex.Message}");
-    // "这不是有效的 xlsx 文件"
-}
-```
-
-### InvalidSheetNameException
-
-写出时 Sheet 名不合法：
+`Worksheet.Filter` 为 `AutoFilter` 对象，含 `Range`、每列条件 `Columns` 与 `HiddenRows`。Excel 的筛选区域**第一行始终是表头**——所以首先写入表头行，数据从第 2 行开始：
 
 ```csharp
-try
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// 表头行（筛选区域的第 1 行）
+ws.SetValue("A1", "Name");
+ws.SetValue("B1", "Type");
+ws.SetValue("C1", "Score");
+
+// 数据从第 2 行开始，共 541 行 → 区域 A1:C542
+for (int r = 2; r <= 542; r++)
 {
-    XlsxWriter.Write("bad.xlsx", new SheetData { SheetName = "sheet[1]" });
+    ws.SetValue(r, 1, $"Name {r - 1}");
+    ws.SetValue(r, 2, r % 2 == 0 ? "Active" : "Inactive");
+    ws.SetValue(r, 3, (r - 1) * 10);
 }
-catch (InvalidSheetNameException ex)
+
+ws.Filter = new AutoFilter
 {
-    Console.WriteLine(ex.Message);
-}
+    Range = "A1:C542",
+    Columns = new List<FilterColumn>
+    {
+        new FilterColumn
+        {
+            ColumnIndex = 1,                 // 0-based 列索引（第 2 列）
+            Type = FilterType.Equals,
+            Values = new List<string> { "Active" },
+        },
+    },
+};
 ```
 
-### 常见错误
+`AutoFilter` 关键成员：
 
-| 场景 | 异常类型 | 提示信息 |
+| 参数 | 类型 | 说明 |
 |---|---|---|
-| 非 xlsx 文件 | `LiteExcelException` | "这不是有效的 xlsx 文件" |
-| Sheet 名不存在 | `LiteExcelException` | "找不到工作表：{name}（共有 {n} 张表）" |
-| Sheet 名非法 | `InvalidSheetNameException` | 含具体原因 |
-| Sheet 索引越界 | `ArgumentOutOfRangeException` | "工作表索引超出范围" |
-| 空表列表 | `ArgumentException` | "至少需要一张工作表" |
+| `Range` | `string` | 筛选区域 A1 风格引用，首行为表头 |
+| `Columns` | `List<FilterColumn>` | 每列筛选条件，0 基列索引 |
+| `HiddenRows` | `HashSet<int>` | 手动隐藏的 0 基行索引集合（可选，见 8.6） |
 
-> 异常消息目前为中文。
+`FilterColumn` 关键成员：
 
----
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `ColumnIndex` | `int` | 0 基列索引（第 1 列 = 0） |
+| `Type` | `FilterType` | 条件类型，见 8.2 |
+| `Values` | `List<string>` | 匹配值集合 |
+| `Operator` | `FilterOperator` | `Type = Compare` 时的比较操作符，见 8.3 |
+| `MinValue` / `MaxValue` | `string?` | `Between` 的下 / 上界 |
 
-## 24. AOT 兼容性
+输出：（本示例无控制台输出）
 
-全部公开 API 均兼容 Native AOT / 裁剪。库以 `IsAotCompatible` 编译，并经过两类实测验证：
+> ⚠️ 不要把数据写进筛选区域的第一行——Excel 会把该行当作表头（显示筛选箭头），数据从第 2 行起才能正确参与筛选。
 
-- **编译期**：仓库内置 `tests/LiteExcel.AotSmoke`（`PublishAot` + `TrimmerRootAssembly Include="LiteExcel"`），ILC 遍历库全部代码路径做裁剪分析，publish 零 IL 警告。
-- **运行期**：以原生 AOT 可执行文件实测覆盖 xlsx/xlsb/xls/csv 读写、`[LiteColumn]`、公式列、Fluent 表达式、可空/decimal、DataTable、`Excel.Create<T>`/`ImportData`/`Add<T>`、条件格式、命名区域、图片（Floating/InCell）、流式读写、降级回调、超链接、冻结窗格，全部断言通过。
+#### 8.2 筛选条件类型 `FilterType`
 
-| API | AOT 说明 |
-|---|---|
-| 对象模型（`Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells`） | 无反射 |
-| 流式（`Excel.CreateWriter` / `Excel.StreamRows`） | 无反射 |
-| `SheetData` 读写（`Read` / `Write` / `Append` / `AutoColumnWidths`） | 无反射 |
-| DataTable（`ReadAsDataTable` / `Write(path, DataTable)` / `Create(DataTable)` / `ImportData(DataTable)`） | 无反射 |
-| List&lt;T&gt; 映射（`Excel.Read<T>` / `Excel.Write<T>` / `Excel.Create<T>` / `Worksheet.ImportData<T>` / `WorksheetCollection.Add<T>`） | 使用反射，已用 `[DynamicallyAccessedMembers]` 标注，AOT/裁剪安全 |
-| `WriteOptions.Column<TProp>` / `Ignore<TProp>` | 只读表达式树的 `Member.Name`，从不 `.Compile()`，无成员反射 |
-
-> **调用约束**：`List<T>` 泛型 API 请使用具体类型（如 `Excel.Write<Employee>`）。若在你的未标注开放泛型方法中转发，编译器会提示 IL2091 警告，需给对应类型参数补上标注——这是正确的传染行为。
-
-> **读取入口边界**：`Excel.Read<T>` / `XlsxReader.Read` 仅支持 xlsx/xlsm（OpenXML 文本格式）；**xls / xlsb / csv 的读取请走 `Excel.Open(path)`**（门面按扩展名路由到对应后端）。
-
-> **InvariantGlobalization**：`InvariantGlobalization=true`（AOT 项目常见配置）下，19 项原生可执行文件断言全部通过，含 xls/xlsb 读写。注意 xls 的 ANSI 文本在 Invariant 模式下按 Latin1 解码，非当前系统代码页的字符（如中文 GBK 文本）可能失真——这是 xls 二进制格式的固有限制，与 AOT 无关。
-
----
-
-## 25. 条件格式（2.4.3+）
-
-条件格式支持四类：单元格比较 / 公式 / 色阶 / 数据条。
-
-### 单元格比较
+`FilterColumn.Type` 指定某列的筛选条件类型，枚举取值如下：
 
 ```csharp
-var ws = wb.Worksheets[0];
+public enum FilterType { Equals, Compare, Contains, BeginsWith, EndsWith, Blank }
+```
+
+输出：（本示例无控制台输出）
+
+#### 8.3 Compare 操作符 `FilterOperator`
+
+当 `FilterColumn.Type = FilterType.Compare` 时，用 `Operator` 指定比较关系：
+
+```csharp
+public enum FilterOperator { GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual, Between }
+```
+
+```csharp
+new FilterColumn
+{
+    ColumnIndex = 2,
+    Type = FilterType.Compare,
+    Operator = FilterOperator.GreaterThan,
+    Values = new List<string> { "500" },
+};
+```
+
+输出：（本示例无控制台输出）
+
+#### 8.4 Between 示例
+
+区间筛选用 `Operator = FilterOperator.Between` 并配合 `MinValue` / `MaxValue`：
+
+```csharp
+new FilterColumn
+{
+    ColumnIndex = 2,
+    Type = FilterType.Compare,
+    Operator = FilterOperator.Between,
+    MinValue = "100",
+    MaxValue = "500",
+};
+```
+
+输出：（本示例无控制台输出）
+
+#### 8.5 多条件（AND 逻辑）
+
+多个 `FilterColumn` 同时生效（同一行需满足所有列条件）：
+
+```csharp
+ws.Filter = new AutoFilter
+{
+    Range = "A1:D542",
+    Columns = new List<FilterColumn>
+    {
+        new FilterColumn { ColumnIndex = 1, Type = FilterType.Equals, Values = new() { "Active" } },
+        new FilterColumn { ColumnIndex = 2, Type = FilterType.Compare, Operator = FilterOperator.GreaterThan, Values = new() { "500" } },
+    },
+};
+```
+
+输出：（本示例无控制台输出）
+
+#### 8.6 手动指定隐藏行
+
+`HiddenRows` 为 0-based 行索引集合（相对 `Rows`）：
+
+```csharp
+ws.Filter = new AutoFilter
+{
+    Range = "A1:D542",
+    HiddenRows = new HashSet<int> { 1, 3, 5 },   // 隐藏第 2、4、6 行
+};
+```
+
+输出：（本示例无控制台输出）
+
+#### 8.7 读取筛选
+
+打开文件后通过 `Worksheet.Filter` 读取筛选区域与各列条件：
+
+```csharp
+var opened = Excel.Open("filtered.xlsx");
+var filter = opened.Worksheets[0].Filter;
+if (filter is not null)
+{
+    Console.WriteLine(filter.Range);
+    foreach (var col in filter.Columns)
+        Console.WriteLine($"{col.ColumnIndex}: {col.Type} {string.Join(",", col.Values)}");
+}
+```
+
+输出：
+
+```
+A1:C542
+1: Equals Active
+```
+---
+
+### 9. 行高与列宽（含 AutoColumnWidths）
+
+#### 9.1 设置行高
+
+`Worksheet.RowHeights` 为 `Dictionary<int, double>`，key 为 **0-based 行索引**，单位 **磅（point）**：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "Tall row");
+ws.RowHeights = new Dictionary<int, double> { { 0, 30.0 } };   // 第 1 行高 30 磅
+```
+
+输出：（本示例无控制台输出）
+
+#### 9.2 设置列宽
+
+`Worksheet.ColumnWidths` 为 `Dictionary<int, double>`，key 为 **0-based 列索引**：
+
+```csharp
+ws.ColumnWidths = new Dictionary<int, double>
+{
+    { 0, 20.0 },
+    { 1, 15.0 },
+};
+```
+
+输出：（本示例无控制台输出）
+
+#### 9.3 列宽自适应 `AutoColumnWidths`
+
+`Worksheet.AutoColumnWidths()` 按表内现有内容估算每列宽度（中文字符算 2，英文 / 数字算 1，范围 `[8, 50]`），结果写入 `ColumnWidths`：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "Name");
+ws.SetValue("A2", "Zhang San");
+ws.SetValue("B1", "Description");
+ws.SetValue("B2", "A very long description that should widen the column");
+ws.AutoColumnWidths();
+// 现在 ws.ColumnWidths 已按内容估算
+```
+
+读回验证：
+
+```csharp
+var opened = Excel.Open("autowidth.xlsx");
+var widths = opened.Worksheets[0].ColumnWidths;
+if (widths is not null)
+    foreach (var kv in widths)
+        Console.WriteLine($"Col {kv.Key}: {kv.Value:F1}");
+```
+
+输出：
+
+```
+Col 0: 9.0
+Col 1: 50.0
+```
+
+> ⚠️ `AutoColumnWidths` 为估算值（中文字符按 2、英文/数字按 1，钳制在 `[8, 50]`），与 Excel 实际渲染宽度可能有细微差异。
+
+#### 9.4 写出时自动适配
+
+`Excel.Write` 的 `ExcelWriteOptions.AutoFitColumns = true` 会在写出前对每张表自动估算列宽：
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets["Sheet1"].SetValue("A1", "自动适配列宽");
+Excel.Write("out.xlsx", wb, new ExcelWriteOptions { AutoFitColumns = true });
+```
+
+输出：已写入 out.xlsx
+
+---
+
+### 10. 批注
+
+#### 10.1 写出批注
+
+`Worksheet.Comments` 为 `Dictionary<string, string>`，key 为 **A1 格式单元格引用**，value 为批注文本：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string>
+{
+    { "A1", "This is a comment on A1" },
+    { "B1", "Note for B1 <with special chars>" },
+};
+```
+
+输出：（本示例无控制台输出）
+
+> ⚠️ 批注仅支持 xlsx / xlsm；写出到 xls / xlsb / csv 时按降级机制丢弃（见第 22 章）。批注写回依赖 OOXML VML legacyDrawing，需用真实 Excel 打开验证。
+
+#### 10.2 读回批注
+
+```csharp
+var opened = Excel.Open("comments.xlsx");
+var comments = opened.Worksheets[0].Comments;
+if (comments is not null && comments.TryGetValue("A1", out var text))
+    Console.WriteLine(text);   // 输出: This is a comment on A1
+```
+
+输出：
+
+```
+This is a comment on A1
+```
+
+#### 10.3 对象模型 API：给指定单元格加 / 读批注
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.Cell("C5").SetValue("data");
+
+// 加批注
+ws.Comments ??= new Dictionary<string, string>();
+ws.Comments["C5"] = "审核通过";
+
+// 读批注
+var opened = Excel.Open("comments2.xlsx");
+string? note = null;
+opened.Worksheets[0].Comments?.TryGetValue("C5", out note);
+Console.WriteLine(note);   // 输出: 审核通过
+```
+
+输出：
+
+```
+审核通过
+```
+
+---
+
+### 11. 超链接（外部 / 内部）
+
+#### 11.1 写出超链接
+
+`Cell.Hyperlink` 为 `Hyperlink` 对象，支持外部链接（URL / 文件路径）与工作簿内部跳转：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// 外部链接
+ws.Cell("A1").SetValue("OpenAI");
+ws.Cell("A1").Hyperlink = new Hyperlink
+{
+    Target = "https://openai.com",
+    Tooltip = "Visit OpenAI",
+    IsInternal = false,
+};
+
+// 内部跳转（Target 以 '#' 开头）
+ws.Cell("B1").SetValue("Go to Sheet2");
+ws.Cell("B1").Hyperlink = new Hyperlink
+{
+    Target = "#Sheet2!A1",
+    IsInternal = true,
+};
+```
+
+输出：（本示例无控制台输出）
+
+#### 11.2 Hyperlink 属性
+
+`Cell.Hyperlink` 为 `Hyperlink` 对象，成员如下：
+
+- `Target`：链接目标。内部链接格式如 `#SheetName!A1`；外部为完整 URL 或文件路径。
+- `Tooltip`：鼠标悬停提示文本（可选）。
+- `IsInternal`：是否工作簿内部跳转。
+
+输出：（本示例无控制台输出）
+
+#### 11.3 读回超链接
+
+打开文件后通过 `Cell.Hyperlink` 读取超链接信息：
+
+```csharp
+var opened = Excel.Open("links.xlsx");
+var cell = opened.Worksheets[0].Cell("A1");
+if (cell.Hyperlink is { } h)
+    Console.WriteLine($"{h.Target} internal={h.IsInternal} tooltip={h.Tooltip}");
+```
+
+输出：
+
+```
+https://openai.com internal=False tooltip=Visit OpenAI
+```
+
+超链接在 xlsx / xlsm / xlsb / xls 四格式读写均支持。
+
+---
+
+### 12. 冻结窗格
+
+#### 12.1 设置冻结行 / 列
+
+`Worksheet.FreezeRows` / `FreezeColumns` 为 1-based 冻结行 / 列数（0 = 不冻结）：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.FreezeRows = 2;       // 冻结前 2 行
+ws.FreezeColumns = 3;    // 冻结前 3 列
+```
+
+输出：（本示例无控制台输出）
+
+#### 12.2 FreezeHeader 兼容
+
+`FreezeHeader = true` 等价于 `FreezeRows = 1`：
+
+```csharp
+ws.FreezeHeader = true;   // 冻结首行
+```
+
+输出：（本示例无控制台输出）
+
+#### 12.3 对象模型 API
+
+通过属性直接设置冻结行列（等价于 12.1）：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.FreezeRows = 1;
+ws.FreezeColumns = 1;
+```
+
+输出：（本示例无控制台输出）
+
+#### 12.4 读回冻结
+
+打开文件后读取 `FreezeRows` / `FreezeColumns`：
+
+```csharp
+var opened = Excel.Open("frozen.xlsx");
+var ws = opened.Worksheets[0];
+Console.WriteLine($"{ws.FreezeRows} rows, {ws.FreezeColumns} cols");
+```
+
+输出：
+
+```
+2 rows, 3 cols
+```
+
+冻结窗格在 xlsx / xlsb / xls 三格式任意行列冻结均支持。
+
+---
+
+### 13. 图片（Floating / InCell / 读回）
+
+图片仅支持 xlsx / xlsm。`Worksheet.AddImage` 添加图片，`Worksheet.Images` 读回。
+
+#### 13.1 浮动图片（Floating）
+
+以 `row/column` 左上角为锚点，默认按图片原始尺寸显示：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+byte[] png = File.ReadAllBytes("logo.png");
+
+ws.AddImage(png, 1, 1);                            // 锚点 A1，原始尺寸
+ws.AddImage(png, 1, 3, 120, 60);                   // 指定显示尺寸（像素）
+```
+
+`AddImage`（row/column 重载）重要参数：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `data` | `byte[]` | 图片二进制（PNG/JPEG/GIF/BMP） |
+| `row` / `column` | `int` | 1 基左上角锚点行列 |
+| `widthPx` / `heightPx` | `double?` | 显示尺寸（像素），null = 图片原始尺寸 |
+| `placement` | `ImagePlacement` | `Floating` / `InCell`，默认 `Floating` |
+
+输出：（本示例无控制台输出）
+
+> ⚠️ 图片仅支持 xlsx / xlsm（见第 20 章格式支持矩阵）。
+
+#### 13.2 单元格内嵌图片（InCell）
+
+Excel 365 InCell 图片（richData 体系）：
+
+```csharp
+ws.AddImage(png, 2, 1, placement: ImagePlacement.InCell);
+```
+
+输出：（本示例无控制台输出）
+
+> ⚠️ InCell 图片基于 Excel 365 richData 体系（写回为 richData 部件），老版本 Excel 可能无法识别。
+
+#### 13.3 图片放置枚举 `ImagePlacement`
+
+`ImagePlacement` 决定图片是嵌入单元格还是浮动：
+
+```csharp
+public enum ImagePlacement { InCell, Floating }
+```
+
+输出：（本示例无控制台输出）
+
+#### 13.4 高精度锚点 `ImageAnchor` 与移动方式 `ImageMoveMode`
+
+`ImageAnchor` 提供左上单元格 + EMU 偏移 + 显示尺寸 + 移动方式，写回时优先于 `Row`/`Column`：
+
+```csharp
+var anchor = new ImageAnchor
+{
+    TopLeftCell = "B2",
+    TopLeftOffsetX = 100,        // EMU 偏移（1px ≈ 9525）
+    TopLeftOffsetY = 50,
+    WidthPixels = 200,
+    HeightPixels = 100,
+    MoveMode = ImageMoveMode.MoveAndSizeWithCells,
+};
+ws.AddImage(png, anchor, name: "Chart", altText: "季度图表");
+```
+
+```csharp
+public enum ImageMoveMode
+{
+    MoveAndSizeWithCells,        // 随单元格移动并缩放
+    MoveButDontSizeWithCells,    // 随单元格移动但不缩放（默认）
+    FixedPosition,               // 固定位置
+}
+```
+
+`ImageAnchor` 重要参数：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `TopLeftCell` | `string` | 左上单元格 A1 引用 |
+| `TopLeftOffsetX` / `TopLeftOffsetY` | `int` | 左上偏移（EMU，1px≈9525） |
+| `WidthPixels` / `HeightPixels` | `double` | 显示尺寸（像素） |
+| `MoveMode` | `ImageMoveMode` | 移动 / 缩放方式，默认 `MoveButDontSizeWithCells` |
+
+`AddImage`（anchor 重载）重要参数：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `data` | `byte[]` | 图片二进制 |
+| `anchor` | `ImageAnchor` | 高精度锚点 |
+| `name` | `string?` | 图片名称（可选） |
+| `altText` | `string?` | 无障碍替换文本（可选） |
+
+输出：（本示例无控制台输出）
+
+> ⚠️ `ImageAnchor` 仅对 Floating 图片生效；InCell 请用 row/column 重载（`Anchor` 会被忽略）。
+
+#### 13.5 图片读回
+
+打开含图片的文件后，`Worksheet.Images` 自动填充：
+
+```csharp
+var opened = Excel.Open("with_images.xlsx");
+foreach (var img in opened.Worksheets[0].Images)
+{
+    Console.WriteLine($"{img.CellAddress} {img.Placement} {img.Data.Length} bytes");
+    // img.Data 为原始图片字节，img.Row/Column 为锚点，img.Extension 为扩展名
+}
+```
+
+输出：
+
+```
+A1 Floating 70 bytes
+C1 Floating 70 bytes
+A2 InCell 70 bytes
+```
+
+`WorksheetImage` 关键成员：`Data`（字节）、`Extension`、`Row`/`Column`（1-based 锚点）、`Placement`、`WidthPx`/`HeightPx`、`Name`、`Anchor`、`AltText`、`CellAddress`（只读 A1 引用）。
+
+#### 13.6 多 Sheet 混合使用
+
+不同工作表可分别使用 Floating 与 InCell 放置，互不干扰：
+
+```csharp
+byte[] img = File.ReadAllBytes("logo.png");
+var wb = Excel.Create();
+
+var wsBanner = wb.Worksheets[0];
+wsBanner.Name = "Banner";
+wsBanner.AddImage(img, 1, 1);                                 // 浮动图片
+
+var wsEmbed = wb.Worksheets.Add("Embed");
+wsEmbed.AddImage(img, 1, 1, placement: ImagePlacement.InCell); // 单元格内嵌图片
+
+wb.SaveAs("multi_images.xlsx");
+
+// 读回验证
+var opened = Excel.Open("multi_images.xlsx");
+foreach (var s in opened.Worksheets)
+    foreach (var im in s.Images)
+        Console.WriteLine($"{s.Name}: {im.CellAddress} {im.Placement} {im.Data.Length} bytes");
+```
+
+输出：
+
+```
+Banner: A1 Floating 70 bytes
+Embed: A1 InCell 70 bytes
+```
+
+> ⚠️ 图片仅支持 xlsx / xlsm（见第 20 章格式支持矩阵）。InCell 图片老版本 Excel 可能无法识别。
+---
+
+### 14. 数据验证
+
+#### 14.1 写出数据验证
+
+`Worksheet.Validations` 为 `List<DataValidation>`，通过对象初始化器逐条配置验证规则；数据验证仅 xlsx / xlsm 写出（其余格式经降级上报丢弃）：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+ws.Validations = new List<DataValidation>
+{
+    // 下拉列表（逗号分隔，用引号包裹）
+    new DataValidation
+    {
+        Type = DataValidationType.List,
+        Sqref = "A1:A10",
+        Formula1 = "\"Active,Inactive,Pending\"",
+        AllowBlank = true,
+        PromptTitle = "请选择",
+        Prompt = "从下拉列表选择状态",
+    },
+    // 整数区间验证
+    new DataValidation
+    {
+        Type = DataValidationType.WholeNumber,
+        Sqref = "B1:B10",
+        Formula1 = "1",
+        Formula2 = "100",
+    },
+};
+```
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Type` | `DataValidationType` | 验证类型（见 14.2） |
+| `Sqref` | `string` | 应用范围（A1 风格，如 `A1:A10`） |
+| `Formula1` | `string` | 列表验证为引号包裹的逗号分隔项；区间验证为下限 |
+| `Formula2` | `string?` | 区间验证上限（非区间可省略） |
+| `AllowBlank` | `bool` | 是否允许空值（默认 false） |
+| `PromptTitle` / `Prompt` | `string?` | 选中单元格时的输入提示标题 / 正文 |
+
+输出：（本示例无控制台输出）
+
+#### 14.2 数据验证类型 `DataValidationType`
+
+`DataValidationType` 决定验证规则类别，配合 `Formula1` / `Formula2` 使用：
+
+```csharp
+public enum DataValidationType { List, WholeNumber, Decimal, Date }
+```
+
+- `List`：下拉列表验证，`Formula1` 用引号包裹的逗号分隔列表。
+- `WholeNumber` / `Decimal` / `Date`：数值 / 日期验证，`Formula1` 为下限、`Formula2` 为上限（区间验证）。
+
+输出：（本示例无控制台输出）
+
+#### 14.3 读回数据验证
+
+打开含数据验证的文件后，`Worksheet.Validations` 自动回填，遍历即可打印每条规则：
+
+```csharp
+var opened = Excel.Open("validations.xlsx");
+var validations = opened.Worksheets[0].Validations;
+if (validations is not null)
+    foreach (var v in validations)
+        Console.WriteLine($"{v.Type} {v.Sqref} {v.Formula1} {v.Formula2}");
+```
+
+输出：
+
+```
+List A1:A10 Active,Inactive,Pending 
+WholeNumber B1:B10 1 100
+```
+
+---
+
+### 15. 条件格式（cellIs / expression / colorScale / dataBar / 长尾 / iconSet）
+
+条件格式在 xlsx / xlsm 读写。`Worksheet.ConditionalFormats` 为 `List<ConditionalFormat>`。
+
+#### 15.1 单元格值比较（cellIs）
+
+`ConditionalFormatType.CellIs` 按 `ConditionalOperator` 与固定值比较，命中后套用 `Style`：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "B2:B10",
     Type = ConditionalFormatType.CellIs,
-    Sqref = "B2:B100",
     Operator = ConditionalOperator.GreaterThan,
-    Formula = "60",
-    Style = new CellStyle { FontColor = "#FF0000" }, // 预警红
+    Formula = "100",
+    Style = new CellStyle { Bold = true, FillColor = "#FFC7CE" },
 });
 ```
 
-### 公式条件
+`ConditionalOperator`：`LessThan` / `LessThanOrEqual` / `Equal` / `NotEqual` / `GreaterThan` / `GreaterThanOrEqual` / `Between` / `NotBetween`。Between 用 `Formula`（下限）+ `Formula2`（上限）。
+
+`ConditionalFormat` 通用成员：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Sqref` | `string` | 应用范围（A1 风格，可含多个区域，如 `A1:A100 D2:D9`） |
+| `Type` | `ConditionalFormatType` | 规则类型（见本章各子节） |
+| `Operator` | `ConditionalOperator` | 仅 `CellIs` 有效（默认 `GreaterThan`） |
+| `Formula` / `Formula2` | `string?` | 比较目标 / Between 上限 |
+| `Style` | `CellStyle?` | 命中时的样式（字体 / 填充 / 边框，不含对齐与数字格式） |
+
+输出：（本示例无控制台输出）
+
+#### 15.2 公式条件（expression）
+
+`ConditionalFormatType.Expression` 用返回 TRUE / FALSE 的公式判定，公式用相对引用（当前单元格起算）：
 
 ```csharp
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "A1:A100",
     Type = ConditionalFormatType.Expression,
-    Sqref = "A2:E100",
-    Formula = "MOD(ROW(),2)=0",
-    Style = new CellStyle { FillColor = "#F2F2F2" },
+    Formula = "MOD(ROW(),2)=0",     // 偶数行高亮
+    Style = new CellStyle { FillColor = "#D9E1F2" },
 });
 ```
 
-### 色阶（低/中/高 2~3 色）
+输出：（本示例无控制台输出）
+
+#### 15.3 色阶（colorScale）
+
+`ConditionalFormatType.ColorScale` 按数值高低在低 / 高色间渐变，`MidColor` 非空时变为 3 色刻度：
 
 ```csharp
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "C2:C10",
     Type = ConditionalFormatType.ColorScale,
-    Sqref = "D2:D100",
     ColorScale = new ColorScaleInfo
     {
-        LowColor = "#FF0000",
-        MidColor = "#FFFF00",
-        HighColor = "#00FF00",
+        LowColor = "F8696B",
+        HighColor = "63BE7B",
+        MidColor = "FFEB84",        // 设 nonNull 时启用 3 色刻度
     },
 });
 ```
 
-### 数据条
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `LowColor` | `string` | 低值颜色（`#RRGGBB` 或 `RRGGBB`） |
+| `HighColor` | `string` | 高值颜色 |
+| `MidColor` | `string?` | 中间色；非空时为 3 色刻度，否则 2 色 |
+
+输出：（本示例无控制台输出）
+
+#### 15.4 数据条（dataBar）
+
+`ConditionalFormatType.DataBar` 在单元格内绘制与数值成比例的条形：
 
 ```csharp
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "D2:D10",
     Type = ConditionalFormatType.DataBar,
-    Sqref = "E2:E100",
     DataBar = new DataBarInfo
     {
-        Color = "#63C384",
+        Color = "638EC6",
         ShowValue = true,
         MinLengthPercent = 0,
         MaxLengthPercent = 100,
@@ -2143,264 +1821,1421 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 });
 ```
 
-### 读取
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Color` | `string` | 条形颜色（默认 Excel 蓝 `638EC6`） |
+| `ShowValue` | `bool` | 是否同时显示数值（默认 true；false 只显示条形） |
+| `MinLengthPercent` / `MaxLengthPercent` | `int` | 最短 / 最长条形长度百分比（0–100） |
 
-xlsx/xlsm 打开含条件格式的工作簿，`Worksheet.ConditionalFormats` 已回填：**xls/xlsb/csv 不支持条件格式**，写出那会按 [§26 能力降级回调](#26-能力降级回调ondegradation242) 上报。
+输出：（本示例无控制台输出）
 
-### 长尾类型（2.4.4+）
+#### 15.5 长尾文本 / 空值 / 错误 / 重复 / 前 N / 平均线
 
-除 `cellIs`/`expression`/`colorScale`/`dataBar` 外，追加支持：
-
-| 类型 | 枚举 | 说明 | 关键字段 |
-|---|---|---|---|
-| 文本包含 | `ContainsText` | 含指定文本 | `Text` |
-| 文本开头 | `BeginsWith` | 以指定文本开头 | `Text` |
-| 文本结尾 | `EndsWith` | 以指定文本结尾 | `Text` |
-| 文本不含 | `NotContainsText` | 不含指定文本 | `Text` |
-| 时间周期 | `TimePeriod` | 昨天/今天/上周等 | `TimePeriod`（如 `"thisMonth"`） |
-| 空单元格 | `Blanks` | 空白 | — |
-| 非空单元格 | `NoBlanks` | 非空白 | — |
-| 错误 | `Errors` | 错误值 | — |
-| 非错误 | `NoErrors` | 非错误值 | — |
-| 唯一值 | `Unique` | 本范围内唯一 | — |
-| 重复值 | `Duplicate` | 本范围内重复 | — |
-| 前 N 项 | `Top10` | 前 N 项或前 N% | `Rank` + `Percent` |
-| 高于平均 | `AboveAverage` | 高于本范围平均分 | — |
-| 低于平均 | `BelowAverage` | 低于本范围平均分 | — |
-
-示例：
+以下各类型为条件格式的长尾能力，命中规则与专用属性见注释：
 
 ```csharp
+// 包含指定文本
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
-    Type = ConditionalFormatType.ContainsText,
-    Sqref = "B2:B100",
-    Text = "urgent",
-    Style = new CellStyle { FontColor = "#FF0000" },
-});
-ws.ConditionalFormats.Add(new ConditionalFormat
-{
-    Type = ConditionalFormatType.Top10,
     Sqref = "A2:A100",
-    Rank = 3,        // 前 3 项；Percent=true 则前 3%
+    Type = ConditionalFormatType.ContainsText,
+    Text = "urgent",
+    Style = new CellStyle { Bold = true },
 });
+
+// 以指定文本开头 / 结尾 / 不包含
+// Type = BeginsWith / EndsWith / NotContainsText，同样用 Text
+
+// 文本长度比较
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Sqref = "B2:B100",
+    Type = ConditionalFormatType.TextLength,
+    Operator = ConditionalOperator.GreaterThan,
+    Formula = "10",
+});
+
+// 时间周期
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Sqref = "C2:C100",
+    Type = ConditionalFormatType.TimePeriod,
+    TimePeriod = "today",   // yesterday/today/tomorrow/lastWeek/thisWeek/nextWeek/lastMonth/thisMonth/nextMonth
+});
+
+// 空 / 非空 / 错误 / 非错误
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "D2:D100", Type = ConditionalFormatType.Blanks });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "D2:D100", Type = ConditionalFormatType.NoBlanks });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "E2:E100", Type = ConditionalFormatType.Errors });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "E2:E100", Type = ConditionalFormatType.NoErrors });
+
+// 唯一 / 重复值
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "F2:F100", Type = ConditionalFormatType.Unique });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "F2:F100", Type = ConditionalFormatType.Duplicate });
+
+// 前 N 项 / 前 N%
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Sqref = "G2:G100",
+    Type = ConditionalFormatType.Top10,
+    Rank = 10,
+    Percent = false,
+});
+
+// 高于 / 低于平均
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "H2:H100", Type = ConditionalFormatType.AboveAverage });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "H2:H100", Type = ConditionalFormatType.BelowAverage });
 ```
 
-### 图标集（iconSet，2.4.6+）
+输出：（本示例无控制台输出）
 
-在单元格内显示箭头 / 红绿灯 / 符号 / 星级等图标的条件可视化：
+#### 15.6 图标集（iconSet）
+
+`IconSetInfo` 提供 17 个内置集合枚举 + 任意集合名 + 阈值：
 
 ```csharp
-// 最简：三色箭头，百分比均分阈值（0/33/67）
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "I2:I100",
     Type = ConditionalFormatType.IconSet,
-    Sqref = "B2:B10",
-    IconSet = new IconSetInfo(),
-});
-
-// 指定集合 + 自定义阈值
-ws.ConditionalFormats.Add(new ConditionalFormat
-{
-    Type = ConditionalFormatType.IconSet,
-    Sqref = "C2:C10",
     IconSet = new IconSetInfo
     {
-        Style = IconSetStyle.FourRating,
+        Style = IconSetStyle.ThreeArrows,       // 默认三色箭头
         Percent = true,
         ShowValue = true,
-        Thresholds = new double[] { 25, 50, 75 },   // 图标数 - 1 个；为空则均分
+        // Thresholds 为空时按图标数均分百分比
+        // Thresholds = new double[] { 33, 66 },
     },
 });
-
-// 读回
-foreach (var cf in wb.Worksheets[0].ConditionalFormats)
-    if (cf.Type == ConditionalFormatType.IconSet && cf.IconSet is not null)
-        Console.WriteLine($"{cf.Sqref} {cf.IconSet.Style}");
 ```
 
-> **机理**：图标长什么样由 Excel 程序内置渲染，文件只存集合名字符串（同条纹样式）。Excel 内置 17 种集合：`3Arrows` / `3ArrowsGray` / `3Flags` / `3TrafficLights1` / `3TrafficLights2` / `3Signs` / `3Symbols` / `3Symbols2` / `4Arrows` / `4ArrowsGray` / `4RedToBlack` / `4Rating` / `4TrafficLights` / `5Arrows` / `5ArrowsGray` / `5Rating` / `5Quarters`。枚举 `IconSetStyle` 覆盖全部；`CustomStyleName` 可写任意集合名字符串。
->
-> **阈值约定**：默认按图标数均分（3 图标=0/33/67，4=0/25/50/75，5=0/20/40/60/80）；`Thresholds` 自定义（数量 = 图标数 - 1）。`Percent=false` 时阈值为绝对数值（`cfvo type="num"`）。xls/xlsb/csv 不支持条件格式，走降级上报。
+`IconSetStyle` 枚举（17 种）：`ThreeArrows` / `ThreeArrowsGray` / `ThreeFlags` / `ThreeTrafficLights` / `ThreeTrafficLights2` / `ThreeSigns` / `ThreeSymbols` / `ThreeSymbols2` / `FourArrows` / `FourArrowsGray` / `FourRedToBlack` / `FourRating` / `FourTrafficLights` / `FiveArrows` / `FiveArrowsGray` / `FiveRating` / `FiveQuarters`。也可用 `CustomStyleName` 指定任意集合名字符串（非空时优先生效）。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Style` | `IconSetStyle` | 内置集合（默认 `ThreeArrows`） |
+| `CustomStyleName` | `string?` | 任意集合名字符串；非空时优先生效 |
+| `Percent` | `bool` | 阈值按百分比（true）还是绝对数值（false），默认 true |
+| `ShowValue` | `bool` | 单元格内是否同显数值，默认 true |
+| `Thresholds` | `double[]?` | 自定义阈值（图标数 - 1 个，升序）；为空则按图标数均分 |
+
+输出：（本示例无控制台输出）
+
+#### 15.7 读回条件格式
+
+打开含条件格式的文件后，`Worksheet.ConditionalFormats` 自动回填，遍历即可打印每条规则：
+
+```csharp
+var opened = Excel.Open("cf.xlsx");
+var cfs = opened.Worksheets[0].ConditionalFormats;
+foreach (var cf in cfs)
+    Console.WriteLine($"{cf.Type} {cf.Sqref} {cf.Formula}");
+```
+
+输出：
+
+```
+CellIs B2:B10 100
+Expression A1:A100 MOD(ROW(),2)=0
+ColorScale C2:C10 
+DataBar D2:D10 
+IconSet I2:I100 
+```
+
+`ConditionalFormat` 其他成员：`Priority`（优先级，默认按注册顺序自动编号）、`Style`（条件满足时样式，不包含对齐与数字格式）。
 
 ---
 
-## 26. 命名区域（Name Range）
+### 16. 超级表（Table / ListObject，样式枚举 + 任意样式名 + 列格式）
 
-工作簿中的命名区域（如 `Score = S1!$B$2:$B$6`）通过 `Workbook.Names` 读取。包含：
+超级表在 xlsx / xlsm 读写。`Worksheet.AddTable` 创建，`Worksheet.Tables` 读回。
 
-- `Name` — 名称（如 `"Score"`）
-- `Reference` — 原始范围文本（如 `"S1!$B$2:$B$6"`，含 sheet 限定）
-- `LocalSheetId` — 并非 `-1` 时表示该名称为工作表局部；`-1` 表示工作簿全局
-- `IsLocalSheet` — 布尔快速地判断是否为局部名称
+#### 16.1 创建超级表
+
+覆盖区首行作为表头列名，至少需要表头 + 1 行数据：
 
 ```csharp
-var wb = Excel.Open("data.xlsx");
-foreach (var nr in wb.Names)
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// 先写表头 + 数据
+ws.SetValue("A1", "Product");
+ws.SetValue("B1", "Price");
+ws.SetValue("A2", "Apple");
+ws.SetValue("B2", 3.5);
+ws.SetValue("A3", "Banana");
+ws.SetValue("B3", 2.0);
+
+var table = ws.AddTable("A1:B3", "Products");     // 默认 Medium9 样式
+```
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `refAddress` | `string` | 表覆盖区域（A1 风格，首行恒为表头） |
+| `name` | `string` | 表名（全簿唯一；允许中文，不能以数字开头、不能含空格、不能撞单元格地址） |
+| `style` | `TableStyleStyle?` | 内置样式枚举；缺省默认 `Medium9`（另有 `string styleName` 重载，见 16.3） |
+
+返回 `XlTable`，可直接对其设置列格式等属性。
+
+输出：（本示例无控制台输出）
+
+#### 16.2 样式枚举 `TableStyleStyle`
+
+`TableStyleStyle` 枚举内置 60 个条纹名（Light 1-21 / Medium 1-28 / Dark 1-11）+ `None`；样式外观由 Excel 内置渲染，文件仅保存样式名：
+
+```csharp
+var table = ws.AddTable("A1:B3", "Products", TableStyleStyle.Medium2);
+```
+
+输出：（本示例无控制台输出）
+
+#### 16.3 任意样式名 `CustomStyleName`
+
+`string` 重载 `AddTable(ref, name, styleName)` 可传任意样式名字符串（含 Excel 未来新增样式名）：
+
+```csharp
+var table = ws.AddTable("A1:B3", "Products", "TableStyleMedium9");
+// 不在 60 个内置名内时 Excel 打开退化为无样式（经 OnDegradation 上报）
+```
+
+输出：（本示例无控制台输出）
+
+> ⚠️ 样式名不在 60 个内置名内时，Excel 打开会静默退化为无样式，经 `OnDegradation` 回调上报（见第 22 章）。
+
+#### 16.4 表属性
+
+`XlTable` 成员：`Name`（全簿唯一，允许中文，不能以数字开头、不能含空格、不能撞单元格地址）、`Ref`、`Style`、`CustomStyleName`、`ShowRowStripes`（默认 true）、`ShowFirstColumn`、`ShowLastColumn`、`ShowColumnStripes`、`AutoFilter`（默认 true）、`TotalsRowShown`（读回保留）、`HeaderStyle`、`Columns`。返回的 `XlTable` 可直接读取这些属性：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "Product");
+ws.SetValue("B1", "Price");
+ws.SetValue("A2", "Apple");
+ws.SetValue("B2", 3.5);
+
+var table = ws.AddTable("A1:B2", "Products", TableStyleStyle.Medium2);
+Console.WriteLine($"{table.Name} {table.Ref} {table.Style} 行条纹={table.ShowRowStripes} 筛选={table.AutoFilter}");
+```
+
+输出：
+
+```text
+Products A1:B2 Medium2 行条纹=True 筛选=True
+```
+
+#### 16.5 列格式（`XlTableColumn`）
+
+`table.Column(name)` 按列名取列（大小写不敏感），设置 `Style`（font/fill/border → dxf）与 `NumberFormat`：
+
+```csharp
+var table = ws.AddTable("A1:B3", "Products");
+table.Column("Price").NumberFormat = "#,##0.00";
+table.Column("Price").Style = new CellStyle { Bold = true };
+```
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Column(name)` 的 `name` | `string` | 列名（= 表头单元格文本，大小写不敏感；不存在抛 `LiteExcelException`） |
+| `NumberFormat` | `string?` | 该列数字格式（如 `"#,##0.00"`） |
+| `Style` | `CellStyle?` | 该列样式（字体 / 填充 / 边框，写出映射到 dxf） |
+
+输出：（本示例无控制台输出）
+
+#### 16.6 删除超级表
+
+`RemoveTable(name)` 按表名（大小写不敏感）删除超级表，存在则返回 `true`，否则 `false`：
+
+```csharp
+bool removed = ws.RemoveTable("Products");   // 存在则删除并返回 true
+```
+
+输出：（本示例无控制台输出）
+
+#### 16.7 读回超级表
+
+打开含超级表的文件后，`Worksheet.Tables` 自动回填（含样式、列格式），遍历即可打印：
+
+```csharp
+var opened = Excel.Open("tables.xlsx");
+foreach (var t in opened.Worksheets[0].Tables)
 {
-    Console.WriteLine($"Name={nr.Name} Ref={nr.Reference} Local={nr.LocalSheetId}");
+    Console.WriteLine($"{t.Name} {t.Ref} 样式={t.CustomStyleName ?? t.Style.ToString()}");
+    foreach (var col in t.Columns)
+        Console.WriteLine($"  {col.Name} fmt={col.NumberFormat}");
 }
 ```
 
-写入：不修改 `Workbook.Names` 的前提下，保存时原始 XML 原样回写（内容不会丢）。
+输出：
+
+```
+Products A1:B3 样式=TableStyleMedium2
+  Product fmt=
+  Price fmt=#,##0.00
+```
 
 ---
 
-## 27. 能力降级回调（OnDegradation）（2.4.2+）
+### 17. 命名区域
 
-保存到不支持某能力的格式时（如 xls/xlsb/csv），默认会静默丢弃这些能力。开启回调可直接收到被丢弃项的清单，不再沉默。
+#### 17.1 读回命名区域
+
+打开含命名区域的文件后，`Workbook.Names` 自动填充（全局 + sheet-local），遍历即可打印：
+
+```csharp
+var opened = Excel.Open("names.xlsx");
+foreach (var nr in opened.Names)
+    Console.WriteLine($"{nr.Name} = {nr.Reference} local={nr.LocalSheetId}");
+```
+
+`NamedRange` 成员：`Name`、`Reference`（如 `Sheet1!$A$1:$C$9`）、`LocalSheetId`（-1 表示全局名称）、`IsLocalSheet`。
+
+输出：
+
+```
+MyRange = Sheet1!$A$1:$C$9 local=-1
+LocalRange = Sheet1!$B$2 local=0
+```
+
+#### 17.2 写出保留
+
+命名区域在打开后保存时**原样保留**（`workbook.xml` 的 `definedNames` 透传），不会因编辑丢失：
+
+```csharp
+var opened = Excel.Open("names.xlsx");
+opened.Worksheets[0].SetValue("A1", "edited");
+opened.Save();   // 命名区域仍保留
+```
+
+输出：已写入 names.xlsx
+
+---
+
+### 18. 文件级密码（打开 / 修改）
+
+文件级安全通过 `Workbook.Security`（`WorkbookSecurity`）管理，支持 xlsx / xlsm / xlsb。密码本体仅存储于对象内部，不对外暴露明文。
+
+#### 18.1 打开加密文件
+
+打开密码（Agile 加密）在 `ExcelReadOptions.OpenPassword` 提供；未提供时若文件已加密，抛出明确异常：
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions { OpenPassword = "secret" });
+```
+
+输出：（本示例无控制台输出）
+
+> ⚠️ 打开 / 修改密码仅支持 xlsx / xlsm / xlsb；打开加密文件时若未提供密码（或错误），读取会抛异常。
+
+#### 18.2 读取安全状态
+
+`Workbook.Security`（`WorkbookSecurity`）暴露只读安全状态属性，配合打开选项读取：
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "secret",
+    ModifyPassword = "write",
+});
+
+var sec = wb.Security;
+Console.WriteLine(sec.HasOpenPassword);      // true
+Console.WriteLine(sec.HasModifyPassword);    // true
+Console.WriteLine(sec.HasModifyAccess);      // true（提供了修改密码）
+Console.WriteLine(sec.IsReadOnly);           // false
+Console.WriteLine(sec.CanSave);              // true
+```
+
+| 属性 | 类型 | 说明 |
+|---|---|---|
+| `HasOpenPassword` | `bool` | 文件是否有打开密码（文件加密） |
+| `HasModifyPassword` | `bool` | 文件是否有修改密码（写保护） |
+| `HasModifyAccess` | `bool` | 是否已获得修改权限（提供了正确修改密码） |
+| `IsReadOnly` | `bool` | 有修改密码但未获修改权限时为只读 |
+| `CanSave` | `bool` | 是否允许保存（`!IsReadOnly`） |
+
+输出：
+
+```
+True
+True
+True
+False
+True
+```
+
+#### 18.3 设置密码
+
+`Workbook.Security` 提供设置打开 / 修改密码的方法，随后保存即生效：
 
 ```csharp
 var wb = Excel.Create();
-var ws = wb.Worksheets[0];
-ws.SetValue("A1", "x");
-ws.Filter = new AutoFilter { Range = "A1:A10" };   // 筛选
-ws.Comments = new Dictionary<string, string> { ["A1"] = "note" }; // 批注
-ws.FreezeRows = 1;                                  // 冻结
-ws.Cell("B1").Style = new CellStyle { Bold = true };
-
-var options = new ExcelWriteOptions
-{
-    OnDegradation = d =>
-        Console.WriteLine($"[{d.Capability}] {d.SheetName} => {d.Message}")
-};
-Excel.Write("out.csv", wb, options);
+wb.Security.SetOpenPassword("secret");       // 打开密码（文件加密）
+wb.Security.SetModifyPassword("write");      // 修改密码（写保护），默认建议只读
+wb.Security.SetModifyPassword("write", readOnlyRecommended: false);  // 不提示只读
+wb.SaveAs("secured.xlsx");
 ```
 
-默认 `null`：与历史版本行为完全一致（零破坏）。
+| 方法 | 参数 | 说明 |
+|---|---|---|
+| `SetOpenPassword` | `password` | 设置打开密码（文件加密），覆盖旧值；空 / 空白视为移除 |
+| `SetModifyPassword` | `password` | 设置修改密码（写保护），覆盖旧值；空 / 空白视为移除 |
+| `SetModifyPassword` | `readOnlyRecommended` | 是否建议以只读方式打开（默认 true） |
+| `RemoveOpenPassword` | — | 移除打开密码（下次保存为无打开密码文件） |
+| `RemoveModifyPassword` | — | 移除修改密码（要求已获修改权限） |
+| `ClearAll` | — | 清空全部文件级密码（要求已获修改权限） |
 
-### 降级能力枚举
+输出：已写入 secured.xlsx
 
-`DegradationCapability`：Comments、DataValidation、AutoFilter、Images、DocumentProperties、NamedRanges、Styles、MergedCells、FreezePanes、Hyperlinks、RowHeights、ColumnWidths、Formulas、Charts、PivotTables、RichData。
+> ⚠️ 密码本体仅存储于 `WorkbookSecurity` 对象内部，不对外暴露明文；错误消息与日志不含密码。
 
-### 各格式降级矩阵（2.4.2）
+#### 18.4 移除密码
 
-| 能力 | xlsx/xlsm | xlsb | xls | csv |
-|---|---|---|---|---|
-| 批注 | 支持 | 降级上报 | 降级上报 | 降级上报 |
-| 数据验证 | 支持 | 降级上报 | 降级上报 | 降级上报 |
-| 自动筛选 | 支持 | 降级上报 | 降级上报 | 降级上报 |
-| 图片 | 支持（仅写回） | 降级上报 | 降级上报 | 降级上报 |
-| 单元格样式 | 支持 | **仅数字格式保留**，其余上报 | **仅数字格式保留**，其余上报 | 降级上报 |
-| 超链接 | 支持 | 支持 | 支持 | 降级上报 |
-| 公式 | 支持 | 仅缓存值文本 | 仅缓存值文本 | 降级上报（值文本） |
-| 行高/列宽/合并/冻结 | 支持 | 支持 | 支持 | 降级上报 |
-| 图表/透视表/主题 | 保真透传 | 保真透传 | 不支持（永不做） | 不支持 |
+打开含密码文件（提供正确密码获得授权）后，调用移除方法再保存即可去密码：
 
-`TargetFormat` 字段为 `ExcelFormat`；库内部不会修改 `DegradationInfo`。
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions { OpenPassword = "secret", ModifyPassword = "write" });
+wb.Security.RemoveOpenPassword();            // 下次保存为无打开密码
+wb.Security.RemoveModifyPassword();          // 下次保存为无修改保护
+wb.Security.ClearAll();                      // 清空全部文件级密码
+wb.SaveAs("plain.xlsx");
+```
+
+输出：已写入 plain.xlsx
+
+> ⚠️ `RemoveModifyPassword` / `ClearAll` 要求已获得修改权限（否则抛 `LiteExcelException`），防止未授权剥离 / 替换写保护。
+
+#### 18.5 修改密码权限与只读
+
+文件设置了修改密码但未提供时以只读方式打开，可通过安全状态属性确认：
+
+```csharp
+var wb = Excel.Open("readonly.xlsx");        // 该文件设置了修改密码但未提供
+Console.WriteLine(wb.Security.IsReadOnly);   // true
+Console.WriteLine(wb.Security.CanSave);      // false
+```
+
+输出：
+
+```
+True
+False
+```
+
+- 文件设置了修改密码但未提供（或提供错误）时，工作簿以**只读**方式打开，`IsReadOnly = true`、`CanSave = false`，保存会抛 `LiteExcelException`。
+- 提供正确的 `ModifyPassword` 即获得编辑授权（`HasModifyAccess = true`）。
+- `SetModifyPassword` / `RemoveModifyPassword` / `ClearAll` 要求已获得修改权限，否则抛异常（防止未授权剥离 / 替换写保护）。
+- 打开时捕获的原 `fileSharing` 在保存时透传保留；用户显式设置新修改密码时重新生成。
+
+#### 18.6 保真回写
+
+打开加密文件后 `SaveAs` 默认继承密码，无需重新设置：
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "secret",
+    ModifyPassword = "write",
+});
+wb.SaveAs("secured_copy.xlsx");   // 默认继承打开密码
+```
+
+输出：已写入 secured_copy.xlsx
+
+> ⚠️ `ModifyPasswordTouched`（用户显式改动过修改密码）时不透传原 fileSharing，按新设置的修改密码重新生成。含 VBA 宏的工作簿保存为 xlsx / xls 会报错（格式不支持宏）。
+---
+
+### 19. 工作表 / 工作簿保护
+
+#### 19.1 工作表保护 `SheetProtection`
+
+`Worksheet.Protection` 控制受保护工作表中允许 / 禁止的操作，可选密码（SHA-512 + salt 哈希）：
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+var p = new SheetProtection
+{
+    Enabled = true,
+    // 允许的操作（默认 false 表示禁止）：
+    SelectLockedCells = true,
+    SelectUnlockedCells = true,
+    // FormatCells / FormatColumns / FormatRows / InsertColumns / InsertRows /
+    // InsertHyperlinks / DeleteColumns / DeleteRows / Sort / AutoFilter / PivotTables
+    Objects = true,                // 默认 true 允许编辑对象
+    Scenarios = true,              // 默认 true 允许编辑方案
+};
+p.SetPassword("protect123");      // 可选密码（方法，不能写在 initializer 里）
+ws.Protection = p;
+```
+
+读回：
+
+```csharp
+var opened = Excel.Open("protected.xlsx");
+var p = opened.Worksheets[0].Protection;
+if (p is not null)
+{
+    Console.WriteLine(p.Enabled);
+    Console.WriteLine(p.HasPassword);
+    Console.WriteLine(p.VerifyPassword("protect123"));   // 对从文件读取的哈希有效
+    p.RemovePassword();              // 移除保护密码（null/空白同样视为移除）
+}
+```
+
+`SheetProtection` 参数：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Enabled` | `bool` | 是否启用保护（写出 `sheetProtection` 的前提） |
+| `SelectLockedCells` / `SelectUnlockedCells` | `bool` | 是否允许选定锁定 / 未锁定单元格（默认 true） |
+| `Objects` / `Scenarios` | `bool` | 是否允许编辑对象 / 方案（默认 true） |
+| `FormatCells`…`PivotTables` | `bool` | 允许的编辑操作（默认 false 禁止） |
+| `SetPassword` / `RemovePassword` | 方法 | 设置 / 移除保护密码（null / 空白视为移除） |
+| `VerifyPassword` | 方法 | 验证密码（仅对从文件读取的哈希有效） |
+
+输出：
+
+```
+True
+False
+True
+```
+
+> ⚠️ 读回时 `HasPassword` 恒为 `False`——密码以 SHA-512 + salt 哈希落盘，库不把明文读回内存。是否设保护密码应通过 `VerifyPassword(...)` 判断，而不是 `HasPassword`。
+
+#### 19.2 工作簿保护 `WorkbookProtection`
+
+`Workbook.Protection` 锁定工作簿结构 / 窗口，可选密码：
+
+```csharp
+var wb = Excel.Create();
+var p2 = new WorkbookProtection
+{
+    Enabled = true,
+    LockStructure = true,   // 禁止插入/删除/移动/隐藏/重命名工作表
+    LockWindows = false,
+};
+p2.SetPassword("wbpass");     // 可选密码（方法，不能写在 initializer 里）
+wb.Protection = p2;
+// p2.RemovePassword() 移除工作簿保护密码
+wb.SaveAs("wbprotected.xlsx");
+```
+
+读回：
+
+```csharp
+var opened = Excel.Open("wbprotected.xlsx");
+var p = opened.Protection;
+if (p is not null)
+    Console.WriteLine($"{p.Enabled} structure={p.LockStructure} hasPwd={p.HasPassword}");
+```
+
+`WorkbookProtection` 参数：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Enabled` | `bool` | 是否启用保护（写出 `workbookProtection` 的前提） |
+| `LockStructure` | `bool` | 禁止插入 / 删除 / 移动 / 隐藏 / 重命名工作表（默认 true） |
+| `LockWindows` | `bool` | 锁定窗口（默认 false） |
+| `SetPassword` / `RemovePassword` | 方法 | 设置 / 移除保护密码（null / 空白视为移除） |
+| `VerifyPassword` | 方法 | 验证密码（仅对从文件读取的哈希有效） |
+
+输出：
+
+```
+True structure=True hasPwd=False
+```
+
+> ⚠️ 同 19.1：读回的 `hasPwd=False` 不代表未设密码——原因见上（明文不入内存，用 `VerifyPassword` 判断）。
 
 ---
 
-## 28. 完整 API 索引
+## 第三部分 多格式与平台
 
-### Excel（门面）
+第 20–23 章：多格式行为与降级、流式与追加、AOT 兼容性，跨格式与平台差异集中于此。
 
-| 方法 | 返回 | 说明 |
-|---|---|---|
-| `Open(path, options?)` / `Open(stream, format, options?)` | `Workbook` | 按扩展名识别格式打开 |
-| `DetectFormat(path)` | `ExcelFormat` | 按扩展名识别格式 |
-| `Create(format = Xlsx)` / `Create(sheetName, format)` / `Create(string[], format)` | `Workbook` | 新建工作簿（空壳 / 命名 / 批量表） |
-| `Create<T>(data, sheetName, format, configure?)` | `Workbook` | 建簿并写入 List&lt;T&gt;（首行表头，反射，AOT 安全） |
-| `Create(DataTable, sheetName?, format)` | `Workbook` | 建簿并写入 DataTable（表名兜底 TableName → Sheet1） |
-| `Write(path, Workbook, options?)` | `void` | 写出工作簿 |
-| `Write(path, SheetData, options?)` | `void` | 写出单表（低层模型） |
-| `Write(path, DataTable, sheetName?, options?)` | `void` | 从 DataTable 写（AOT 安全） |
-| `Write<T>(path, IEnumerable<T>, sheetName?, configure?)` | `void` | 从 List&lt;T&gt; 写（反射，AOT 安全） |
-| `Read<T>(path, sheetName?, configure?)` | `List<T>` | 读为 List&lt;T&gt;（仅 xlsx/xlsm） |
-| `ReadAsDataTable(path, sheetName?, firstRowIsHeader?)` | `DataTable` | 读为 DataTable |
-| `GetSheetNames(path)` | `List<string>` | 列出所有工作表名 |
-| `StreamRows(path, sheetName, onRow)` | `void` | 流式读取（自动跳过首行） |
-| `CreateWriter(path)` / `CreateWriter(stream)` | `XlsxStreamWriter` | 流式写入（仅 xlsx/xlsm） |
+### 20. 多格式行为（xlsx/xlsm 全能 + xls/xlsb/csv 限制与降级）
 
-### Worksheet
+#### 20.1 格式能力矩阵
+
+下表列出每个能力在各格式下的支持情况；其中 xls / xlsb / csv 不支持的能力在写出时经 `ExcelWriteOptions.OnDegradation` 上报（见第 22 章）。
+
+| 能力 | xlsx | xlsm | xlsb | xls | csv |
+|---|---|---|---|---|---|
+| 单元格值 / 表头 | ✔ | ✔ | ✔ | ✔ | ✔ |
+| 样式（字体/颜色/边框/对齐/换行） | ✔ | ✔ | 仅 NumberFormat | 仅 NumberFormat | ✘ |
+| 数字格式 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 合并单元格 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 自动筛选 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 行高 / 列宽 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 批注 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| 数据验证 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| 超链接 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 冻结窗格 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 图片（浮动/InCell） | ✔ | ✔ | ✘ | ✘ | ✘ |
+| 条件格式 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| 超级表 | ✔ | ✔ | ✘ | ✘ | ✘ |
+| 命名区域 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 文档属性 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 打开密码 / 修改密码 | ✔ | ✔ | ✔ | ✘ | ✘ |
+| 公式 | ✔ | ✔ | ✔ | ✔ | ✘ |
+| 图表 / 透视表 | 只保真 | 只保真 | 只保真 | ✘ | ✘ |
+
+写出到 csv 时接通降级回调，观察被丢弃的能力：
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string> { { "A1", "note" } };
+
+Excel.Write("matrix.csv", wb, new ExcelWriteOptions
+{
+    OnDegradation = info =>
+        Console.WriteLine($"[降级] {info.Capability} -> {info.TargetFormat} @ {info.SheetName}: {info.Message}"),
+});
+```
+
+输出：
+
+```
+[降级] Comments -> Csv @ Sheet1: CSV 不支持批注，工作表 'Sheet1' 的批注已丢弃。
+```
+
+#### 20.2 xls / xlsb 读回为静态值
+
+xls / xlsb 读回时，样式降级为仅保留 `NumberFormat`（规避 BIFF 手写风险）；批注 / 数据验证 / 条件格式 / 图片 / 超级表等高级能力不读回。**这些降级在写出时会通过 `OnDegradation` 显式上报**（见第 22 章）。
+
+读取 xls 文件（读回为静态值，不再携带除数字格式外的样式信息）：
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets["Sheet1"].SetValue("A1", "hello");
+Excel.Write("roundtrip.xls", wb);
+
+var reopened = Excel.Open("roundtrip.xls");
+var ws = reopened.Worksheets["Sheet1"];
+Console.WriteLine($"{ws.Name}: {ws.Cell("A1").GetString()}");
+```
+
+输出：
+
+```
+Sheet1: hello
+```
+
+#### 20.3 CSV 行为
+
+- CSV 仅支持单工作表工作簿（写出多表抛 `NotSupportedException`）。
+- 读取时首行不拆分为表头（`CsvBackend.Read`（见附录 B.4）返回原始行）。
+- 分隔符：读取自动探测（逗号 > 分号 > Tab，仅统计引号外），`ExcelReadOptions.Separator` 可固定；写出默认逗号，`ExcelWriteOptions.Separator` 可指定。
+- CSV 不支持样式 / 合并 / 批注 / 数据验证 / 超链接 / 图片 / 条件格式 / 超级表 / 命名区域 / 文档属性 / 公式 / 密码。
+
+写入再读回（读回时首行作为数据行，不拆分为表头）：
+
+```csharp
+var sheet = new SheetData
+{
+    SheetName = "People",
+    Headers = new() { "Name", "Score" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("Alice"), Cell.FromNumber(95) },
+        new Cell[] { Cell.FromText("Bob"), Cell.FromNumber(88) },
+    },
+};
+Excel.Write("people.csv", sheet);
+
+var wb = Excel.Open("people.csv");
+var csv = wb.Worksheets[0].ToSheetData();
+for (int r = 0; r < csv.Rows.Count; r++)
+    Console.WriteLine($"{csv.Rows[r][0].GetString()}: {csv.Rows[r][1].GetString()}");
+```
+
+输出：
+
+```
+Name: Score
+Alice: 95
+Bob: 88
+```
+
+#### 20.4 加密文件格式限制
+
+文件级密码（打开 / 修改）仅支持 xlsx / xlsm / xlsb；保存为 csv / xls 时若带密码会抛 `LiteExcelException`：
+
+```csharp
+var wb = Excel.Create();
+wb.Security.SetOpenPassword("1");
+try
+{
+    wb.SaveAs("enc.csv", ExcelFormat.Csv);
+}
+catch (LiteExcelException ex)
+{
+    Console.WriteLine(ex.Message);
+}
+```
+
+输出：
+
+```
+无法写出 Csv：Csv 格式不支持文件级密码（打开密码/修改密码）。请使用 xlsx/xlsm/xlsb 保存，或先移除密码。
+```
+
+#### 20.5 保真回写
+
+打开 xlsx / xlsm / xlsb 时，未映射的 OOXML 部件（宏 / 主题 / 绘图 / 图表 / 透视表等）被捕获并在保存时按二进制透传，避免静默删除。改表名不再丢 drawing 关联；追加数据不再丢宏 / 图表。
+
+```csharp
+var wb = Excel.Open("macro.xlsm");   // 打开包含宏的 xlsm
+wb.Worksheets[0].Name = "重命名表";  // 改表名不丢 drawing 关联
+wb.SaveAs("macro_copy.xlsm");
+```
+
+输出：
+
+```
+已写入 macro_copy.xlsm
+```
+
+---
+
+### 21. 流式读取 / 进度回调 / 追加数据
+
+#### 21.1 流式读取 `StreamRows`
+
+逐行回调，不驻留内存，适合大文件。**仅支持 xlsx / xlsm**：
+
+```csharp
+var sheet = new SheetData
+{
+    SheetName = "Scores",
+    Headers = new() { "Name", "Score" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("Alice"), Cell.FromNumber(95) },
+        new Cell[] { Cell.FromText("Bob"), Cell.FromNumber(88) },
+    },
+};
+Excel.Write("scores.xlsx", sheet);
+
+Excel.StreamRows("scores.xlsx", "Scores", row =>
+{
+    foreach (var cell in row)
+        Console.Write($"{cell.GetString()} | ");
+    Console.WriteLine();
+});
+```
+
+输出：
+
+```
+Alice | 95 |
+Bob | 88 |
+```
+
+#### 21.2 带进度读取 `ReadWithProgress`
+
+先快速扫描总数据行数，再流式逐行读取，`current` 从 1 递增到 `total`（数据行数，不含表头）：
+
+```csharp
+var sheet = new SheetData
+{
+    SheetName = "Scores",
+    Headers = new() { "Name", "Score" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("Alice"), Cell.FromNumber(95) },
+        new Cell[] { Cell.FromText("Bob"), Cell.FromNumber(88) },
+        new Cell[] { Cell.FromText("Cara"), Cell.FromNumber(72) },
+    },
+};
+Excel.Write("progress.xlsx", sheet);
+
+Excel.ReadWithProgress("progress.xlsx", 0, (current, total) =>
+    Console.WriteLine($"{current}/{total}"));
+```
+
+输出：
+
+```
+1/3
+2/3
+3/3
+```
+
+#### 21.3 追加数据 `Append`
+
+`Excel.Append(path, SheetData, WorkbookProperties?)`（`SheetData` 见附录 B.1）：同名 sheet 合并列后追加行；不同名则作为新 sheet 加入；文件不存在时创建。**仅支持 xlsx / xlsm**：
+
+```csharp
+// 先写 3 行
+var sheet1 = new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromNumber(1) },
+        new Cell[] { Cell.FromNumber(2) },
+        new Cell[] { Cell.FromNumber(3) },
+    },
+};
+Excel.Write("append.xlsx", sheet1);
+
+// 追加 2 行
+var appendData = new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromNumber(4) },
+        new Cell[] { Cell.FromNumber(5) },
+    },
+};
+Excel.Append("append.xlsx", appendData);
+
+// 读回验证
+var read = Excel.ReadAsDataTable("append.xlsx");
+Console.WriteLine(read.Rows.Count);
+```
+
+输出：
+
+```
+5
+```
+
+追加不改变既有 sheet 顺序，工作表级保留 rels 可继续复用（xlsm 追加不丢宏）。
+
+**追加时表头对齐**：同名 sheet 追加时，新表头中不存在于原表头的列会**追加到原表头末尾**；数据行按列名对齐到合并后的列位置；缺失列补 `Empty`：
+
+```csharp
+// 原文件表头：ID | Name
+Excel.Write("align.xlsx", new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID", "Name" },
+    Rows = new() { new Cell[] { Cell.FromNumber(1), Cell.FromText("Alice") } },
+});
+
+// 追加的表头含新列 Price → 合并为 ID | Name | Price；数据行按列名对齐
+Excel.Append("align.xlsx", new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID", "Price" },
+    Rows = new() { new Cell[] { Cell.FromNumber(2), Cell.FromNumber(9.5) } },
+});
+
+var sheet = XlsxReader.Read("align.xlsx", 0);   // 低层读回（见附录 B.2）
+Console.WriteLine("headers: " + string.Join(" | ", sheet.Headers));
+var ws2 = Excel.Open("align.xlsx").Worksheets["Data"];
+Console.WriteLine($"C3 = {ws2.Cell("C3").Number}");   // Price 对齐到第 3 列
+Console.WriteLine($"B3 类型 = {ws2.Cell("B3").Type}"); // 缺失列补 Empty
+```
+
+输出：
+
+```
+headers: ID | Name | Price
+C3 = 9.5
+B3 类型 = Empty
+```
+
+#### 21.4 流式写入 `CreateWriter`
+
+`Excel.CreateWriter` 返回 `XlsxStreamWriter`（见附录 B.5），逐行写大文件，不驻留内存。**仅支持 .xlsx / .xlsm 扩展名**；使用后必须 `Dispose` / `Close` 完成文件：
+
+```csharp
+using var writer = Excel.CreateWriter("big_out.xlsx");
+for (int i = 0; i < 1_000_000; i++)
+    writer.WriteRow(new object?[] { i, $"row {i}", i * 1.5, i % 2 == 0 });
+// using 结束自动 Close
+```
+
+输出：
+
+```
+已写入 big_out.xlsx
+```
+
+也可写入流（`LeaveOpen` 由调用方管理）：
+
+```csharp
+using var ms = new MemoryStream();
+using (var writer = Excel.CreateWriter(ms))
+    writer.WriteRow(new object?[] { 1, "a" });
+ms.Position = 0;
+var read = XlsxReader.Read(ms, 0);
+```
+
+`XlsxStreamWriter` 支持样式 / 公式 / 超链接随行写入（styles.xml 与 sheet rels 在 Close 时统一写出）；合并 / 筛选 / 图片等高级能力不支持。超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
+
+---
+
+### 22. 降级回调 OnDegradation
+
+`ExcelWriteOptions.OnDegradation` 为可选回调（默认 null，不注册则行为与历史版本完全一致，无破坏性）。写出到不支持某能力的格式（xls / xlsb / csv）时，对被静默丢弃的能力逐项回调：
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string> { { "A1", "note" } };   // csv 不支持批注
+
+Excel.Write("out.csv", wb, new ExcelWriteOptions
+{
+    OnDegradation = info =>
+    {
+        Console.WriteLine($"[降级] {info.Capability} -> {info.TargetFormat} @ {info.SheetName}: {info.Message}");
+    },
+});
+```
+
+输出：
+
+```
+[降级] Comments -> Csv @ Sheet1: CSV 不支持批注，工作表 'Sheet1' 的批注已丢弃。
+```
+
+#### 22.1 能力枚举 `DegradationCapability`
+
+`DegradationCapability` 枚举列出所有可被降级上报的能力：
+
+```csharp
+foreach (var cap in Enum.GetNames(typeof(DegradationCapability)))
+    Console.WriteLine(cap);
+```
+
+输出：
+
+```
+Comments
+DataValidation
+AutoFilter
+Images
+DocumentProperties
+NamedRanges
+Styles
+MergedCells
+FreezePanes
+Hyperlinks
+RowHeights
+ColumnWidths
+Formulas
+Charts
+PivotTables
+RichData
+ConditionalFormatting
+Tables
+```
+
+#### 22.2 降级信息 `DegradationInfo`
+
+`DegradationInfo` 携带单次降级事件的完整描述：`Capability`（被丢弃能力）、`SheetName`（工作簿级能力为 null）、`TargetFormat`（目标格式）、`Message`（人类可读说明）。
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string> { { "A1", "note" } };
+
+Excel.Write("deg.csv", wb, new ExcelWriteOptions
+{
+    OnDegradation = info =>
+    {
+        Console.WriteLine($"Capability={info.Capability}");
+        Console.WriteLine($"SheetName={info.SheetName}");
+        Console.WriteLine($"TargetFormat={info.TargetFormat}");
+        Console.WriteLine($"Message={info.Message}");
+    },
+});
+```
+
+输出：
+
+```
+Capability=Comments
+SheetName=Sheet1
+TargetFormat=Csv
+Message=CSV 不支持批注，工作表 'Sheet1' 的批注已丢弃。
+```
+
+#### 22.3 样式降级细节
+
+xls / xlsb 写出时，完整样式（字体 / 颜色 / 边框 / 对齐 / 换行）降级为仅保留 NumberFormat，经 `DegradationCapability.Styles` 上报：
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", 1);
+ws.Cell("A1").Style = new CellStyle { Bold = true, FillColor = "FFFF00" };
+
+Excel.Write("style.xls", wb, new ExcelWriteOptions
+{
+    OnDegradation = info => Console.WriteLine($"{info.Capability}: {info.Message}"),
+});
+```
+
+输出：
+
+```
+Styles: xls 仅支持数字格式，工作表 'Sheet1' 的完整样式（字体/颜色/边框/对齐/换行）已降级。
+```
+
+---
+
+### 23. AOT 兼容性（DAM、IsAotCompatible、验证方式与成果摘要）
+
+#### 23.1 DAM 标注
+
+List\<T\> 反射映射 API 已用 `[DynamicallyAccessedMembers]` 标注，AOT / 裁剪安全：
+
+- `Excel.Create<T>` / `Excel.Write<T>` / `Excel.Read<T>` 标注 `PublicProperties`（读取还含 `PublicParameterlessConstructor`）。
+- `Worksheet.ImportData<T>` / `WorksheetCollection.Add<T>` 标注 `PublicProperties`。
+- `XlsxReader.Read<T>` / `XlsxWriter.Write<T>` 同样标注（见附录 B.2 / B.3）。
+
+以第 5 章的 `Person` 为例（映射无需额外配置，公开属性由库内标注保留）：
+
+```csharp
+var people = new List<Person> { new() { Name = "张三", Age = 30 } };
+Excel.Write("people.xlsx", people);
+
+var read = Excel.Read<Person>("people.xlsx");
+Console.WriteLine(read.Count);
+```
+
+输出：
+
+```
+1
+```
+
+#### 23.2 IsAotCompatible
+
+net8.0 目标在 csproj 声明 `IsAotCompatible=true`，全部公开 API 兼容 Native AOT / 裁剪：
+
+```csharp
+var wb = Excel.Create("Sheet1");
+wb.Worksheets["Sheet1"].SetValue("A1", "x");
+Excel.Write("aot.xlsx", wb);
+
+var reopened = Excel.Open("aot.xlsx");
+Console.WriteLine(reopened.Worksheets.Count);
+```
+
+输出：
+
+```
+1
+```
+
+#### 23.3 验证方式与成果摘要
+
+- 经原生 AOT 可执行文件实测，全部公开 API 通过。
+- AOT 零 IL 警告 + 运行期断言通过。
+- 注意：`Excel.Read<T>` / `XlsxReader.Read`（见附录 B.2）仅支持 xlsx / xlsm；**xls / xlsb / csv 必须走 `Excel.Open(path)`**（按扩展名路由后端）。按需读表名时用 `Excel.Open` 处理非 zip 格式。
+
+非 zip 格式读取入口：
+
+```csharp
+var wb = Excel.Open("data.xls");
+Console.WriteLine(string.Join(",", wb.Worksheets.Names));
+```
+
+输出：
+
+```
+Sheet1
+```
+
+#### 23.4 InvariantGlobalization
+
+全局不变量（常见于 AOT / 容器）：
+
+- 发布时加 `<InvariantGlobalization>true</InvariantGlobalization>` 不会影响本库任何功能；读取侧 `Encoding.GetEncoding` 与写入侧 `CultureInfo.InvariantCulture` 均通过验证。
+- **前提**：基准日期边界（1900/1904 日期系统）与 xls ANSI 字符串需走 `Latin1`，非当前系统代码页的字符可能失真——这是 BIFF8 的固有限制，与 AOT 无关。
+
+不变量下日期写出 / 读回（固定 `yyyy-MM-dd` 数字格式）：
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets["Sheet1"].SetValue("A1", new DateTime(2024, 1, 2));
+Excel.Write("inv.csv", wb);
+
+var reopened = Excel.Open("inv.csv");
+var data = reopened.Worksheets[0].ToSheetData();
+Console.WriteLine(data.Rows[0][0].GetString());
+```
+
+输出：
+
+```
+2024-01-02
+```
+
+---
+
+## 第四部分 注意事项
+
+第 24–25 章：异常处理与大文件注意事项，上线前建议通读。
+
+### 24. 异常处理
+
+#### 24.1 异常分层
+
+- `LiteExcelException`：库所有异常的基类。
+- `LiteXlsxException`：旧异常名称的兼容别名（`[Obsolete]`，请改用 `LiteExcelException`）。
+- `InvalidSheetNameException`：当 Sheet 名不合法（为空、超过 31 字符、包含非法字符）时抛出，含 `SheetName` 属性。
+
+非法 Sheet 名在写出时抛出（`SheetName` 携带原始名称）：
+
+```csharp
+var sheet = new SheetData { SheetName = "非法?名称" };
+try
+{
+    Excel.Write("bad.xlsx", sheet);
+}
+catch (InvalidSheetNameException ex)
+{
+    Console.WriteLine($"非法 Sheet 名：{ex.SheetName}");
+}
+```
+
+输出：
+
+```
+非法 Sheet 名：非法?名称
+```
+
+#### 24.2 常见异常场景
+
+| 场景 | 异常 |
+|---|---|
+| 文件不存在 | `FileNotFoundException` |
+| 路径为空 | `ArgumentException` |
+| 工作表名重复 / 找不到 | `LiteExcelException` |
+| Sheet 名非法 | `InvalidSheetNameException` |
+| 保存路径扩展名与格式不匹配 | `LiteExcelException` |
+| 新建簿未指定路径就 Save | `LiteExcelException` |
+| 只读工作簿（有修改密码未授权）保存 | `LiteExcelException` |
+| 带密码保存为 csv / xls | `LiteExcelException` |
+| 含宏保存为 xlsx / xls | `LiteExcelException` |
+| 流式读取 / 追加非 xlsx/xlsm | `LiteExcelException` |
+| CSV 多表写出 | `NotSupportedException` |
+| 单元格类型不匹配强类型读取 | `InvalidCastException` |
+
+典型捕获顺序（先具体异常后基类）：
+
+```csharp
+var wb = Excel.Create();
+try
+{
+    wb.Save();   // 新建簿未指定路径就保存
+}
+catch (LiteExcelException ex)
+{
+    Console.WriteLine(ex.Message);
+}
+```
+
+输出：
+
+```
+当前工作簿没有目标路径，请使用 SaveAs 指定保存位置
+```
+
+#### 24.3 建议
+
+```csharp
+try
+{
+    var wb = Excel.Open("report.xlsx", new ExcelReadOptions { OpenPassword = "secret" });
+    wb.SaveAs("out.xlsx");
+}
+catch (LiteExcelException ex)
+{
+    Console.WriteLine($"LiteExcel: {ex.Message}");
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Other: {ex.Message}");
+}
+```
+
+输出：
+
+```
+已写入 out.xlsx
+```
+
+---
+
+### 25. 大文件注意事项
+
+- **流式读取**：`Excel.StreamRows`（见附录 B.2）逐行回调，不驻留内存，适合大文件（仅 xlsx / xlsm）。
+- **流式写入**：`Excel.CreateWriter` / `XlsxStreamWriter`（见附录 B.5）逐行写大文件，不驻留内存（仅 xlsx / xlsm）。使用后必须 `Dispose` / `Close`。
+- **进度**：`Excel.ReadWithProgress` 先扫描总行数再流式读取，适合长任务进度展示。
+- **内存模型**：`Excel.Open` / `Excel.Create` 返回的 `Workbook` 是内存模型，整簿加载到内存。超大文件请用流式 API 而非 `Excel.Open`。
+- **超链接数量**：流式写入器在超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
+- **追加**：`Excel.Append` 会读取整个既有文件再写出，适合中小文件增量追加。
+
+---
+
+## 附录 A 对象模型速查（类 / 成员索引表）
+
+#### `Excel` 静态类（对象模型入口）
 
 | 成员 | 说明 |
 |---|---|
-| `Cell(row, col)` / `Cell("A1")` / `Range(...)` / `Cells` | 单元格 / 区域访问 |
-| `SetValue(row, col / address, value)` | 写值 |
-| `ImportData<T>(data, configure?)` | 清空整表并从 A1 重建（List&lt;T&gt;，首行表头） |
-| `ImportData(DataTable, includeHeader = true)` | 清空整表并从 A1 重建（DataTable） |
-| `AddImage(byte[] data, row, col, ...)` | 添加图片（Floating/InCell） |
-| `FreezeRows` / `FreezeColumns` / `FreezeHeader` | 冻结窗格 |
-| `Merge(...)` / `Unmerge(...)` / `MergedRanges` | 合并单元格 |
-| `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | 样式 |
+| `Open(path[, options])` | 按扩展名自动识别格式打开 |
+| `Open(path, format[, options])` | 指定格式打开 |
+| `Open(stream, format[, options])` | 从流打开（必须指定格式） |
+| `Create()` / `Create(sheetName)` / `Create(string[])` / `Create(format)` | 新建空簿 |
+| `Create<T>(data[, sheetName, format, configure])` | 新建并写 List\<T\> |
+| `Create(DataTable[, sheetName, format])` | 新建并写 DataTable |
+| `Write(path, Workbook[, options])` | 写出工作簿 |
+| `Write(path, SheetData[, options])` | 写出单表（低层） |
+| `Write(path, DataTable[, sheetName, options])` | 写出 DataTable |
+| `Write<T>(path, data[, sheetName, configure])` | 写出 List\<T\> |
+| `Read<T>(path[, sheetName, configure])` | 读为 List\<T\> |
+| `ReadAsDataTable(path[, sheetName, firstRowIsHeader])` | 读为 DataTable |
+| `GetSheetNames(path)` / `GetSheetNames(stream)` | 列出工作表名 |
+| `StreamRows(path, sheetName, onRow)` | 流式逐行读取 |
+| `CreateWriter(path)` / `CreateWriter(stream)` | 创建流式写入器 |
+| `Append(path, SheetData[, properties])` | 追加数据 |
+| `ReadWithProgress(path, sheetIndex, onProgress)` | 带进度读取 |
+| `DetectFormat(path)` | 按扩展名识别格式 |
+
+#### `Workbook`
+
+| 成员 | 说明 |
+|---|---|
+| `Worksheets` | 工作表集合（`WorksheetCollection`） |
+| `Properties` | 文档属性（`WorkbookProperties`） |
+| `Format` | 当前格式（`ExcelFormat`） |
+| `Security` | 文件级安全（`WorkbookSecurity`） |
+| `Protection` | 工作簿保护（`WorkbookProtection`） |
+| `Names` | 命名区域（`List<NamedRange>`） |
+| `CurrentPath` | 当前目标路径 |
+| `Save()` / `SaveAs(path[, format])` / `Save(stream, format)` | 保存 |
+
+#### `Worksheet`
+
+| 成员 | 说明 |
+|---|---|
+| `Name` | 工作表名 |
+| `Cell(row, col)` / `Cell(address)` | 访问单元格 |
+| `Range(address)` / `Range(r1, c1, r2, c2)` | 访问区域 |
+| `Cells` | 整表单元格集合 |
+| `SetValue(row, col, value)` / `SetValue(address, value)` | 设置值 |
+| `Merge` / `Unmerge` / `MergedRanges` | 合并 |
 | `RowHeights` / `ColumnWidths` | 行高 / 列宽 |
-| `Comments` / `Validations` / `Filter` / `ConditionalFormats` / `Images` | 批注 / 数据验证 / 筛选 / 条件格式 / 图片 |
-| `ToSheetData()` | 转回低层模型（写回用） |
+| `AutoColumnWidths()` | 列宽自适应 |
+| `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | 样式 |
+| `Comments` | 批注 |
+| `Validations` | 数据验证 |
+| `Filter` | 自动筛选 |
+| `ConditionalFormats` | 条件格式 |
+| `Images` / `AddImage(...)` | 图片 |
+| `Protection` | 工作表保护 |
+| `Tables` / `AddTable` / `RemoveTable` | 超级表 |
+| `FreezeRows` / `FreezeColumns` / `FreezeHeader` | 冻结窗格 |
+| `ImportData<T>(data[, configure])` / `ImportData(DataTable[, includeHeader])` | 清空重建导入 |
+| `ToSheetData()` | 导出为低层 SheetData 模型 |
+| `RowCount` / `MaxColumn` | 尺寸信息 |
 
-### XlsxReader
+#### `Cells`
 
-| 方法 | 返回 | 说明 |
+| 成员 | 说明 |
+|---|---|
+| `this[int row, int column]` | 按行列索引器 |
+| `this[string address]` | 按 A1 地址索引器 |
+| `Range(address)` / `Range(r1, c1, r2, c2)` | 提取区域 |
+| `SetValue(...)` | 便捷写值 |
+| `Clear()` | 清空整表值 |
+| `GetEnumerator()` | 枚举已有单元格 |
+
+#### `ExcelRange`
+
+| 成员 | 说明 |
+|---|---|
+| `FirstRow` / `FirstCol` / `LastRow` / `LastCol` | 区域边界（1-based） |
+| `Address` | A1 地址 |
+| `RowCount` / `ColumnCount` | 尺寸 |
+| `Cell(rowOffset, colOffset)` | 区域内相对偏移 |
+| `Fill(value)` / `Fill(object?[,])` | 批量写入 |
+| `ToValues()` / `ToCells()` | 读回 |
+| `Style` | 整区统一样式 |
+| `Merge()` / `Unmerge()` | 合并 |
+| `Clear()` | 清空 |
+| `GetEnumerator()` | 枚举（行优先） |
+
+#### `Cell`
+
+| 成员 | 说明 |
+|---|---|
+| `Type` / `Text` / `Number` / `Date` / `Boolean` | 值字段 |
+| `Style` / `NumberFormat` | 样式 |
+| `Formula` / `IsFormula` | 公式 |
+| `Hyperlink` | 超链接 |
+| `IsEmpty` | 是否空 |
+| `FromText` / `FromNumber` / `FromDate` / `FromBoolean` / `FromFormula` / `Empty` | 工厂方法 |
+| `SetValue(object?)` | 设置值 |
+| `GetString` / `GetDouble` / `GetDateTime` / `GetBoolean` / `GetValue` | 强类型读取 |
+| `TryGetString` / `TryGetDouble` / `TryGetDateTime` / `TryGetBoolean` | Try 读取 |
+
+#### 模型类
+
+- `CellStyle` / `BorderStyle` / `BorderEdge` / `HorizontalAlignment` / `VerticalAlignment`
+- `CellRange`（0-based）
+- `AutoFilter` / `FilterColumn` / `FilterType` / `FilterOperator`
+- `DataValidation` / `DataValidationType`
+- `ConditionalFormat` / `ConditionalFormatType` / `ConditionalOperator` / `ColorScaleInfo` / `DataBarInfo` / `IconSetInfo` / `IconSetStyle`
+- `Hyperlink`
+- `NamedRange`
+- `XlTable` / `XlTableColumn` / `TableStyleStyle`
+- `WorksheetImage` / `ImageAnchor` / `ImagePlacement` / `ImageMoveMode`
+- `SheetProtection` / `WorkbookProtection`
+- `WorkbookProperties` / `WorkbookSecurity`
+- `DegradationInfo` / `DegradationCapability`
+- `ExcelFormat` / `ExcelReadOptions` / `ExcelWriteOptions` / `WriteOptions<T>` / `ReadOptions<T>` / `LiteColumnAttribute`
+- `CellRef`（A1 引用工具，静态类）
+- `XlsxStreamWriter`
+- `LiteExcelException` / `LiteXlsxException` / `InvalidSheetNameException`
+
+---
+
+## 附录 B 低层 API 参考（SheetData / XlsxReader / XlsxWriter / CsvBackend / 流式）
+
+> **适用场景**：适合自定义 / 裸行数据 / 大文件场景。日常用法优先用对象模型 API（第 2-25 章）。低层 API 的坐标约定：`SheetData.Rows` 的 `Cell` 是 0-based 网格，`Headers` 为首行表头文本。
+
+#### B.1 `SheetData`（一张工作表的完整数据）
+
+↳ 正文：第 5 章 数据类型与转换（List<T> / DataTable 映射底层即 SheetData）、第 21 章 流式读取 / 进度回调 / 追加数据（流式 / 追加的数据载体）
+
+```csharp
+public sealed class SheetData
+{
+    public string SheetName { get; set; } = "Sheet1";
+    public List<string> Headers { get; set; } = new();
+    public List<IReadOnlyList<Cell>> Rows { get; set; } = new();
+    public List<CellRange> MergedRanges { get; set; } = new();
+    public AutoFilter? Filter { get; set; }
+    public bool FreezeHeader { get; set; }
+    public int FreezeRows { get; set; }
+    public int FreezeColumns { get; set; }
+    public List<double>? ColumnWidths { get; set; }
+    public CellStyle? HeaderStyle { get; set; }
+    public CellStyle? DefaultStyle { get; set; }
+    public Dictionary<int, CellStyle>? RowStyles { get; set; }
+    public Dictionary<int, CellStyle>? ColumnStyles { get; set; }
+    public Dictionary<int, double>? RowHeights { get; set; }
+    public Dictionary<string, string>? Comments { get; set; }
+    public List<DataValidation>? Validations { get; set; }
+    public List<ConditionalFormat> ConditionalFormats { get; set; } = new();
+    public string? CodeName { get; set; }
+    public List<WorksheetImage>? Images { get; set; }
+    public SheetProtection? Protection { get; set; }
+    public List<XlTable> Tables { get; set; } = new();
+}
+```
+
+#### B.2 `XlsxReader`（静态类，零反射，AOT 安全）
+
+↳ 正文：第 3 章 文件导航：打开 / 创建 / 保存 / 格式（打开 / 流读取的低层入口）、第 21 章 流式读取 / 进度回调 / 追加数据（21.4 流式读回）
+
+| 成员 | 说明 |
+|---|---|
+| `Read(path, sheetIndex[, firstRowIsHeader])` | 按索引读单表 |
+| `Read(path, sheetName[, firstRowIsHeader])` | 按名称读单表 |
+| `Read(stream, sheetIndex/name[, firstRowIsHeader])` | 从流读单表 |
+| `ReadAll(path)` / `ReadAll(stream)` | 读所有表 |
+| `Read<T>(path, sheetIndex/name[, configure])` | 读为 List\<T\> |
+| `ReadAsDataTable(path, sheetIndex/name[, firstRowIsHeader])` | 读为 DataTable |
+| `GetSheetNames(path)` / `GetSheetNames(stream)` | 列出工作表名 |
+| `StreamRows(path/stream, sheetName, onRow)` | 流式逐行读取 |
+| `ReadWithProgress(path, sheetIndex, onProgress)` | 带进度读取 |
+| `ReadProperties(path)` / `ReadProperties(stream)` | 读取文档属性 |
+
+#### B.3 `XlsxWriter`（静态类，零反射，AOT 安全）
+
+↳ 正文：第 3 章 文件导航：打开 / 创建 / 保存 / 格式（Excel.Write 写出）、第 21 章 流式读取 / 进度回调 / 追加数据（21.3 Append 的低层写出）
+
+| 成员 | 说明 |
+|---|---|
+| `Write(path, SheetData[, properties])` | 写单表 |
+| `Write(path, IReadOnlyList<SheetData>[, properties])` | 写多表 |
+| `Write(stream, SheetData[, properties])` | 写单表到流 |
+| `Write(stream, IReadOnlyList<SheetData>[, properties])` | 写多表到流 |
+| `Write<T>(path, data[, configure])` | 写 List\<T\> |
+| `Write(path, DataTable[, sheetName])` | 写 DataTable |
+| `Append(path, SheetData[, properties])` | 追加数据 |
+| `AutoColumnWidths(SheetData)` | 列宽自适应 |
+
+注意：`XlsxWriter.Write` 对 `.xlsm` 扩展名自动写出 macroEnabled 主文档类型；`SheetData` 写出时校验表名（`InvalidSheetNameException`）与重复表名（`LiteExcelException`）。
+
+#### B.4 `CsvBackend`（内部类，CSV 格式后端）
+
+↳ 正文：第 20 章 多格式行为（20.3 CSV 行为）
+
+> 低层 CSV 后端为 `internal`，日常 CSV 读写请走 `Excel.Open` / `Excel.Write`。此处列出行为要点供参考。
+
+- 实现 RFC 4180 基础子集：双引号包裹含分隔符 / 换行 / 引号的字段。
+- 读取分隔符自动探测（逗号 > 分号 > Tab，仅统计引号外）；`ExcelReadOptions.Separator` 可固定。
+- 写出默认逗号，`ExcelWriteOptions.Separator` 可指定。
+- 仅表格数据，不支持样式 / 合并 / 批注等 Excel 专有能力。
+
+#### B.5 `XlsxStreamWriter`（流式写入器）
+
+↳ 正文：第 21 章 流式读取 / 进度回调 / 追加数据（21.4 流式写入 CreateWriter）
+
+> 适合大文件逐行写入。通过 `Excel.CreateWriter(path|stream)` 获取。
+
+| 成员 | 说明 |
+|---|---|
+| `Create(path)` / `Create(stream)` | 创建写入器 |
+| `WriteRow(IEnumerable<object?>)` | 写一行值 |
+| `WriteRow(IEnumerable<Cell>)` | 写一行 Cell |
+| `Close()` / `Dispose()` | 完成文件（必须调用） |
+
+- 采用内联字符串（inlineStr），避免共享字符串表预扫描。
+- 支持单工作表；样式 / 公式 / 超链接随行写入（styles.xml 与 sheet rels 在 Close 时统一写出）。
+- 合并 / 筛选 / 图片等高级能力不支持。
+- 超链接数量极大时内存不再恒定。
+
+#### B.6 `CellRef`（A1 引用工具，静态类）
+
+↳ 正文：第 4 章 单元格与取值（A1 地址访问单元格）
+
+| 成员 | 说明 |
+|---|---|
+| `Parse(cellRef)` | `"A1"` -> `(row=0, col=0)` |
+| `TryParse(cellRef, out pos)` | 尝试解析 |
+| `ParseRange(range)` | 解析区域引用（0-based 含端点） |
+| `ToString(row, col)` | `(0,0)` -> `"A1"` |
+| `ColToLetter(col)` | `0` -> `"A"` |
+| `LetterToCol(letters)` | `"A"` -> `0` |
+
+#### B.7 新旧 API 对照
+
+对象模型 API 与低层 API 等价关系速查（对象模型按扩展名自动路由格式；低层 API 仅处理 xlsx/xlsm）：
+
+| 场景 | 对象模型 API | 低层 API |
 |---|---|---|
-| `GetSheetNames(string path)` | `List<string>` | 列出所有工作表名 |
-| `GetSheetNames(Stream stream)` | `List<string>` | 从流列出 |
-| `Read(string path, int sheetIndex, bool firstRowIsHeader = true)` | `SheetData` | 按索引读 |
-| `Read(string path, string sheetName, bool firstRowIsHeader = true)` | `SheetData` | 按名读 |
-| `Read(Stream stream, int sheetIndex, bool firstRowIsHeader = true)` | `SheetData` | 从流按索引读 |
-| `Read(Stream stream, string sheetName, bool firstRowIsHeader = true)` | `SheetData` | 从流按名读 |
-| `ReadAll(string path)` | `List<SheetData>` | 读全部表 |
-| `ReadAll(Stream stream)` | `List<SheetData>` | 从流读全部 |
-| `StreamRows(string path, string sheetName, Action<IReadOnlyList<Cell>> onRow)` | `void` | 流式逐行读 |
-| `StreamRows(Stream stream, string sheetName, Action<IReadOnlyList<Cell>> onRow)` | `void` | 从流式逐行读 |
-| `ReadWithProgress(string path, int sheetIndex, Action<int,int> onProgress)` | `void` | 带进度读取 |
-| `ReadAsDataTable(string path, int sheetIndex = 0, bool firstRowIsHeader = true)` | `DataTable` | 读为 DataTable |
-| `ReadAsDataTable(string path, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | 按名读为 DataTable |
-| `ReadAsDataTable(Stream stream, int sheetIndex = 0, bool firstRowIsHeader = true)` | `DataTable` | 从流读为 DataTable |
-| `ReadAsDataTable(Stream stream, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | 从流按名读 |
-| `Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null)` | `List<T>` | 读为 List&lt;T&gt;（反射，AOT 安全） |
-| `Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null)` | `List<T>` | 按名读为 List&lt;T&gt; |
-| `ReadProperties(string path)` / `ReadProperties(Stream stream)` | `WorkbookProperties` | 读取文档属性（作者/时间/标题） |
+| 打开文件 | `Excel.Open(path[, options])` | `XlsxReader.Read(path, 0)`（单表）/ `XlsxReader.ReadAll(path)`（全部表） |
+| 新建并写出 | `Excel.Create(...)` + `wb.SaveAs(path)` | `XlsxWriter.Write(path, sheet)` |
+| 读单表 | `wb.Worksheets[i]` / `wb.Worksheets["name"]` | `XlsxReader.Read(path, sheetIndex)` / `XlsxReader.Read(path, sheetName)` |
+| 读 List\<T\> | `Excel.Read<T>(path[, sheetName, configure])` | `XlsxReader.Read<T>(path, 0[, configure])` |
+| 读 DataTable | `Excel.ReadAsDataTable(path[, sheetName])` | `XlsxReader.ReadAsDataTable(path, 0)` |
+| 写 List\<T\> | `Excel.Write(path, list[, sheetName, configure])` | `XlsxWriter.Write(path, list)` |
+| 写 DataTable | `Excel.Write(path, table[, sheetName])` | `XlsxWriter.Write(path, table, sheetName)` |
+| 流式读 | `Excel.StreamRows(path, sheetName, onRow)` | `XlsxReader.StreamRows(path, sheetName, onRow)` |
+| 流式写 | `Excel.CreateWriter(path)` | `XlsxStreamWriter.Create(path)` |
+| 追加数据 | `Excel.Append(path, sheetData[, properties])` | `XlsxWriter.Append(path, sheetData[, properties])` |
+| 列出表名 | `Excel.GetSheetNames(path)` | `XlsxReader.GetSheetNames(path)` |
 
-### XlsxWriter
+> ⚠️ xls / xlsb / csv 无低层 API，请一律使用对象模型 `Excel.Open` / `Excel.Write`（按扩展名路由）。
+---
 
-| 方法 | 说明 |
-|---|---|
-| `Write(string path, SheetData data)` | 写单表 |
-| `Write(string path, IReadOnlyList<SheetData> sheets)` | 写多表 |
-| `Write(Stream stream, SheetData data)` | 写单表到流 |
-| `Write(Stream stream, IReadOnlyList<SheetData> sheets)` | 写多表到流 |
-| `Write(path/stream, sheets, WorkbookProperties? properties)` | 写出并携带文档属性 |
-| `Write(string path, DataTable table, string sheetName = "Sheet1")` | 从 DataTable 写 |
-| `Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)` | 从 List&lt;T&gt; 写（反射，AOT 安全） |
-| `Append(string path, SheetData? newData, WorkbookProperties? updateProperties = null)` | 追加数据并可更新文档属性 |
-| `AutoColumnWidths(SheetData sheet)` | 自动估算列宽 |
-
-### CellRef（工具类）
-
-| 方法 | 说明 |
-|---|---|
-| `CellRef.Parse(string cellRef)` | "A1" → (row=0, col=0) |
-| `CellRef.ToString(int row, int col)` | (0, 0) → "A1" |
-| `CellRef.ColToLetter(int col)` | 0 → "A", 26 → "AA" |
-| `CellRef.LetterToCol(string letters)` | "A" → 0, "AA" → 26 |
-
-### 模型类
-
-| 类 | 说明 |
-|---|---|
-| `SheetData` | 工作表数据 |
-| `Cell` | 单元格 |
-| `CellStyle` | 样式 |
-| `BorderStyle` / `BorderEdge` | 边框 |
-| `CellRange` | 区域（合并单元格） |
-| `AutoFilter` / `FilterColumn` | 自动筛选 |
-| `DataValidation` | 数据验证 |
-| `Hyperlink` | 超链接（Target / Tooltip / IsInternal） |
-| `WorksheetImage` | 工作表图片 |
-| `WorkbookSecurity` | 文件安全状态（打开密码/修改密码/只读/可保存） |
-| `LiteExcelException` / `InvalidSheetNameException` | 异常 |
-| `LiteColumnAttribute` | List&lt;T&gt; 列特性 |
-| `WorkbookProperties` | 文档属性（作者/时间/标题/应用名） |
-| `WriteOptions<T>` / `ReadOptions<T>` | List&lt;T&gt; 配置 |
-
-### 枚举
-
-| 枚举 | 值 |
-|---|---|
-| `CellType` | Text, Number, Date, Boolean, Empty |
-| `HorizontalAlignment` | General, Left, Center, Right |
-| `VerticalAlignment` | Top, Center, Bottom |
-| `FilterType` | Equals, Compare, Contains, BeginsWith, EndsWith, Blank |
-| `FilterOperator` | GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual, Between |
-| `DataValidationType` | List, WholeNumber, Decimal, Date |
-| `ImagePlacement` | Floating, InCell |
+*本手册覆盖 LiteExcel 当前主线版本的全部公开能力。*

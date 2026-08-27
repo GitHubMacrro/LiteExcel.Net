@@ -1,945 +1,1176 @@
-﻿# LiteExcel Usage Guide
+# LiteExcel User Guide
 
-**Version**: 2.4.2  
-**Target Frameworks**: net48 + net8.0  
-**Dependencies**: Zero third-party dependencies, .NET BCL only
-
----
-
-## Table of Contents
-
-1. [Installation & Reference](#1-installation--reference)
-2. [Object-Model API (Recommended)](#2-object-model-api-recommended)
-3. [Quick Start](#3-quick-start)
-4. [Cells & Data Types](#4-cells--data-types)
-5. [Reading](#5-reading)
-6. [Writing](#6-writing)
-7. [Styling](#7-styling)
-8. [Merged Cells](#8-merged-cells)
-9. [Auto Filter](#9-auto-filter)
-10. [Row Height & Column Width](#10-row-height--column-width)
-11. [Cell Comments](#11-cell-comments)
-12. [Hyperlinks](#12-hyperlinks)
-13. [Freeze Panes](#13-freeze-panes)
-14. [Images](#14-images)
-15. [Data Validation (Dropdown List)](#15-data-validation-dropdown-list)
-16. [Appending Data](#16-appending-data)
-17. [List<T> Mapping (reflection, AOT safe)](#17-listt-mapping-reflection-aot-safe)
-18. [DataTable Convenience API (AOT safe)](#18-datatable-convenience-api-aot-safe)
-19. [Stream Read/Write](#19-stream-readwrite)
-20. [Streaming Read & Progress Callback](#20-streaming-read--progress-callback)
-21. [Document Properties (Author/Time/Title)](#21-document-properties-authortimetitle)
-22. [File-Level Security (Open Password / Modify Password)](#22-file-level-security-open-password--modify-password)
-23. [Error Handling](#23-error-handling)
-24. [AOT Compatibility](#24-aot-compatibility)
-25. [Conditional Formatting (2.4.3+)](#25-conditional-formatting-243)
-26. [Named Ranges (2.4.4+)](#26-named-ranges-244)
-27. [Capability Degradation Callback (OnDegradation) (2.4.2+)](#27-capability-degradation-callback-ondegradation-242)
-28. [Full API Reference](#28-full-api-reference)
+> This manual reflects all public capabilities of the current mainline version of LiteExcel (object-model API + low-level API)
+> Terminology conventions: **object-model API** refers to the everyday usage centered on the `Excel` → `Workbook` → `Worksheet` → `Cell`/`Cells`/`Range` chain; **low-level API** refers to the raw data entry points such as `SheetData` / `XlsxReader` / `XlsxWriter` / `CsvBackend` / `XlsxStreamWriter`, see Appendix B.
 
 ---
 
-## 1. Installation & Reference
+## Contents
 
-### NuGet
+**Part 1 Getting Started**
+- [1. Installation and References](#1-installation-and-references)
+- [2. Quick Start (a minimal complete read and write)](#2-quick-start-a-minimal-complete-read-and-write)
+
+**Part 2 Object Model API**
+- [3. File Navigation: Open / Create / Save / Format (worksheet management, document properties)](#3-file-navigation-open-create-save-format-worksheet-management-document-properties)
+- [4. Cells and Values (Cell / Cells / Range / SetValue)](#4-cells-and-values-cell-cells-range-setvalue)
+- [5. Data Types and Conversion (text / number / date / bool / formula / nullable / Byte[])](#5-data-types-and-conversion-text-number-date-bool-formula-nullable-byte)
+- [6. Styles (CellStyle / Border / alignment / wrapping)](#6-styles-cellstyle-border-alignment-wrapping)
+- [7. Merged Cells](#7-merged-cells)
+- [8. AutoFilter](#8-autofilter)
+- [9. Row Height and Column Width (with AutoColumnWidths)](#9-row-height-and-column-width-with-autocolumnwidths)
+- [10. Comments](#10-comments)
+- [11. Hyperlinks (external / internal)](#11-hyperlinks-external-internal)
+- [12. Freeze Panes](#12-freeze-panes)
+- [13. Images (Floating / InCell / read-back)](#13-images-floating-incell-read-back)
+- [14. Data Validation](#14-data-validation)
+- [15. Conditional Formatting (cellIs / expression / colorScale / dataBar / long-tail / iconSet)](#15-conditional-formatting-cellis-expression-colorscale-databar-long-tail-iconset)
+- [16. Excel Tables (Table / ListObject, style enum and custom style names, column format)](#16-excel-tables-table-listobject-style-enum-and-custom-style-names-column-format)
+- [17. Named Ranges](#17-named-ranges)
+- [18. File-Level Passwords (open / modify)](#18-file-level-passwords-open-modify)
+- [19. Worksheet and Workbook Protection](#19-worksheet-and-workbook-protection)
+
+**Part 3 Multi-Format and Platform**
+- [20. Multi-Format Behavior (xlsx/xlsm full support, xls/xlsb/csv restrictions and degradation)](#20-multi-format-behavior-xlsxxlsm-full-support-xlsxlsbcsv-restrictions-and-degradation)
+- [21. Streaming Read / Progress Callback / Append](#21-streaming-read-progress-callback-append)
+- [22. Degradation Callback OnDegradation](#22-degradation-callback-ondegradation)
+- [23. AOT Compatibility (DAM, IsAotCompatible, verification and results)](#23-aot-compatibility-dam-isaotcompatible-verification-and-results)
+
+**Part 4 Operational Notes**
+- [24. Exception Handling](#24-exception-handling)
+- [25. Large-File Considerations](#25-large-file-considerations)
+
+**Appendices**
+- Appendix A Object Model Quick Reference (class / member index)
+- Appendix B Low-Level API Reference (SheetData / XlsxReader / XlsxWriter / CsvBackend / streaming)
+
+---
+
+## Part 1 Getting Started
+
+Chapters 1–2: installation references and a minimal runnable example; new readers start here.
+
+### 1. Installation and References
+
+#### NuGet Installation (recommended)
+
+Install from the NuGet published package, suitable for most production projects:
 
 ```powershell
 dotnet add package LiteExcel
 ```
 
-### csproj Reference
+You can also search for `LiteExcel` in the "Manage NuGet Packages" dialog of Visual Studio to install it.
+
+#### Local Reference from Source
+
+When the package has not been published or you need to debug against the library source, reference it through a csproj project reference:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="LiteExcel" Version="2.4.2" />
+  <ProjectReference Include="..\src\LiteExcel\LiteExcel.csproj" />
 </ItemGroup>
 ```
 
-### Namespace
+> **Note**: Prefer the NuGet package for production projects; a source reference is only for local debugging against the library source or before a version has been released.
 
-All APIs are in the `LiteExcel` namespace:
+#### Namespace
+
+All types reside in the `LiteExcel` namespace:
 
 ```csharp
 using LiteExcel;
 ```
 
-### Target Frameworks
+#### Target Frameworks
 
-- **net48**: legacy WinForms projects can reference directly
-- **net8.0**: new projects, supports AOT
-- C# 12 syntax (`<LangVersion>latest</LangVersion>`)
+The library targets **net48** and **net8.0** simultaneously. The net8.0 target additionally declares `IsAotCompatible=true`, and all public APIs are compatible with Native AOT / trimming (see Chapter 23).
 
 ---
 
-## 2. Object-Model API (Recommended)
+### 2. Quick Start (a minimal complete read and write)
 
-Since `2.2.0`, an intuitive object-model API is provided with a natural hierarchy:
-
-```text
-Excel             unified facade (open / create / convenience IO / streaming)
-  -> Workbook     workbook (worksheet collection / document properties / save)
-      -> Worksheet sheet (cells / ranges / merge / styles)
-          -> Cells / Cell / ExcelRange
-```
-
-The object-model API is built on the same read/write engine but wraps coordinates, typed access, and save semantics into familiar Excel-style usage. `XlsxReader / XlsxWriter / SheetData / Cell` remain fully supported; old and new APIs can be mixed, and files written by either are readable by the other.
-
-### 2.1 Create a Workbook
+The following uses the object-model API to complete the closed loop of "create → write values → save → open → read back":
 
 ```csharp
 using LiteExcel;
 
-// Default xlsx, contains one worksheet named "Sheet1"
-var wb = Excel.Create();
-var ws = wb.Worksheets["Sheet1"];
-```
-
-Specify the format and initial sheet name:
-
-```csharp
-var wbCsv = Excel.Create(ExcelFormat.Csv);              // create a csv workbook
-var wb2   = Excel.Create("Employees", ExcelFormat.Xlsx); // create and name the first sheet
-```
-
-Supported formats: `Xlsx`, `Xlsm`, `Csv`, `Xls`, `Xlsb` (the latter two are legacy formats with read and write implemented).
-
-Create a workbook with data in one step (the returned `Workbook` can still be combined with styles / freeze panes / conditional formatting / passwords):
-
-```csharp
-// From List<T> (first row is the header, reflection mapping, AOT safe)
-var wb = Excel.Create(new[] { new Person { Name = "Zhang San", Age = 25 } }, "Employees");
-wb.Worksheets[0].FreezeRows = 1;   // keep using workbook-level features
-wb.SaveAs("out.xlsx");
-
-// From DataTable (falls back to DataTable.TableName, then "Sheet1")
-var dt = new DataTable("Stock");
-dt.Columns.Add("Code"); dt.Columns.Add("Amount");
-dt.Rows.Add("A1", 12.5m);
-var wb2 = Excel.Create(dt);
-wb2.SaveAs("stock.xlsx");
-```
-
-### 2.2 Open an Existing File
-
-```csharp
-// Auto-detect the format from the extension (.xlsx / .xlsm / .csv)
-var opened = Excel.Open("data.xlsx");
-
-// Or force a specific format
-var forced = Excel.Open("data.csv", ExcelFormat.Csv);
-```
-
-`Excel.DetectFormat(path)` returns the detected format.
-
-Opening an encrypted file requires the password:
-
-```csharp
-var opened = Excel.Open("encrypted.xlsx", new ExcelReadOptions
-{
-    OpenPassword = "your-password",            // open password
-    ModifyPassword = "your-modify-password",   // modify password (optional)
-});
-```
-
-> Full details of file-level security (open/modify password) can be found in [§22 File-Level Security](#22-file-level-security-open-password--modify-password).
-
-### 2.3 Read and Write Cells
-
-Coordinates are **1-based**, so `Cell(1, 1)` is `A1`; A1 addresses are also accepted.
-
-```csharp
+var wb = Excel.Create();                       // Create a new workbook (contains Sheet1 by default)
 var ws = wb.Worksheets["Sheet1"];
 
-// Write
-ws.SetValue("A1", "Name");
+ws.SetValue("A1", "Name");                     // Header
 ws.SetValue("B1", "Age");
-ws.SetValue(2, 1, "Zhang San");  // A2
-ws.SetValue(2, 2, 25);           // B2
+ws.SetValue("A2", "Zhang San");
+ws.SetValue("B2", 25);
+ws.SetValue("A3", "Li Si");
+ws.SetValue("B3", 30);
 
-// Read
-string name = ws.Cell("A2").GetString();   // "Zhang San"
-double age = ws.Cell(2, 2).GetDouble();    // 25
+wb.SaveAs("people.xlsx");                      // Save to disk
+
+// Read back
+var opened = Excel.Open("people.xlsx");
+var sheet = opened.Worksheets[0];
+Console.WriteLine(sheet.Cell("A2").GetString());   // Output: Zhang San
+Console.WriteLine(sheet.Cell("B2").GetDouble());   // Output: 25
 ```
 
-Accessor methods:
+Output:
 
-| Method | Description |
-|---|---|
-| `GetString()` / `TryGetString(out var v)` | get text |
-| `GetDouble()` / `TryGetDouble(out var v)` | get number |
-| `GetDateTime()` / `TryGetDateTime(out var v)` | get date |
-| `GetBoolean()` / `TryGetBoolean(out var v)` | get boolean |
-| `GetValue()` | get as `object?` by type |
-| `SetValue(object? value)` | write (string/number/date/boolean/formula) |
-
-`Cell.Style`, `Cell.NumberFormat` read/write cell style and number format; `Cell.IsFormula` tells whether the cell holds a formula.
-
-#### Combined scenario: change value + style + comment + save
-
-After opening an existing file you can read, restyle and comment a **specific cell** in one flow, then save:
-
-```csharp
-var wb = Excel.Open("report.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// Change the value of A2
-ws.Cell("A2").SetValue("Done");
-
-// Change A2's background color and font
-ws.Cell("A2").Style = new CellStyle
-{
-    FillColor = "#FFFF00",              // background
-    FontName  = "Microsoft YaHei",      // font name
-    FontSize  = 14,
-    Bold      = true,
-    FontColor = "#FF0000",              // font color
-};
-
-// Add a comment to A2
-ws.Comments ??= new();
-ws.Comments["A2"] = "Needs manual review";
-
-// Batch style for a range (applied to every cell in A2:C3)
-ws.Range("A2:C3").Style = new CellStyle { FillColor = "#D9E1F2", Italic = true };
-
-wb.Save();                              // overwrite the original file
 ```
-
-> See [§7 Styling](#7-styling) and [§11 Cell Comments](#11-cell-comments) for details.
-
-### 2.4 Collection Access via `Cells`
-
-```csharp
-var cells = ws.Cells;
-
-var a1 = cells[1, 1];            // 1-based coordinate
-var b2 = cells["B2"];            // A1 address
-var r  = cells.Range("A1:C10");  // range
-
-foreach (var cell in cells)      // enumerate all stored cells
-{
-    Console.WriteLine($"{cell.Text} / {cell.Number}");
-}
-
-cells.SetValue("D2", "note");
-cells.Clear();                   // clear everything
+Zhang San
+25
 ```
-
-### 2.5 Range Operations via `ExcelRange`
-
-`Worksheet.Range(...)` returns an `ExcelRange` (note: the class is `ExcelRange`, not `Range`, to avoid clashing with BCL `System.Range`):
-
-```csharp
-var range = ws.Range("A1:C3");            // or ws.Range(1, 1, 3, 3)
-range.Fill(0);                            // fill the whole range
-range.Fill(new object?[,] { { 1, 2, 3 }, { 4, 5, 6 } });  // fill from a matrix
-var values = range.ToValues();            // object?[,]
-var cells = range.ToCells();              // Cell[,]
-range.Clear();
-range.Merge();                            // merge the range
-range.Unmerge();
-range.Style = new CellStyle { Bold = true };  // range style
-
-foreach (var cell in range) { /* enumerate cells in the range */ }
-```
-
-### 2.6 Save and Save As
-
-```csharp
-wb.Save();                        // save to the current path (throws LiteExcelException if none)
-wb.SaveAs("output.xlsx");         // save as, updates the current path
-wb.SaveAs("output.csv", ExcelFormat.Csv);  // cross-format save (depends on backend)
-wb.Save(stream, ExcelFormat.Xlsx);         // write to a stream
-```
-
-Rules:
-
-- After a successful `SaveAs`, subsequent `Save()` writes to the new path.
-- Cross-format save succeeds only if the target backend supports it; `csv` holds tabular data only.
-- `Excel.Write(path, workbook)` is equivalent to "save as the given path".
-
-### 2.7 Worksheet Management
-
-```csharp
-var wb = Excel.Create();
-wb.Worksheets.Add("Sheet2");              // add
-wb.Worksheets.Add("Sheet3");
-wb.Worksheets.Move(0, 1);                 // move
-wb.Worksheets.Remove("Sheet2");           // remove by name
-wb.Worksheets.RemoveAt(0);
-bool has = wb.Worksheets.Contains("Sheet3");
-var names = wb.Worksheets.Names;          // ["Sheet3", ...]
-```
-
-### 2.8 Document Properties
-
-```csharp
-var props = wb.Properties;
-props.Creator = "LiteExcel";
-props.Title = "Sample Report";
-wb.Save();
-```
-
-### 2.9 List\<T\> / DataTable Convenience API
-
-```csharp
-// List<T> mapping (reflection, AOT safe)
-Excel.Write("out.xlsx", new[] { new Person { Name = "Zhang San", Age = 25 } });
-var list = Excel.Read<Person>("out.xlsx");
-
-// DataTable (AOT safe)
-var dt = Excel.ReadAsDataTable("out.xlsx");
-Excel.Write("out2.xlsx", dt);
-```
-
-`Excel.GetSheetNames(path)` lists all worksheet names.
-
-### 2.10 Streaming Large Files
-
-```csharp
-// Streaming write: row by row, no memory residency
-using (var writer = Excel.CreateWriter("large.xlsx"))
-{
-    writer.WriteRow(new object?[] { "Name", "Age" });
-    for (int i = 0; i < 100000; i++)
-        writer.WriteRow(new object?[] { $"User{i}", i });
-}
-
-// Streaming read
-Excel.StreamRows("large.xlsx", "Sheet1", row =>
-{
-    Console.WriteLine(row[0]?.Text);
-});
-```
-
-### 2.11 Formulas and Advanced Capabilities
-
-```csharp
-ws.SetValue("A1", 1);
-ws.SetValue("A2", 2);
-ws.Cell("A3").SetValue(Cell.FromFormula("SUM(A1:A2)"));  // write a formula string
-bool isFormula = ws.Cell("A3").IsFormula;
-
-ws.Merge("A1:B1");                    // merge
-ws.FreezeHeader = true;               // freeze header (equivalent to FreezeRows = 1)
-ws.Range("A1:B1").Style = new CellStyle { Bold = true };
-```
-
-Styles, merge, comments, data validation, auto filter, row height and column width, hyperlinks, freeze panes and images are all available at the `Worksheet` level, mirroring the `SheetData` capabilities.
-
-### 2.12 Format Support Matrix
-
-| Format | Read | Write | Notes |
-|---|---|---|---|
-| `xlsx` | ✅ | ✅ | full read/write; 1904 date system read/write; saving a macro workbook to `.xlsx` throws (see "Macros & degradation") |
-| `xlsm` | ✅ | ✅ | read/write/save; `vbaProject.bin` macro part and host codeName bindings (`workbookPr`/`sheetPr`) preserved on save |
-| `csv` | ✅ | ✅ | tabular data only, no styles/merge |
-| `xls` | ✅ | ✅ | read/write (BIFF8, Excel 97+); formulas written as static cached values; saving a macro workbook to `.xls` throws (see "Macros & degradation") |
-| `xlsb` | ✅ | ✅ | read/write (BIFF12 binary OOXML); formulas written as static cached values; 1904 date system read/write |
-
-> **xls read scope**: `Excel.Open("file.xls")` reads BIFF8 workbooks: data cells (text/number/date/boolean), shared strings (including cross-CONTINUE continuation), merged cells, column widths, row heights, frozen header. Formula cells return the cached result value and the parsed formula text (common cell references, operators and built-in functions; unsupported formulas such as array/3D references return only the cached value).
-
-> **xls write scope**: `wb.SaveAs("file.xls", ExcelFormat.Xls)` writes BIFF8 workbooks: multiple sheets (Chinese names), text/number/date/boolean cells, merged cells, column widths, row heights, frozen header, custom number formats. Formula cells are written as static cached values (formula text is not preserved). Verified by opening in Excel.
-
-> **xlsb read scope**: `Excel.Open("file.xlsb")` reads the binary OOXML variant: data cells (text/number/date/boolean/error), shared strings, merged cells, column widths, row heights, frozen header, 1904 date system. Formula cells return the cached result value and the parsed formula text.
->
-> **xlsb write scope**: `wb.SaveAs("file.xlsb", ExcelFormat.Xlsb)` writes BIFF12 workbooks: multiple sheets (Chinese names), text/number/date/boolean cells, shared strings, number formats, merged cells, column widths, row heights, frozen header. Formula cells are written as static cached values (formula text is not preserved). Verified by opening in Excel (no repair prompt, values consistent after Excel re-save) and cross-checked with SheetJS.
-
-> **Save fidelity**: after `Excel.Open` + modify + save, LiteExcel rebuilds the mapped parts (sheet data, styles, merges, comments, validations, filters, formulas, etc.) and **preserves unmapped OOXML parts as raw bytes** (macro `vbaProject.bin`, themes, drawings, charts, tables, external links, etc.). So an `xlsm` opened → modified → saved keeps its macros. In addition, the VBA host code names (`workbookPr@codeName` / `sheetPr@codeName`) are captured on open and written back in their schema-required positions on save, so module bindings in the VBA project (`ThisWorkbook`, sheet modules, event macros) are not broken by hosts being renamed.
->
-> **Degradation rule**: if the workbook structure changed after open (sheets added/removed/renamed/moved), sheet-level unmapped relationships (drawings, hyperlinks) are not re-attached to the new file, though the raw part bytes are still kept as harmless unreferenced entries. Workbook-level parts (macros, theme) are unaffected by structure changes.
-
-> **1904 date system**: when `Excel.Open` reads a 1904-date-system workbook (`workbookPr@date1904` / `BrtWbProp` flags / `DATE1904` record), date cells are converted on the 1904 base (1904-01-01 = serial 0). `SaveAs` to xlsx/xlsb/xls writes back the 1904 flag and keeps serials consistent, so 1904 workbooks do not shift 4 years across format conversion.
-
-> **Encrypted file detection**: password-protected xlsx/xlsm/xlsb are actually OLE CFB containers (containing `EncryptionInfo`/`EncryptedPackage` streams). Since 2.4.0, open-password reading and password save are supported (see [§22 File-Level Security](#22-file-level-security-open-password--modify-password)); encrypted `.xls` (BIFF8 `FILEPASS` record) is detected with a clear error.
-
-> **Macros & degradation**: if a workbook contains VBA macros (captured from `vbaProject.bin` on open), `SaveAs` to `.xlsx` or `.xls` (which do not support macros) throws `LiteExcelException` to prevent silent loss, before the file is created. Save macro workbooks as `.xlsm` or `.xlsb`. Cell data values are never silently lost across any format conversion; metadata unsupported by xls (comments, data validation, auto filter) follows the documented degradation (ignored, no corrupt file produced).
-
-> **Stream API**: `Excel.Open(Stream, format)` supports reading all five formats via the object model (format must be specified explicitly — a stream has no extension); `Workbook.Save(Stream, format)` supports saving all five formats. The input stream is not closed (caller manages its lifetime); non-seekable streams are supported (copied to memory internally). `XlsxReader.StreamRows(Stream, ...)` remains an xlsx/xlsm-only low-level streaming row reader. After opening from a stream, `Workbook.CurrentPath` is null — use `SaveAs` to specify a save path.
-
-### 2.13 Old vs New API
-
-| Scenario | Object-Model API | XlsxWriter / XlsxReader |
-|---|---|---|
-| Open a file | `Excel.Open(path)` | `XlsxReader.Read(path, 0)` |
-| Create / write | `Excel.Create()` + `SaveAs` | `XlsxWriter.Write(path, sheet)` |
-| Read one sheet | `Workbook.Worksheets[i]` | `XlsxReader.Read(path, i)` |
-| Read as List\<T\> | `Excel.Read<T>(path)` | `XlsxReader.Read<T>(path)` |
-| Read as DataTable | `Excel.ReadAsDataTable(path)` | `XlsxReader.ReadAsDataTable(path)` |
-| Streaming read | `Excel.StreamRows(path, name, cb)` | `XlsxReader.StreamRows(path, name, cb)` |
-| Streaming write | `Excel.CreateWriter(path)` | `XlsxStreamWriter` |
 
 ---
 
-## 3. Quick Start
+## Part 2 Object Model API
 
-### Create a workbook and fill data (high-level API)
+Chapters 3-19: the object-model API main line of capabilities; all day-to-day read/write lives here.
 
-For interactive editing, use the object model: `Excel.Create` → `SetValue` → `SaveAs` → `Open`:
+### 3. File Navigation: Open / Create / Save / Format (worksheet management, document properties)
+
+#### 3.1 Open an Existing File
+
+`Excel.Open` auto-detects the format by file extension and supports xlsx / xlsm / xls / xlsb / csv:
 
 ```csharp
-using LiteExcel;
-
-var wb = Excel.Create();                    // default xlsx with Sheet1
-var ws = wb.Worksheets["Sheet1"];
-
-ws.SetValue("A1", "Name");  ws.SetValue("B1", "Age");
-ws.SetValue("A2", "Zhang");  ws.SetValue("B2", 28);
-ws.SetValue("A3", "Li");     ws.SetValue("B3", 32);
-
-ws.Cell("A1").Style = new CellStyle { Bold = true };   // bold header
-ws.FreezeHeader = true;                                  // freeze first row
-
-wb.SaveAs("output.xlsx");
-
-var rb = Excel.Open("output.xlsx");        // read back
-Console.WriteLine(rb.Worksheets[0].Cell("A2").GetString());  // Zhang
+var wb = Excel.Open("report.xlsx");            // auto-detected
+var wb2 = Excel.Open("data.csv");              // auto-detected as Csv
+var wb3 = Excel.Open("legacy.xls");            // auto-detected as Xls
 ```
 
-### Write from a custom class (List<T> mapping)
-
-For batch export, use `List<T>` mapping. One class declares column name / order / format / formula / ignore:
+You can also specify the format explicitly (useful when the extension does not match the content):
 
 ```csharp
-public class Employee
+var wb = Excel.Open("data.bin", ExcelFormat.Xlsx);
+```
+
+Output: (this example has no console output)
+
+#### 3.2 Open from a Stream
+
+A stream has no extension, so the format **must be specified explicitly**. The input stream is not closed (managed by the caller); a non-seekable stream (e.g., a network stream) is internally copied to memory:
+
+```csharp
+using var fs = File.OpenRead("report.xlsx");
+var wb = Excel.Open(fs, ExcelFormat.Xlsx);
+// after opening, CurrentPath is null, so use SaveAs to specify the save path
+wb.SaveAs("copy.xlsx");
+```
+
+Output:
+
+```
+written to copy.xlsx
+```
+
+Read all sheets from a stream: `Excel.Open(stream, ExcelFormat.Xlsx).Worksheets` directly iterates the multi-sheet worksheets.
+
+#### 3.3 Read Options `ExcelReadOptions`
+
+The second parameter of `Open` can pass read options, including password, merged-cell fill, CSV separator, etc.:
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
 {
-    [LiteColumn(Name = "Name", Order = 0)]
+    OpenPassword = "secret",        // open password (file encryption)
+    ModifyPassword = "write",       // modify password (write protection, used to obtain edit permission)
+    FillMergedCells = true,         // expand the top-left value of a merged range to the whole range
+    Separator = ';',                // only applies to CSV; auto-detected when null
+});
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `OpenPassword` | `string?` | Open password (file encryption); decrypts password-protected xlsx/xlsm/xlsb |
+| `ModifyPassword` | `string?` | Modify password (write protection); provides edit/save permission once supplied |
+| `FillMergedCells` | `bool` | Expand the top-left value of a merged range to the whole merged range; default `false` |
+| `Separator` | `char?` | Only applies to CSV; auto-detected when `null` |
+| `ReadStyles` | `bool` | Whether to read styles; default `true` |
+| `LeaveOpen` | `bool` | Whether to keep the input stream open after reading completes on the Stream overload; default `false` |
+
+Output: (this example has no console output)
+
+#### 3.4 Write Options `ExcelWriteOptions`
+
+The second parameter of `Excel.Write` can pass write options:
+
+```csharp
+Excel.Write("out.xlsx", wb, new ExcelWriteOptions
+{
+    Overwrite = true,           // whether to overwrite when the target file already exists, default true
+    AutoFitColumns = true,      // auto-estimate column widths before writing, default false
+    FreezeHeader = true,        // freeze the header row when writing, default false
+    Properties = new WorkbookProperties { Creator = "Me" },  // override document properties
+    OnDegradation = info => Console.WriteLine(info.Capability),  // degradation callback
+    Separator = ';',            // only applies to CSV; defaults to comma when null
+});
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `Overwrite` | `bool` | Whether to overwrite when the target file already exists; default `true` |
+| `AutoFitColumns` | `bool` | Auto-estimate column widths before writing; default `false` |
+| `FreezeHeader` | `bool` | Freeze the header row when writing; default `false` |
+| `Properties` | `WorkbookProperties?` | Override the workbook document properties |
+| `OnDegradation` | `Action<DegradationInfo>?` | Capability-degradation callback (reported item by item when writing to a format that does not support a capability; default `null`) |
+| `Separator` | `char?` | Only applies to CSV; defaults to comma when `null` |
+| `LeaveOpen` | `bool` | Whether to keep the output stream open after writing completes on the Stream overload; default `false` |
+
+Output:
+
+```
+written to out.xlsx
+```
+
+#### 3.5 Create a New Workbook
+
+`Excel.Create` has several overloads:
+
+```csharp
+var wb1 = Excel.Create();                    // empty workbook, default Sheet1
+Console.WriteLine(wb1.Worksheets[0].Name);   // print to verify: default sheet name
+var wb2 = Excel.Create("Data");              // specify the first worksheet name
+var wb3 = Excel.Create(new[] { "Q1", "Q2", "Q3" });   // batch-create sheets
+var wb4 = Excel.Create(ExcelFormat.Xlsm);    // specify the format
+```
+
+Create a workbook and write data in one step (List\<T\> DataTable):
+
+```csharp
+var people = new List<Person> { new() { Name = "A", Age = 1 } };
+var wb5 = Excel.Create(people, "People");    // first row is the header
+
+var dt = new System.Data.DataTable("T");
+dt.Columns.Add("X");
+dt.Rows.Add("v");
+var wb6 = Excel.Create(dt);                  // when sheetName is empty, uses TableName
+```
+
+Output:
+
+```
+Sheet1
+```
+
+#### 3.6 Save and Save As
+
+`Workbook.Save` saves to the current path (throws `LiteExcelException` when a newly created workbook has no path); `SaveAs` specifies the path:
+
+```csharp
+wb.Save();                    // save to CurrentPath
+wb.SaveAs("out.xlsx");        // save as, keeping the current format
+wb.SaveAs("out.xlsm", ExcelFormat.Xlsm);   // save as and convert format
+wb.Save(new FileStream("s.xlsx", FileMode.Create), ExcelFormat.Xlsx);  // save to a stream
+```
+
+Output:
+
+```
+written to out.xlsx / out.xlsm / s.xlsx
+```
+
+> ⚠️ **Important**: this library **does not create / edit charts (Chart) or pivot tables (PivotTable)**. If your data contains such elements, **do not** save/save-as over the source file with this library, otherwise these elements will be **discarded** (saved as a new file without charts/pivot tables). You can save a copy in another tool first and then process it.
+
+- `SaveAs(path, format)` requires the path extension to match the format, otherwise it throws `LiteExcelException` (to avoid writing content that does not match the extension, producing a file Excel cannot open).
+- A workbook containing VBA macros cannot be saved to a format that does not support macros (xlsx / xls); it errors out early.
+- File-level passwords (open / modify) are only supported for xlsx / xlsm / xlsb; saving to csv / xls with a password set will error.
+
+#### 3.7 Format Enum `ExcelFormat`
+
+```csharp
+public enum ExcelFormat { Xlsx, Xlsm, Xlsb, Xls, Csv }
+```
+
+- `Excel.DetectFormat(path)` returns the format based on the extension.
+- `Workbook.Format` returns the current workbook format.
+
+Output: (this example has no console output)
+
+#### 3.8 List Worksheet Names
+
+```csharp
+var names = Excel.GetSheetNames("report.xlsx");   // List<string>
+using var stream = File.OpenRead("report.xlsx");
+var names2 = Excel.GetSheetNames(stream);         // only xlsx/xlsm (XML metadata of the zip container)
+```
+
+> `Excel.GetSheetNames(path)` reads the workbook metadata directly for xlsx / xlsm (lightweight); for **xlsb / xls / csv** it goes through `Excel.Open` to parse by format and also returns the sheet names correctly (xlsb returns its internal sheet names; csv returns the single sheet "Sheet1"). `GetSheetNames(Stream)` only supports xlsx / xlsm; to get xlsb sheet names from a stream, use `Excel.Open(stream, ExcelFormat.Xlsb).Worksheets.Names`.
+
+Output: (returns a List<string>)
+
+#### 3.9 Worksheet Management `Worksheets`
+
+`Workbook.Worksheets` is a `WorksheetCollection` supporting add/remove/move, index and name access:
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];         // access by name (throws LiteExcelException if missing)
+var first = wb.Worksheets[0];             // access by index (0-based)
+Console.WriteLine(wb.Worksheets.Count);   // count
+Console.WriteLine(string.Join(", ", wb.Worksheets.Names));   // all sheet names
+Console.WriteLine(wb.Worksheets.Contains("Sheet1"));         // true
+
+wb.Worksheets.Add("Data");                // add an empty sheet
+wb.Worksheets.Add("People", peopleList);  // add a sheet and write List<T> (first row is the header)
+wb.Worksheets.Add("T", dataTable);        // add a sheet and write DataTable (first row is column names)
+wb.Worksheets.Move(0, 2);                 // reorder (0-based)
+wb.Worksheets.Remove("Data");             // remove by name (returns true if present)
+wb.Worksheets.RemoveAt(0);                // remove by index
+```
+
+Iterate over worksheets:
+
+```csharp
+foreach (var sheet in wb.Worksheets)
+    Console.WriteLine(sheet.Name);
+```
+
+Output:
+
+```
+1
+Sheet1
+True
+Sheet1
+T
+```
+
+> ⚠️ Sheet-name validation rules are described in Chapter 24: illegal sheet names (containing `\ / ? * [ ] :`, longer than 31 characters, etc.) throw `InvalidSheetNameException` when saving.
+
+#### 3.10 Document Properties `WorkbookProperties`
+
+`Workbook.Properties` corresponds to `docProps/core.xml` and `docProps/app.xml` inside the xlsx package:
+
+```csharp
+var wb = Excel.Create();
+wb.Properties.Creator = "JackZ";
+wb.Properties.LastModifiedBy = "Me";
+wb.Properties.Created = DateTime.Now;
+wb.Properties.Modified = DateTime.Now;
+wb.Properties.Title = "季度报告";
+wb.Properties.Subject = "财务";
+wb.Properties.Application = "LiteExcel";
+wb.SaveAs("props.xlsx");
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `Creator` | `string?` | Author (dc:creator) |
+| `LastModifiedBy` | `string?` | Last saved by (cp:lastModifiedBy) |
+| `Created` | `DateTime?` | Creation time |
+| `Modified` | `DateTime?` | Last modification time |
+| `Title` | `string?` | Title |
+| `Subject` | `string?` | Subject |
+| `Application` | `string?` | Application name; when `null`, the host assembly name is used when writing |
+
+Override properties when writing (`ExcelWriteOptions.Properties`):
+
+```csharp
+Excel.Write("out.xlsx", wb, new ExcelWriteOptions
+{
+    Properties = new WorkbookProperties { Creator = "Bot", Title = "Auto" },
+});
+```
+
+Read back document properties:
+
+```csharp
+var opened = Excel.Open("props.xlsx");
+Console.WriteLine(opened.Properties.Creator);    // JackZ
+Console.WriteLine(opened.Properties.Title);      // 季度报告
+```
+
+Output:
+
+```
+JackZ
+季度报告
+```
+
+---
+
+### 4. Cells and Values (Cell / Cells / Range / SetValue)
+
+#### 4.1 Accessing Cells by Coordinate / Address
+
+Coordinates are uniformly **1-based**. `Worksheet.Cell` provides access by row/column or by A1 address:
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+var c1 = ws.Cell(1, 1);        // A1
+var c2 = ws.Cell("B3");        // B3
+Console.WriteLine(c1.IsEmpty);   // True (not yet assigned)
+```
+
+`Cell` is a reference type; accessing a nonexistent cell returns an `Empty` placeholder; once assigned it falls into the grid.
+
+Output:
+
+```
+True
+```
+
+#### 4.2 Setting Values with `SetValue`
+
+`SetValue` automatically expands the grid when out of bounds; `null` / `DBNull` writes an empty cell:
+
+```csharp
+ws.SetValue(1, 1, "Header");
+ws.SetValue("A2", 42);
+ws.SetValue("B2", null);       // clears B2
+Console.WriteLine(ws.Cell("A2").GetString());   // 42
+```
+
+Output:
+
+```
+42
+```
+
+#### 4.3 Collection-Style Access with `Cells`
+
+`Worksheet.Cells` provides a whole-sheet entry point, supporting indexers, range extraction, enumeration, and bulk clearing:
+
+```csharp
+ws.Cells[1, 1] = "A1 via cells";      // indexer (row, column)
+ws.Cells["B1"] = "B1 via cells";      // indexer (A1 address)
+ws.Cells.SetValue("C1", 3.14);        // convenient value write
+
+var range = ws.Cells.Range("A1:D10"); // extract range
+foreach (var cell in ws.Cells)        // enumerate existing cells in the grid
+    Console.WriteLine(cell.GetString());
+ws.Cells.Clear();                     // clear all values in the sheet (keeps rows/columns)
+```
+
+Output:
+
+```
+A1 via cells
+B1 via cells
+3.14
+```
+
+#### 4.4 Range Operations with `ExcelRange`
+
+`Worksheet.Range` returns a contiguous rectangular range (1-based, inclusive), supporting batch read/write, styles, merge, clear, and enumeration:
+
+```csharp
+var r = ws.Range("A1:D10");          // or ws.Range(1, 1, 10, 4)
+Console.WriteLine(r.Address);        // "A1:D10"
+Console.WriteLine($"{r.RowCount} x {r.ColumnCount}");  // 10 x 4
+
+r.Fill("x");                          // fill the whole range with the same value
+r.Fill(new object?[,] { { "a", "b" }, { "c", "d" } }); // write a 2D array
+var vals = r.ToValues();              // read back as object?[,]
+var cells = r.ToCells();              // read back as Cell[,]
+r.Style = new CellStyle { Bold = true };  // uniform style for the whole range
+r.Merge();                            // merge the range
+r.Unmerge();                          // unmerge
+r.Clear();                            // clear values within the range
+
+var single = r.Cell(0, 0);            // relative offset within the range (0-based)
+```
+
+Output:
+
+```
+A1:D10
+10 x 4
+```
+
+#### 4.5 Cell Read Methods
+
+`Cell` provides strongly typed and Try-style reads:
+
+```csharp
+var cell = ws.Cell("A1");
+string? s = cell.GetString();        // text / number / date / bool formatted by convention
+double d = cell.GetDouble();         // throws InvalidCastException on type mismatch
+DateTime dt = cell.GetDateTime();
+bool b = cell.GetBoolean();
+object? raw = cell.GetValue();       // raw object; Empty returns null
+
+bool ok = cell.TryGetString(out var s2);   // empty cell returns false
+bool ok2 = cell.TryGetDouble(out double d2);
+bool ok3 = cell.TryGetDateTime(out DateTime dt2);
+bool ok4 = cell.TryGetBoolean(out bool b2);
+```
+
+Output: (cell's raw value)
+
+---
+
+### 5. Data Types and Conversion (text / number / date / bool / formula / nullable / Byte[])
+
+#### 5.1 Cell Type `CellType`
+
+```csharp
+public enum CellType { Text, Number, Date, Boolean, Empty }
+```
+
+`Cell.Type` determines which value field is valid: `Text` / `Number` / `Date` / `Boolean`. `IsEmpty` indicates an empty cell.
+
+Output: (this example has no console output)
+
+#### 5.2 Factory Methods
+
+```csharp
+var t = Cell.FromText("hello");
+var n = Cell.FromNumber(42, "#,##0.00");      // can carry a number format
+var d = Cell.FromDate(new DateTime(2024, 1, 1));  // default format yyyy-MM-dd
+var b = Cell.FromBoolean(true);
+var f = Cell.FromFormula("SUM(A1:A3)");        // formula cell
+var e = Cell.Empty;
+Console.WriteLine(d.GetString());   // default date format yyyy-MM-dd
+```
+
+Output:
+
+```
+2024-01-01
+```
+
+#### 5.3 Automatic Type Conversion
+
+`SetValue(object?)` auto-maps based on the CLR type:
+
+| CLR type | Cell type |
+|---|---|
+| `bool` | `Boolean` |
+| `DateTime` | `Date` (default `yyyy-MM-dd`) |
+| `sbyte/byte/short/ushort/int/uint/long/ulong/float/double/decimal` | `Number` |
+| `null` / `DBNull` | `Empty` |
+| others (including `string`) | `Text` |
+
+```csharp
+ws.SetValue("A1", 3.14);        // Number
+ws.SetValue("A2", true);        // Boolean
+ws.SetValue("A3", DateTime.Now); // Date
+ws.SetValue("A4", "text");      // Text
+ws.SetValue("A5", null);        // Empty
+
+Console.WriteLine(ws.Cell("A1").Type);   // Number
+Console.WriteLine(ws.Cell("A2").Type);   // Boolean
+Console.WriteLine(ws.Cell("A3").Type);   // Date
+Console.WriteLine(ws.Cell("A4").Type);   // Text
+Console.WriteLine(ws.Cell("A5").Type);   // Empty
+```
+
+Output:
+
+```
+Number
+Boolean
+Date
+Text
+Empty
+```
+
+#### 5.4 Nullable Types
+
+`SetValue` accepts `object?`; nullable value types (`int?` / `DateTime?`, etc.) are handled by their underlying value after boxing; `null` writes an empty cell:
+
+```csharp
+int? maybe = null;
+ws.SetValue("A1", maybe);        // writes empty
+maybe = 7;
+ws.SetValue("A2", maybe);        // Number 7
+Console.WriteLine(ws.Cell("A1").IsEmpty);     // True (null writes empty)
+Console.WriteLine(ws.Cell("A2").GetDouble()); // 7
+```
+
+Output:
+
+```
+True
+7
+```
+
+#### 5.5 Number Format Quick Reference
+
+`NumberFormat` uses Excel format code strings; common examples:
+
+| Format code | Effect |
+|---|---|
+| `"0"` | integer |
+| `"0.00"` | two decimal places |
+| `"#,##0.00"` | thousands separator + two decimal places |
+| `"0%"` | percentage |
+| `"yyyy/m/d"` / `"yyyy-MM-dd"` | date |
+| `"hh:mm"` | time |
+| `"@"` | text |
+
+```csharp
+ws.Cell("A1").SetValue(12345.678);
+ws.Cell("A1").NumberFormat = "#,##0.00";   // displays 12,345.68
+Console.WriteLine(ws.Cell("A1").GetString());  // read back per the format
+```
+
+Output:
+
+```
+12,345.68
+```
+
+#### 5.6 Automatic Date Detection on Read
+
+When reading xlsx / xlsm / xlsb, if a cell's number format is a built-in Excel date format (IDs 14-22, 27-36, 45-47, 50-58, etc.), it is automatically read as `CellType.Date`:
+
+```csharp
+var opened = Excel.Open("dates.xlsx");
+var cell = opened.Worksheets[0].Cell("A1");
+if (cell.Type == CellType.Date)
+    Console.WriteLine(cell.GetDateTime().ToString("yyyy-MM-dd"));
+```
+
+The 1904 date system flag (`Date1904`) captured on open is written back to the corresponding format flag on save, keeping the date serial-value base consistent.
+
+Output:
+
+```
+2024-01-01
+```
+
+#### 5.7 Formulas
+
+`Cell.Formula` is a field separate from the cached value (the formula string no longer occupies `Text`, avoiding overwriting the cached result value of text formulas). The old style of writing the formula into `Text` and setting `IsFormula=true` remains compatible:
+
+```csharp
+var cell = ws.Cell("C1");
+cell.Formula = "SUM(A1:B1)";     // writes only the formula string, does not compute the result
+cell.IsFormula = true;           // treated as a formula on write (compatibility shim)
+
+// or directly assign a formula Cell to a cell (SetValue accepts a Cell and copies its content)
+ws.Cell("C2").SetValue(Cell.FromFormula("A1*2"));
+Console.WriteLine(cell.Formula);             // SUM(A1:B1)
+Console.WriteLine(ws.Cell("C2").Formula);    // A1*2
+```
+
+Output:
+
+```
+SUM(A1:B1)
+A1*2
+```
+
+In List\<T\> mapping, `[LiteColumn(IsFormula = true)]` treats a string property as a formula column (see section 5.9).
+
+#### 5.8 Byte[]
+
+`SetValue` treats any non-numeric type as `Text` (`value.ToString()`). **For binary data, use the image API** (`Worksheet.AddImage`, see chapter 13) or encode it to text yourself. The library itself does not map `byte[]` to a binary cell type.
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", Convert.ToBase64String(new byte[] { 1, 2, 3 }));  // encode to text yourself
+Console.WriteLine(ws.Cell("A1").GetString());                       // AQID
+```
+
+Output:
+
+```
+AQID
+```
+
+#### 5.9 List\<T\> Mapping and `[LiteColumn]`
+
+The `[LiteColumn]` attribute controls column name / order / format / ignore / formula during List\<T\> mapping:
+
+```csharp
+public class Person
+{
+    [LiteColumn(Name = "姓名", Order = 0)]
     public string Name { get; set; } = "";
 
-    [LiteColumn(Name = "Age", Order = 1)]
+    [LiteColumn(Name = "年龄", Order = 1, Format = "0")]
     public int Age { get; set; }
 
-    [LiteColumn(Name = "Hire Date", Order = 2, Format = "yyyy-MM-dd")]
-    public DateTime HireDate { get; set; }
-
-    [LiteColumn(Name = "Salary", Order = 3, Format = "#,##0.00")]
-    public decimal Salary { get; set; }
-
-    [LiteColumn(Name = "Active", Order = 4)]
-    public bool Active { get; set; }
-
-    [LiteColumn(Name = "Avg Age", Order = 5, IsFormula = true)]
-    public string AvgAgeFormula { get; set; } = "";   // formula: "=AVERAGE(B2:B3)" or "AVERAGE(B2:B3)"
+    [LiteColumn(Name = "总额", Order = 2, Format = "#,##0.00", IsFormula = true)]
+    public string Total { get; set; } = "";   // value may or may not have a leading "="
 
     [LiteColumn(Ignore = true)]
-    public string InternalId { get; set; } = "";       // skipped
+    public string Secret { get; set; } = "";  // not output
 }
-
-var list = new List<Employee>
-{
-    new() { Name = "Zhang", Age = 28, HireDate = new DateTime(2020, 3, 15), Salary = 8500.50m, Active = true, AvgAgeFormula = "=AVERAGE(B2:B3)" },
-    new() { Name = "Li",    Age = 32, HireDate = new DateTime(2018, 7, 1),  Salary = 12000m,    Active = false, AvgAgeFormula = "AVERAGE(B2:B3)" },
-};
-
-XlsxWriter.Write("employees.xlsx", list, opt => opt.FreezeHeader = true);
 ```
 
-Supported property types:
+```csharp
+var people = new List<Person> { new() { Name = "张三", Age = 30, Total = "=100*2", Secret = "隐藏" } };
+var wb = Excel.Create(people, "People");   // headers: 姓名 | 年龄 | 总额; Secret column ignored
+wb.SaveAs("people.xlsx");
+```
 
-| C# property type | → Excel column | Attribute |
+Output:
+
+```
+written to people.xlsx
+```
+
+CLR types auto-converted by List\<T\> mapping:
+
+| CLR type | Cell type | Description |
 |---|---|---|
-| `string` | text | — |
-| `int` / `double` / `decimal` | number | `Format` |
-| `DateTime` | date | `Format` (display format) |
-| `bool` | boolean | — |
-| `string` + `IsFormula=true` | formula | `IsFormula` |
-| `null` | empty cell | — |
-| any + `Ignore=true` | skipped | `Ignore` |
+| `int` / `long` / `short` / `byte` | `Number` | integer |
+| `double` / `float` / `decimal` | `Number` | decimal |
+| `DateTime` | `Date` | date-time |
+| `bool` | `Boolean` | boolean |
+| `string` | `Text` | text |
 
-> Advanced capabilities (hyperlinks, styles, merged cells, freeze, conditional formatting, images) require the high-level API (`Excel.Create` + `Cell.Hyperlink` / `Cell.Style`, etc.) or the low-level `SheetData`. `List<T>` mapping targets "bulk plain data".
+All the above types support nullable versions (`int?` / `DateTime?`, etc.); null writes an empty cell.
 
-### Minimal Write
+#### 5.10 List\<T\> Fluent Configuration (WriteOptions\<T\> / ReadOptions\<T\>)
 
-```csharp
-var sheet = new SheetData
-{
-    SheetName = "Employees",
-    Headers = new() { "Name", "Age", "Birthday" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("Zhang San"), Cell.FromNumber(25), Cell.FromDate(new DateTime(2000, 1, 1)) },
-        new Cell[] { Cell.FromText("Li Si"), Cell.FromNumber(30), Cell.FromDate(new DateTime(1995, 5, 10)) },
-    },
-};
-
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-### Minimal Read
+Besides the `[LiteColumn]` attribute, Fluent API and dictionary mapping are also supported, suitable for ad-hoc column name / format / ignore / formula adjustments:
 
 ```csharp
-var sheet = XlsxReader.Read("output.xlsx", sheetIndex: 0);
+// Fluent configuration when writing
+Excel.Write("people.xlsx", people, "Employees", opt => opt
+    .Column(p => p.Name, "姓名")                    // specify column name
+    .Column(p => p.Age, "年龄", format: "0")        // specify column name + number format
+    .Column(p => p.Total, "总额", isFormula: true)  // formula column (value may or may not have a leading "=")
+    .Ignore(p => p.Secret)                          // ignore property
+);
 
-Console.WriteLine($"Sheet: {sheet.SheetName}");
-Console.WriteLine($"Headers: {string.Join(", ", sheet.Headers)}");
-foreach (var row in sheet.Rows)
-{
-    foreach (var cell in row)
-    {
-        Console.Write($"{cell.Type} ");
-    }
-    Console.WriteLine();
-}
+// Fluent configuration when reading
+var list = Excel.Read<Person>("people.xlsx", "Employees", opt => opt
+    .Column(p => p.Name, "姓名")                    // specify header name -> property mapping
+    .Column(p => p.Age, "年龄")
+);
+
+// Dictionary mapping (common in legacy projects); configure uses named parameters, sheetName defaults to "Sheet1"
+Excel.Write("people.xlsx", people, configure: opt => opt
+    .Map(new Dictionary<string, string> { { "Name", "姓名" }, { "Age", "年龄" } })
+);
 ```
 
-### Reading Cell Values
+Output: (directly writes out a people.xlsx file)
+
+#### 5.11 DataTable Convenience API
+
+DataTable carries its own column structure, **no reflection required** (does not trigger reflection-based mapping), AOT safe. The first row is automatically written as column names:
 
 ```csharp
-var sheet = XlsxReader.Read("output.xlsx", 0);
+var dt = new DataTable("订单");
+dt.Columns.Add("OrderID", typeof(int));
+dt.Columns.Add("Customer", typeof(string));
+dt.Columns.Add("Amount", typeof(decimal));
+dt.Columns.Add("Date", typeof(DateTime));
+dt.Rows.Add(1001, "Alice", 599.99m, new DateTime(2024, 6, 1));
+dt.Rows.Add(1002, "Bob", 1299.50m, new DateTime(2024, 6, 15));
 
-foreach (var row in sheet.Rows)
-{
-    string name = row[0].Type == CellType.Text ? row[0].Text! : "";
-    int age = row[1].Type == CellType.Number ? (int)row[1].Number : 0;
-    DateTime birthday = row[2].Type == CellType.Date ? row[2].Date : DateTime.MinValue;
+Excel.Write("orders.xlsx", dt, "Orders");   // write in one step
 
-    Console.WriteLine($"{name}, {age}, {birthday:yyyy-MM-dd}");
-}
+var back = Excel.ReadAsDataTable("orders.xlsx", "Orders");   // read back (first row is header)
+foreach (DataRow row in back.Rows)
+    Console.WriteLine($"#{row["OrderID"]} | {row["Customer"]} | {row["Amount"]:0.00}");
+
+var wb = Excel.Create(dt);        // create a workbook in one step; sheetName defaults to DataTable.TableName (then Sheet1 if empty)
+Console.WriteLine("sheet: " + wb.Worksheets[0].Name);
+wb.SaveAs("orders2.xlsx");
+
+var opened = Excel.Open("orders.xlsx");
+// import into an existing sheet: clear existing content, then rebuild from A1; includeHeader=false does not write the column-name row
+opened.Worksheets[0].ImportData(dt, includeHeader: false);
+opened.SaveAs("orders3.xlsx");
+Console.WriteLine("imported rows: " + Excel.ReadAsDataTable("orders3.xlsx", "Orders", firstRowIsHeader: false).Rows.Count);
 ```
 
-**Determine cell type**: use `cell.Type`, then read the corresponding field.
+Important parameters:
 
-| `cell.Type` | Valid field |
-|---|---|
-| `CellType.Text` | `cell.Text` |
-| `CellType.Number` | `cell.Number` |
-| `CellType.Date` | `cell.Date` |
-| `CellType.Boolean` | `cell.Boolean` |
-| `CellType.Empty` | (empty cell) |
+| Parameter | Type | Description |
+|---|---|---|
+| `Excel.Write` | `sheetName` | `string` | target sheet name, defaults to `"Sheet1"` |
+| `Excel.Write` | `options` | `ExcelWriteOptions?` | write options (see 3.4) |
+| `Excel.Create` | `sheetName` | `string?` | uses `DataTable.TableName` if empty, then `"Sheet1"` if also empty |
+| `Excel.ReadAsDataTable` | `sheetName` | `string?` | target sheet; null reads the first sheet |
+| `Excel.ReadAsDataTable` | `firstRowIsHeader` | `bool` | whether the first row is used as column names, default `true` |
+| `ImportData` | `includeHeader` | `bool` | whether to write the column-name row, default `true`; import clears the whole sheet then rebuilds from A1 |
+
+Output:
+
+```
+#1001 | Alice | 599.99
+#1002 | Bob | 1299.50
+sheet: 订单
+imported rows: 2
+```
+
+> ⚠️ The DataTable path does not go through reflection-based mapping (`[LiteColumn]` / Fluent configuration does not apply); the first row is always the column names (except with `includeHeader=false`).
 
 ---
 
-## 4. Cells & Data Types
+### 6. Styles (CellStyle / Border / alignment / wrapping)
 
-### Cell Class
+#### 6.1 Cell Style `CellStyle`
 
-`Cell` represents a cell; the `Type` property determines which value field is valid.
-
-```csharp
-public sealed class Cell
-{
-    public CellType Type { get; set; }
-    public string? Text { get; set; }          // valid when CellType.Text
-    public double Number { get; set; }           // valid when CellType.Number
-    public DateTime Date { get; set; }           // valid when CellType.Date
-    public bool Boolean { get; set; }            // valid when CellType.Boolean
-    public CellStyle? Style { get; set; }        // cell style (optional)
-    public string? NumberFormat { get; set; }    // number format (for writing)
-    public bool IsEmpty { get; }                 // whether empty
-}
-```
-
-### Factory Methods
-
-```csharp
-// Text
-var textCell = Cell.FromText("Hello");
-var emptyTextCell = Cell.FromText("");  // → CellType.Empty
-var nullTextCell = Cell.FromText(null); // → CellType.Empty
-
-// Number (optional format)
-var numCell = Cell.FromNumber(3.14);
-var moneyCell = Cell.FromNumber(9999.50, "#,##0.00");
-
-// Date (optional format, default "yyyy-MM-dd")
-var dateCell = Cell.FromDate(new DateTime(2024, 6, 1));
-var dateCell2 = Cell.FromDate(DateTime.Now, "yyyy/MM/dd HH:mm:ss");
-
-// Boolean
-var boolCell = Cell.FromBoolean(true);
-
-// Empty
-var emptyCell = Cell.Empty;
-```
-
-### Supported Cell Types
-
-| Type | Description |
-|---|---|
-| `Text` | Text (shared strings or inline strings) |
-| `Number` | Number (exact long up to 12 digits) |
-| `Date` | Date (stored as number + format code, auto-converted) |
-| `Boolean` | Boolean (`t="b"`) |
-| `Empty` | Empty cell |
-
-### Number Format Quick Reference
-
-| Format | Effect |
-|---|---|
-| `"0"` | Integer |
-| `"0.00"` | Two decimals |
-| `"#,##0"` | Thousands separator, integer |
-| `"#,##0.00"` | Thousands separator, two decimals |
-| `"0.00%"` | Percent |
-| `"yyyy-MM-dd"` | Date (default) |
-| `"yyyy/MM/dd"` | Date |
-| `"HH:mm:ss"` | Time |
-| `"yyyy-MM-dd HH:mm:ss"` | Date time |
-
-### Automatic Date Detection on Read
-
-When reading, the library queries the numFmtId in `styles.xml` and automatically converts date-formatted numbers to `CellType.Date`. Built-in date format IDs (14-22, 27-36, 45-47, 50-58) are recognized as dates.
-
----
-
-## 5. Reading
-
-### List All Sheet Names
-
-```csharp
-var names = XlsxReader.GetSheetNames("file.xlsx");
-// ["Employees", "Salaries", "Departments"]
-```
-
-### Read Single Sheet by Index
-
-```csharp
-// sheetIndex starts at 0, firstRowIsHeader defaults to true
-var sheet = XlsxReader.Read("file.xlsx", sheetIndex: 0);
-
-// Do not treat first row as header
-var sheet = XlsxReader.Read("file.xlsx", sheetIndex: 0, firstRowIsHeader: false);
-```
-
-### Read Single Sheet by Name
-
-```csharp
-var sheet = XlsxReader.Read("file.xlsx", sheetName: "Employees");
-```
-
-### Read All Worksheets
-
-```csharp
-var allSheets = XlsxReader.ReadAll("file.xlsx");
-foreach (var sheet in allSheets)
-{
-    Console.WriteLine($"{sheet.SheetName}: {sheet.Rows.Count} rows");
-}
-```
-
-### Streaming Read Large Files (No Memory Residency)
-
-```csharp
-XlsxReader.StreamRows("bigfile.xlsx", "Sheet1", row =>
-{
-    // row is IReadOnlyList<Cell>, callback per row
-    foreach (var cell in row)
-    {
-        // process cell
-    }
-});
-```
-
-> **Note**: `StreamRows` automatically skips the header row (first row). Only processes data rows.
-
-### Read with Progress
-
-```csharp
-XlsxReader.ReadWithProgress("bigfile.xlsx", sheetIndex: 0, (current, total) =>
-{
-    Console.WriteLine($"Progress: {current}/{total} ({current * 100 / total}%)");
-});
-```
-
-> `current` increments from 1 to `total` (data rows, excluding header).
-
-### SheetData Structure of Read Result
-
-```csharp
-public sealed class SheetData
-{
-    public string SheetName { get; set; }            // sheet name
-    public List<string> Headers { get; set; }         // headers (filled when firstRowIsHeader=true)
-    public List<IReadOnlyList<Cell>> Rows { get; set; } // data rows
-    public List<CellRange> MergedRanges { get; set; }   // merged cell ranges
-    public AutoFilter? Filter { get; set; }              // auto filter
-    public CellStyle? HeaderStyle { get; set; }          // header style
-    public CellStyle? DefaultStyle { get; set; }         // default style
-    public Dictionary<int, CellStyle>? RowStyles { get; set; }      // row styles
-    public Dictionary<int, CellStyle>? ColumnStyles { get; set; }  // column styles
-    public Dictionary<int, double>? RowHeights { get; set; }       // row heights
-    public Dictionary<string, string>? Comments { get; set; }      // cell comments
-    public List<DataValidation>? Validations { get; set; }          // data validation
-}
-```
-
----
-
-## 6. Writing
-
-### Write Single Sheet
-
-```csharp
-var sheet = new SheetData { ... };
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-### Write Multiple Sheets
-
-```csharp
-var sheets = new List<SheetData>
-{
-    new() { SheetName = "Sheet1", Headers = new() { "A" }, Rows = ... },
-    new() { SheetName = "Sheet2", Headers = new() { "B" }, Rows = ... },
-};
-XlsxWriter.Write("multi.xlsx", sheets);
-```
-
-### Freeze Header
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    FreezeHeader = true,  // freeze first row
-};
-```
-
-### Freeze Rows and Columns
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B", "C" },
-    Rows = ...,
-    FreezeRows = 2,       // freeze first 2 rows
-    FreezeColumns = 1,    // freeze first column
-};
-```
-
-### Column Widths
-
-```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "Name", "Age", "Remark" },
-    Rows = ...,
-    ColumnWidths = new() { 15, 8, 30 },  // width in Excel character units
-};
-```
-
-### Auto Column Widths
-
-```csharp
-var sheet = new SheetData { ... };
-
-// Estimate best widths (CJK chars count as 2, others 1, range 8~50)
-XlsxWriter.AutoColumnWidths(sheet);
-
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-> Call `AutoColumnWidths` before `Write`; it fills `sheet.ColumnWidths`.
-
-### Sheet Name Validation
-
-Sheet names are validated on write; invalid names throw `InvalidSheetNameException`:
-- Must not be empty
-- Max 31 characters
-- Must not contain `\ / ? * [ ] :`
-
-```csharp
-try
-{
-    XlsxWriter.Write("bad.xlsx", new SheetData { SheetName = "test[1]" });
-}
-catch (InvalidSheetNameException ex)
-{
-    Console.WriteLine(ex.Message);
-}
-```
-
----
-
-### CSV Write Separator (2.4.3+)
-
-CSV output uses comma by default. To switch to semicolon (common in Chinese-locale Excel) or Tab:
-
-```csharp
-Excel.Write("out.csv", wb, new ExcelWriteOptions { Separator = ';' });
-```
-
-The setting takes effect for that write only.
-
-> CSV supports only configurable separators. Other formats ignore this.
-> Other Excel-only capabilities (comments, merges, filters, images, styles, etc.) are reported via the degradation callback. See [§25 Capability Degradation Callback](#25-capability-degradation-callback-ondegradation-242).
-
----
-
-## 7. Styling
-
-### Style Priority (Override)
-
-```
-Cell.Style  >  RowStyles[row]  >  ColumnStyles[col]  >  DefaultStyle
-```
-
-> Override: if a cell has its own Style, it fully uses it, not inheriting row/column/sheet defaults.
-
-### Cell Style
+Colors uniformly use the `"#RRGGBB"` format:
 
 ```csharp
 var style = new CellStyle
 {
-    FontName = "Segoe UI",
-    FontSize = 14,
+    FontName = "Arial",
+    FontSize = 12,
     Bold = true,
-    Italic = false,
-    FontColor = "#FF0000",        // red font
-    FillColor = "#FFFF00",        // yellow fill
+    Italic = true,
+    Underline = false,
+    Strikeout = false,
+    FontColor = "#FF0000",
+    FillColor = "#FFFF00",
     HorizontalAlignment = HorizontalAlignment.Center,
     VerticalAlignment = VerticalAlignment.Center,
     WrapText = true,
+    NumberFormat = "#,##0.00",   // used for dxf read-back (table column format / conditional formatting)
     Border = new BorderStyle
     {
         Top = new BorderEdge { Style = "thin", Color = "#000000" },
-        Bottom = new BorderEdge { Style = "thin", Color = "#000000" },
-        Left = new BorderEdge { Style = "medium" },
-        Right = new BorderEdge { Style = "medium" },
     },
 };
-
-var cell = new Cell { Type = CellType.Text, Text = "styled", Style = style };
 ```
 
-### Restyle a specific cell / range (object-model API)
-
-After opening an existing file, assign directly to `Cell.Style` / `ExcelRange.Style` to restyle a **specific cell** or **range**. `Style` is a wholesale replacement; fields you leave unset keep Excel defaults:
+| Parameter | Type | Description |
+|---|---|---|
+| `FontName` | `string?` | font name, e.g. `"Arial"` |
+| `FontSize` | `double` | font size, default 11 |
+| `Bold` | `bool` | bold |
+| `Italic` | `bool` | italic |
+| `Underline` | `bool` | underline |
+| `Strikeout` | `bool` | strikethrough |
+| `FontColor` | `string?` | font color, `"#RRGGBB"` format |
+| `FillColor` | `string?` | fill color, `"#RRGGBB"` format |
+| `HorizontalAlignment` | `HorizontalAlignment` | horizontal alignment, default `General` |
+| `VerticalAlignment` | `VerticalAlignment` | vertical alignment, default `Bottom` |
+| `WrapText` | `bool` | automatic wrapping |
+| `NumberFormat` | `string?` | number format code (used for dxf read-back) |
+| `Border` | `BorderStyle?` | border |
 
 ```csharp
-var wb = Excel.Open("styled.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// Single cell: background + font + font color
-ws.Cell("A2").Style = new CellStyle
-{
-    FillColor = "#FFFF00",          // background (#RRGGBB)
-    FontName  = "Microsoft YaHei",  // font name
-    FontSize  = 14,                 // size in points
-    Bold      = true,
-    FontColor = "#FF0000",          // font color
-};
-
-// Range: every cell inside A2:C3 gets the same style
-ws.Range("A2:C3").Style = new CellStyle
-{
-    FillColor = "#D9E1F2",
-    Italic    = true,
-    HorizontalAlignment = HorizontalAlignment.Center,
-};
-
-// Change value and style at once
-ws.Cell("B2").SetValue("new value");
-ws.Cell("B2").Style = new CellStyle { FillColor = "#92D050", Bold = true };
-
-wb.Save();   // or wb.SaveAs("styled2.xlsx")
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.Cell("A1").Style = style;
+Console.WriteLine(ws.Cell("A1").Style.Bold);   // True
 ```
 
-> `ExcelRange.Style` walks every cell in the range. `Style` is a **replacement**, not incremental merge — if you need to keep existing style and change one property, read the current style first and copy it (`CellStyle` provides `Clone()`).
+Output:
 
-### Header / Row / Column / Default Styles
+```
+True
+```
+
+#### 6.2 Borders `BorderStyle` / `BorderEdge`
 
 ```csharp
-var sheet = new SheetData
+var style = new CellStyle
 {
-    Headers = new() { "Name", "Score", "Grade" },
-    Rows = ...,
-
-    // header style
-    HeaderStyle = new CellStyle { Bold = true, FillColor = "#4472C4", FontColor = "#FFFFFF" },
-
-    // default style
-    DefaultStyle = new CellStyle { FontSize = 11 },
-
-    // column styles (key = 0-based column index)
-    ColumnStyles = new()
+    Border = new BorderStyle
     {
-        { 2, new CellStyle { HorizontalAlignment = HorizontalAlignment.Center } },
-    },
-
-    // row styles (key = 0-based row index, corresponding to Rows)
-    RowStyles = new()
-    {
-        { 1, new CellStyle { FillColor = "#FFFF00" } },
+        Top = new BorderEdge { Style = "thin", Color = "#000000" },
+        Bottom = new BorderEdge { Style = "double" },
+        Left = new BorderEdge { Style = "medium", Color = "#333333" },
+        Right = new BorderEdge { Style = "dashed" },
     },
 };
 ```
 
-### Border Styles
+`BorderEdge.Style` is a string; common values: `thin` / `medium` / `thick` / `double` / `dashed` / `dotted`, etc.
 
-| Value | Description |
-|---|---|
-| `"thin"` | thin |
-| `"medium"` | medium |
-| `"thick"` | thick |
-| `"dotted"` | dotted |
-| `"dashed"` | dashed |
-| `"double"` | double |
-| `"none"` | none |
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.Cell("A1").Style = style;
+Console.WriteLine(ws.Cell("A1").Style.Border.Top.Style);   // thin
+```
+
+Output:
+
+```
+thin
+```
+
+#### 6.3 Alignment and Wrapping
+
+```csharp
+public enum HorizontalAlignment { General, Left, Center, Right }
+public enum VerticalAlignment { Top, Center, Bottom }
+```
+
+`WrapText = true` enables automatic wrapping within the cell.
+
+Output: (this example has no console output)
+
+#### 6.4 Setting Cell / Range Styles (object-model API)
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// single cell
+ws.Cell("A1").Style = new CellStyle { Bold = true, FillColor = "#D9E1F2" };
+ws.Cell("A1").NumberFormat = "yyyy/m/d";
+
+// uniform style for a range
+ws.Range("A1:C10").Style = new CellStyle { HorizontalAlignment = HorizontalAlignment.Center };
+Console.WriteLine(ws.Cell("A1").NumberFormat);   // yyyy/m/d
+```
+
+Output:
+
+```
+yyyy/m/d
+```
+
+#### 6.5 Header Style `HeaderStyle`
+
+Applies to the `SheetData.Headers` header row.
+
+> ⚠️ **Prerequisite**: `HeaderStyle` only takes effect when there is a separate header row (List\<T\> / DataTable writes, or low-level `SheetData.Headers` (see Appendix B.1)). Since the object model is a "whole-sheet grid" model (all rows written via `ws.SetValue` count as data rows, with no separate header row), setting `ws.HeaderStyle = ...` directly has **no** effect. To style the first row in the object model, use `RowStyles` to target row 0:
+
+```csharp
+// Option 1: low-level / List<T> / DataTable paths (have Headers)
+ws.HeaderStyle = new CellStyle { Bold = true, FillColor = "#4472C4", FontColor = "#FFFFFF" };
+```
+
+```csharp
+// Option 2: object-model grid (treat the first row as header -> use RowStyles for row 0)
+ws.SetValue("A1", "Name"); ws.SetValue("B1", "Age");
+ws.RowStyles = new Dictionary<int, CellStyle>
+{
+    { 0, new CellStyle { Bold = true, FillColor = "#4472C4", FontColor = "#FFFFFF" } },
+};
+Console.WriteLine(ws.RowStyles[0].Bold);   // True
+```
+
+Output:
+
+```
+True
+```
+
+#### 6.6 Whole-Sheet Default Style `DefaultStyle`
+
+Has the lowest priority:
+
+```csharp
+ws.DefaultStyle = new CellStyle { FontName = "Consolas", FontSize = 10 };
+Console.WriteLine(ws.DefaultStyle.FontName);   // Consolas
+```
+
+Output:
+
+```
+Consolas
+```
+
+#### 6.7 Row-Level Styles `RowStyles`
+
+The key is a **0-based row index**:
+
+```csharp
+ws.RowStyles = new Dictionary<int, CellStyle>
+{
+    { 1, new CellStyle { FillColor = "#FCE4D6" } },   // row 2 (0-based 1)
+};
+Console.WriteLine(ws.RowStyles[1].FillColor);   // #FCE4D6
+```
+
+Output:
+
+```
+#FCE4D6
+```
+
+#### 6.8 Column-Level Styles `ColumnStyles`
+
+The key is a **0-based column index**:
+
+```csharp
+ws.ColumnStyles = new Dictionary<int, CellStyle>
+{
+    { 2, new CellStyle { HorizontalAlignment = HorizontalAlignment.Right } },  // column 3
+};
+Console.WriteLine(ws.ColumnStyles[2].HorizontalAlignment);   // Right
+```
+
+Output:
+
+```
+Right
+```
+
+#### 6.9 Style Priority (Overriding)
+
+When writing, resolution follows this priority (**row/column-level style precedence is more explicit**):
+
+- **Data rows**: `Cell.Style` > `RowStyle` > `ColumnStyle` > `DefaultStyle`
+- **Header row**: `HeaderStyle` > `ColumnStyle` > `DefaultStyle`
+
+```csharp
+// Example: cell style overrides row style, row style overrides column style, column style overrides default style
+ws.DefaultStyle = new CellStyle { FontSize = 10 };
+ws.ColumnStyles = new Dictionary<int, CellStyle> { { 0, new CellStyle { Bold = true } } };
+ws.RowStyles = new Dictionary<int, CellStyle> { { 0, new CellStyle { Italic = true } } };
+ws.Cell("A1").Style = new CellStyle { Underline = true };
+// A1 final: Underline (cell) + Italic (row) + Bold (column) + FontSize 10 (default)
+```
+
+Output: (this example has no console output)
 
 ---
 
-## 8. Merged Cells
+### 7. Merged Cells
+
+#### 7.1 Writing Merged Cells
 
 ```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B", "C" },
-    Rows = ...,
-    MergedRanges = new()
-    {
-        new CellRange(0, 0, 0, 2),  // merge first data row A1:C1
-        new CellRange(1, 3, 0, 0),  // merge A2:A4 (3 rows)
-    },
-};
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+ws.SetValue("A1", "Merged Title");
+ws.Merge("A1:D1");                    // A1 address
+ws.Merge(2, 1, 2, 3);                 // 1-based row/column (merges A2:C2)
+ws.Merge("A3:B4");
+
+// Range-based approach
+ws.Range("C5:E5").Merge();
+Console.WriteLine(ws.MergedRanges.Count);   // 4
 ```
+
+Output:
+
+```
+4
+```
+
+#### 7.2 Unmerging
+
+```csharp
+ws.Unmerge("A1:D1");
+ws.Range("C5:E5").Unmerge();
+```
+
+Output: (this example has no console output)
+
+#### 7.3 Reading Merged Ranges
+
+`Worksheet.MergedRanges` returns `IReadOnlyList<CellRange>` (**0-based**, consistent with the low-level model (see Appendix B.1)):
+
+```csharp
+var opened = Excel.Open("merged.xlsx");
+var ws = opened.Worksheets[0];
+foreach (var m in ws.MergedRanges)
+    Console.WriteLine($"{m.FirstRow},{m.FirstCol} - {m.LastRow},{m.LastCol}");
+```
+
+Output:
+
+```
+0,0 - 0,3
+1,0 - 1,2
+2,0 - 3,1
+4,2 - 4,4
+```
+
+#### 7.4 Filling Merged Ranges
+
+Setting `FillMergedCells = true` when reading expands the top-left value across the entire merged range:
+
+```csharp
+var wb = Excel.Open("merged.xlsx", new ExcelReadOptions { FillMergedCells = true });
+// cells in the merged range other than the top-left now also have values
+```
+
+Output: (this example has no console output)
 
 ---
 
-## 9. Auto Filter
+### 8. AutoFilter
+
+#### 8.1 Writing a Filter
+
+`Worksheet.Filter` is an `AutoFilter` object containing `Range`, per-column conditions `Columns`, and `HiddenRows`. The first row of an Excel filter range is **always the header** — so write the header row first, and data starts from row 2:
 
 ```csharp
-// Method 1: pass filter conditions, library computes hidden rows
-var sheet = new SheetData
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// Header row (row 1 of the filter range)
+ws.SetValue("A1", "Name");
+ws.SetValue("B1", "Type");
+ws.SetValue("C1", "Score");
+
+// Data starts from row 2, 541 rows total → range A1:C542
+for (int r = 2; r <= 542; r++)
 {
-    Headers = new() { "Name", "City" },
-    Rows = ...,
-    Filter = new AutoFilter
+    ws.SetValue(r, 1, $"Name {r - 1}");
+    ws.SetValue(r, 2, r % 2 == 0 ? "Active" : "Inactive");
+    ws.SetValue(r, 3, (r - 1) * 10);
+}
+
+ws.Filter = new AutoFilter
+{
+    Range = "A1:C542",
+    Columns = new List<FilterColumn>
     {
-        Range = "A1:B5",
-        Columns = new()
+        new FilterColumn
         {
-            new FilterColumn
-            {
-                ColumnIndex = 1,
-                Type = FilterType.Equals,
-                Values = new() { "Beijing" },
-            },
+            ColumnIndex = 1,                 // 0-based column index (2nd column)
+            Type = FilterType.Equals,
+            Values = new List<string> { "Active" },
         },
     },
 };
+```
 
-// Method 2: pass hidden row numbers directly
-sheet.Filter = new AutoFilter
+Key members of `AutoFilter`:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `Range` | `string` | Filter range in A1-style reference, first row is the header |
+| `Columns` | `List<FilterColumn>` | Per-column filter conditions, 0-based column index |
+| `HiddenRows` | `HashSet<int>` | Manually hidden 0-based row index set (optional, see 8.6) |
+
+Key members of `FilterColumn`:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ColumnIndex` | `int` | 0-based column index (1st column = 0) |
+| `Type` | `FilterType` | Condition type, see 8.2 |
+| `Values` | `List<string>` | Set of matching values |
+| `Operator` | `FilterOperator` | Comparison operator when `Type = Compare`, see 8.3 |
+| `MinValue` / `MaxValue` | `string?` | Lower / upper bound of `Between` |
+
+Output: (this example has no console output)
+
+> ⚠️ Do not write data into the first row of the filter range — Excel treats that row as the header (showing the filter arrow); data only participates in filtering correctly when it starts from row 2.
+
+#### 8.2 Filter Condition Type `FilterType`
+
+`FilterColumn.Type` specifies the filter condition type for a column; the enum values are as follows:
+
+```csharp
+public enum FilterType { Equals, Compare, Contains, BeginsWith, EndsWith, Blank }
+```
+
+Output: (this example has no console output)
+
+#### 8.3 Compare Operator `FilterOperator`
+
+When `FilterColumn.Type = FilterType.Compare`, use `Operator` to specify the comparison relationship:
+
+```csharp
+public enum FilterOperator { GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual, Between }
+```
+
+```csharp
+new FilterColumn
 {
-    Range = "A1:B5",
-    HiddenRows = new() { 1, 3 },
+    ColumnIndex = 2,
+    Type = FilterType.Compare,
+    Operator = FilterOperator.GreaterThan,
+    Values = new List<string> { "500" },
 };
 ```
 
-### Filter Condition Types
+Output: (this example has no console output)
 
-| Type | Description |
-|---|---|
-| `Equals` | equals one of the values (multi-select) |
-| `Compare` | compare (`>` `<` `>=` `<=` `between`) |
-| `Contains` | text contains |
-| `BeginsWith` | begins with |
-| `EndsWith` | ends with |
-| `Blank` | blank / not blank |
+#### 8.4 Between Example
 
-### Between Example
+For a range filter, use `Operator = FilterOperator.Between` together with `MinValue` / `MaxValue`:
 
 ```csharp
 new FilterColumn
@@ -947,843 +1178,640 @@ new FilterColumn
     ColumnIndex = 2,
     Type = FilterType.Compare,
     Operator = FilterOperator.Between,
-    MinValue = "60",
-    MaxValue = "90",
+    MinValue = "100",
+    MaxValue = "500",
 };
 ```
 
----
+Output: (this example has no console output)
 
-## 10. Row Height & Column Width
+#### 8.5 Multiple Conditions (AND Logic)
+
+Multiple `FilterColumn` entries take effect simultaneously (a row must satisfy all column conditions):
 
 ```csharp
-var sheet = new SheetData
+ws.Filter = new AutoFilter
 {
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    RowHeights = new()
+    Range = "A1:D542",
+    Columns = new List<FilterColumn>
     {
-        { 0, 30.0 },   // first data row height 30pt
+        new FilterColumn { ColumnIndex = 1, Type = FilterType.Equals, Values = new() { "Active" } },
+        new FilterColumn { ColumnIndex = 2, Type = FilterType.Compare, Operator = FilterOperator.GreaterThan, Values = new() { "500" } },
     },
 };
-
-// auto column widths
-XlsxWriter.AutoColumnWidths(sheet);
-XlsxWriter.Write("output.xlsx", sheet);
 ```
 
----
+Output: (this example has no console output)
 
-## 11. Cell Comments
+#### 8.6 Manually Specifying Hidden Rows
+
+`HiddenRows` is a 0-based row index set (relative to `Rows`):
 
 ```csharp
-var sheet = new SheetData
+ws.Filter = new AutoFilter
 {
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    Comments = new()
-    {
-        { "A1", "This is a comment on A1" },
-        { "B1", "Comment with special chars < & >" },
-    },
+    Range = "A1:D542",
+    HiddenRows = new HashSet<int> { 1, 3, 5 },   // hides rows 2, 4, 6
 };
-XlsxWriter.Write("comments.xlsx", sheet);
-
-var read = XlsxReader.Read("comments.xlsx", 0);
-Console.WriteLine(read.Comments?["A1"]);
 ```
 
-### Object-model API: add / read comments on a specific cell
+Output: (this example has no console output)
 
-After opening an existing file, add, update, read or remove comments per cell:
+#### 8.7 Reading a Filter
 
-```csharp
-var wb = Excel.Open("comments.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// Add a comment (initialize Comments if it is null)
-ws.Comments ??= new();
-ws.Comments["A2"] = "This is a comment on A2";
-
-// Update an existing comment
-ws.Comments["A2"] = "Comment updated";
-
-// Read a comment
-if (ws.Comments is not null && ws.Comments.TryGetValue("A2", out var text))
-    Console.WriteLine($"A2 comment: {text}");
-
-// Remove a comment
-ws.Comments.Remove("A2");
-
-wb.Save();
-```
-
----
-
-## 12. Hyperlinks
-
-### Writing a Hyperlink
-
-Hyperlinks are supported in xlsx/xlsm/xlsb/xls. Set them via the `Cell.Hyperlink` property:
+After opening a file, read the filter range and per-column conditions via `Worksheet.Filter`:
 
 ```csharp
-var sheet = new SheetData
+var opened = Excel.Open("filtered.xlsx");
+var filter = opened.Worksheets[0].Filter;
+if (filter is not null)
 {
-    Headers = new() { "Name", "Homepage" },
-    Rows = new()
-    {
-        new Cell[]
-        {
-            Cell.FromText("Zhang San"),
-            new Cell { Type = CellType.Text, Text = "Click to visit", Hyperlink = new Hyperlink
-            {
-                Target = "https://example.com",
-                Tooltip = "Zhang San's homepage",
-            }},
-        },
-    },
-};
-
-XlsxWriter.Write("links.xlsx", sheet);
-```
-
-### Hyperlink Properties
-
-| Property | Type | Description |
-|---|---|---|
-| `Target` | `string` | link target URL (required) |
-| `Tooltip` | `string?` | hover tooltip text (optional) |
-| `IsInternal` | `bool` | whether it is an internal link (e.g. `Sheet1!A1`) |
-
-### Object-Model API: Set a Hyperlink
-
-```csharp
-var wb = Excel.Open("links.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// Set a hyperlink
-ws.Cell("B2").Hyperlink = new Hyperlink
-{
-    Target = "https://example.com",
-    Tooltip = "Click to visit",
-};
-
-wb.Save();
-```
-
-### Reading Hyperlinks
-
-```csharp
-var sheet = XlsxReader.Read("links.xlsx", 0);
-var cell = sheet.Rows[0][1];  // B2
-if (cell.Hyperlink is not null)
-{
-    Console.WriteLine($"Target: {cell.Hyperlink.Target}");
-    Console.WriteLine($"Tooltip: {cell.Hyperlink.Tooltip}");
+    Console.WriteLine(filter.Range);
+    foreach (var col in filter.Columns)
+        Console.WriteLine($"{col.ColumnIndex}: {col.Type} {string.Join(",", col.Values)}");
 }
 ```
 
-> Hyperlinks are read/write supported in xlsx/xlsm/xlsb/xls (external URL/file/mailto/UNC and internal `#Sheet!A1` jumps); csv does not support hyperlinks. When `IsInternal=true`, `Target` looks like `#Sheet1!A1`.
+Output:
 
+```
+A1:C542
+1: Equals Active
+```
 ---
 
-## 13. Freeze Panes
+### 9. Row Height and Column Width (with AutoColumnWidths)
 
-### Freeze Rows / Columns
+#### 9.1 Setting Row Height
 
-Control via the `SheetData.FreezeRows` and `FreezeColumns` properties:
+`Worksheet.RowHeights` is a `Dictionary<int, double>` whose key is the **0-based row index**, in **points**:
 
 ```csharp
-var sheet = new SheetData
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "Tall row");
+ws.RowHeights = new Dictionary<int, double> { { 0, 30.0 } };   // row 1 height 30 points
+```
+
+Output: (this example has no console output)
+
+#### 9.2 Setting Column Width
+
+`Worksheet.ColumnWidths` is a `Dictionary<int, double>` whose key is the **0-based column index**:
+
+```csharp
+ws.ColumnWidths = new Dictionary<int, double>
 {
-    Headers = new() { "A", "B", "C", "D" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("data1"), Cell.FromText("x"), Cell.FromText("y"), Cell.FromText("z") },
-        new Cell[] { Cell.FromText("data2"), Cell.FromText("a"), Cell.FromText("b"), Cell.FromText("c") },
-    },
-    FreezeRows = 2,       // freeze first 2 rows
-    FreezeColumns = 1,    // freeze first column
+    { 0, 20.0 },
+    { 1, 15.0 },
 };
 ```
 
-### FreezeHeader Compatibility
+Output: (this example has no console output)
+
+#### 9.3 Auto-Fitting Column Width `AutoColumnWidths`
+
+`Worksheet.AutoColumnWidths()` estimates the width of each column based on the existing content in the sheet (Chinese characters count as 2, English / digits count as 1, clamped to `[8, 50]`), and writes the results into `ColumnWidths`:
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "Name");
+ws.SetValue("A2", "Zhang San");
+ws.SetValue("B1", "Description");
+ws.SetValue("B2", "A very long description that should widen the column");
+ws.AutoColumnWidths();
+// ws.ColumnWidths is now estimated from the content
+```
+
+Read-back verification:
+
+```csharp
+var opened = Excel.Open("autowidth.xlsx");
+var widths = opened.Worksheets[0].ColumnWidths;
+if (widths is not null)
+    foreach (var kv in widths)
+        Console.WriteLine($"Col {kv.Key}: {kv.Value:F1}");
+```
+
+Output:
+
+```
+Col 0: 9.0
+Col 1: 50.0
+```
+
+> ⚠️ `AutoColumnWidths` produces estimates (Chinese characters count as 2, English/digits count as 1, clamped to `[8, 50]`), which may differ slightly from Excel's actual rendered width.
+
+#### 9.4 Auto-Fitting on Write
+
+Setting `ExcelWriteOptions.AutoFitColumns = true` on `Excel.Write` auto-estimates column widths for every sheet before writing:
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets["Sheet1"].SetValue("A1", "自动适配列宽");
+Excel.Write("out.xlsx", wb, new ExcelWriteOptions { AutoFitColumns = true });
+```
+
+Output: written to out.xlsx
+
+---
+### 10. Comments
+
+#### 10.1 Writing Comments
+
+`Worksheet.Comments` is a `Dictionary<string, string>` whose key is an **A1-style cell reference** and whose value is the comment text:
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string>
+{
+    { "A1", "This is a comment on A1" },
+    { "B1", "Note for B1 <with special chars>" },
+};
+```
+
+Output: (this example has no console output)
+
+> ⚠️ Comments are supported only for xlsx / xlsm; when writing to xls / xlsb / csv they are dropped via the degradation mechanism (see Chapter 22). Comment write-back relies on the OOXML VML legacyDrawing, so verify with a real Excel open.
+
+#### 10.2 Reading Back Comments
+
+```csharp
+var opened = Excel.Open("comments.xlsx");
+var comments = opened.Worksheets[0].Comments;
+if (comments is not null && comments.TryGetValue("A1", out var text))
+    Console.WriteLine(text);   // Output: This is a comment on A1
+```
+
+Output:
+
+```
+This is a comment on A1
+```
+
+#### 10.3 Object-Model API: Adding / Reading a Comment on a Specific Cell
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.Cell("C5").SetValue("data");
+
+// Add a comment
+ws.Comments ??= new Dictionary<string, string>();
+ws.Comments["C5"] = "审核通过";
+
+// Read a comment
+var opened = Excel.Open("comments2.xlsx");
+string? note = null;
+opened.Worksheets[0].Comments?.TryGetValue("C5", out note);
+Console.WriteLine(note);   // Output: 审核通过
+```
+
+Output:
+
+```
+审核通过
+```
+
+---
+
+### 11. Hyperlinks (external / internal)
+
+#### 11.1 Writing hyperlinks
+
+`Cell.Hyperlink` is a `Hyperlink` object that supports external links (URL / file path) and in-workbook internal jumps:
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// external link
+ws.Cell("A1").SetValue("OpenAI");
+ws.Cell("A1").Hyperlink = new Hyperlink
+{
+    Target = "https://openai.com",
+    Tooltip = "Visit OpenAI",
+    IsInternal = false,
+};
+
+// internal jump (Target starts with '#')
+ws.Cell("B1").SetValue("Go to Sheet2");
+ws.Cell("B1").Hyperlink = new Hyperlink
+{
+    Target = "#Sheet2!A1",
+    IsInternal = true,
+};
+```
+
+Output: (this example has no console output)
+
+#### 11.2 Hyperlink properties
+
+`Cell.Hyperlink` is a `Hyperlink` object with the following members:
+
+- `Target`: link target. Internal links use the format `#SheetName!A1`; external ones are a full URL or file path.
+- `Tooltip`: mouse-hover tooltip text (optional).
+- `IsInternal`: whether it is an in-workbook internal jump.
+
+Output: (this example has no console output)
+
+#### 11.3 Reading back hyperlinks
+
+After opening a file, read hyperlink information via `Cell.Hyperlink`:
+
+```csharp
+var opened = Excel.Open("links.xlsx");
+var cell = opened.Worksheets[0].Cell("A1");
+if (cell.Hyperlink is { } h)
+    Console.WriteLine($"{h.Target} internal={h.IsInternal} tooltip={h.Tooltip}");
+```
+
+Output:
+
+```
+https://openai.com internal=False tooltip=Visit OpenAI
+```
+
+Hyperlinks are supported for reading and writing in all four formats: xlsx / xlsm / xlsb / xls.
+
+---
+
+### 12. Freeze Panes
+
+#### 12.1 Setting frozen rows / columns
+
+`Worksheet.FreezeRows` / `FreezeColumns` are the 1-based number of frozen rows / columns (0 = not frozen):
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.FreezeRows = 2;       // freeze the first 2 rows
+ws.FreezeColumns = 3;    // freeze the first 3 columns
+```
+
+Output: (this example has no console output)
+
+#### 12.2 FreezeHeader compatibility
 
 `FreezeHeader = true` is equivalent to `FreezeRows = 1`:
 
 ```csharp
-var sheet = new SheetData
-{
-    Headers = new() { "A", "B" },
-    Rows = ...,
-    FreezeHeader = true,   // equivalent to FreezeRows = 1
-};
+ws.FreezeHeader = true;   // freeze the first row
 ```
 
-### Object-Model API
+Output: (this example has no console output)
+
+#### 12.3 Object-model API
+
+Set frozen rows / columns directly through the properties (equivalent to 12.1):
 
 ```csharp
-var wb = Excel.Open("report.xlsx");
-var ws = wb.Worksheets["Sheet1"];
-
-// Freeze the first 2 rows
-ws.FreezeRows = 2;
-
-// Freeze the first column
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.FreezeRows = 1;
 ws.FreezeColumns = 1;
-
-// Or use the FreezeHeader compatibility syntax
-ws.FreezeHeader = true;   // equivalent to FreezeRows = 1
-
-wb.Save();
 ```
 
-### Reading the Freeze State
+Output: (this example has no console output)
+
+#### 12.4 Reading back freeze
+
+After opening a file, read `FreezeRows` / `FreezeColumns`:
 
 ```csharp
-var sheet = XlsxReader.Read("frozen.xlsx", 0);
-Console.WriteLine($"Frozen rows: {sheet.FreezeRows}");           // 0 = not frozen
-Console.WriteLine($"Frozen columns: {sheet.FreezeColumns}");     // 0 = not frozen
-Console.WriteLine($"Freeze header: {sheet.FreezeHeader}");       // true when FreezeRows > 0
+var opened = Excel.Open("frozen.xlsx");
+var ws = opened.Worksheets[0];
+Console.WriteLine($"{ws.FreezeRows} rows, {ws.FreezeColumns} cols");
 ```
+
+Output:
+
+```
+2 rows, 3 cols
+```
+
+Freeze panes are supported for freezing any rows / columns in all three formats: xlsx / xlsb / xls.
 
 ---
 
-## 14. Images
+### 13. Images (Floating / InCell / read-back)
 
-### Floating Image
+Images are supported only in xlsx / xlsm. Use `Worksheet.AddImage` to add an image and `Worksheet.Images` to read them back.
 
-Images are only supported in xlsx/xlsm format. Add a floating image via `Worksheet.AddImage`:
+#### 13.1 Floating images
+
+Anchored at the top-left corner of `row/column`, displayed at the image's original size by default:
 
 ```csharp
-var wb = Excel.Create();
-var ws = wb.Worksheets["Sheet1"];
+var ws = Excel.Create().Worksheets["Sheet1"];
+byte[] png = File.ReadAllBytes("logo.png");
 
-// Read the image data
-byte[] imageData = File.ReadAllBytes("logo.png");
-
-// Add a floating image anchored at cell A1
-ws.AddImage(imageData, row: 1, column: 1, widthPx: 200, heightPx: 100);
-
-wb.SaveAs("image.xlsx");
+ws.AddImage(png, 1, 1);                            // anchor A1, original size
+ws.AddImage(png, 1, 3, 120, 60);                   // specify display size (pixels)
 ```
 
-### InCell Image
+Important parameters of `AddImage` (row/column overload):
+
+| Parameter | Type | Description |
+|---|---|---|
+| `data` | `byte[]` | Image binary (PNG/JPEG/GIF/BMP) |
+| `row` / `column` | `int` | 1-based top-left anchor row / column |
+| `widthPx` / `heightPx` | `double?` | Display size (pixels), null = original image size |
+| `placement` | `ImagePlacement` | `Floating` / `InCell`, default `Floating` |
+
+Output: (this example has no console output)
+
+> ⚠️ Images are supported only in xlsx / xlsm (see the format support matrix in chapter 20).
+
+#### 13.2 InCell images
+
+Excel 365 InCell images (richData system):
 
 ```csharp
-// InCell mode (the image resizes with the cell)
-ws.AddImage(imageData, row: 1, column: 1,
-    placement: ImagePlacement.InCell);
+ws.AddImage(png, 2, 1, placement: ImagePlacement.InCell);
 ```
 
-### ImagePlacement Enum
+Output: (this example has no console output)
 
-| Value | Description |
-|---|---|
-| `Floating` | floating image; position and size can be specified (default) |
-| `InCell` | InCell image; resizes with the cell |
+> ⚠️ InCell images are based on the Excel 365 richData system (written back as a richData part); older versions of Excel may not recognize them.
 
-### Coordinates and Size
+#### 13.3 Image placement enum `ImagePlacement`
 
-- Coordinates (row, column) are **1-based**
-- Width/height are in pixels; when omitted, the image's original size is used
-- Image extension (png/jpg/gif/bmp) and pixel size are auto-detected
+`ImagePlacement` determines whether an image is embedded in a cell or floating:
 
 ```csharp
-// Omit width/height → use the original image size
-ws.AddImage(imageData, row: 2, column: 3, placement: ImagePlacement.Floating);
-
-// Specify extension and name
-ws.AddImage(imageData, row: 1, column: 1,
-    widthPx: 300, heightPx: 200,
-    extension: "png", name: "Product image");
+public enum ImagePlacement { InCell, Floating }
 ```
 
-### Multiple Sheets
+Output: (this example has no console output)
+
+#### 13.4 High-precision anchor `ImageAnchor` and move mode `ImageMoveMode`
+
+`ImageAnchor` provides the top-left cell + EMU offsets + display size + move mode, and takes precedence over `Row`/`Column` when writing back:
 
 ```csharp
-var ws1 = wb.Worksheets["Sheet1"];
-var ws2 = wb.Worksheets.Add("Sheet2");
-
-ws1.AddImage(logoData, row: 1, column: 1, widthPx: 100, heightPx: 50);
-ws2.AddImage(photoData, row: 3, column: 2, placement: ImagePlacement.InCell);
-```
-
-> Images are only supported in xlsx/xlsm format. xls/xlsb/csv do not support images. InCell images display as `#VALUE!` in Excel (consistent with natively produced Excel samples).
-> Reading: **Floating images support read-back** (2.4.3+; opening xlsx/xlsm now fills `Images`). InCell image read-back will follow in a later version.
-
-### Image Read-Back (2.4.3+)
-
-After opening an xlsx/xlsm that contains floating images, `Worksheet.Images` is populated:
-
-```csharp
-var wb = Excel.Open("hasImage.xlsx");
-foreach (var img in wb.Worksheets[0].Images)
+var anchor = new ImageAnchor
 {
-    Console.WriteLine($"pos: {img.Row},{img.Column}  placement: {img.Placement}  size: {img.Anchor?.WidthPixels}x{img.Anchor?.HeightPixels}");
-    Console.WriteLine($"altText: {img.AltText}  name: {img.Name}  bytes: {img.Data.Length}");
+    TopLeftCell = "B2",
+    TopLeftOffsetX = 100,        // EMU offset (1px ≈ 9525)
+    TopLeftOffsetY = 50,
+    WidthPixels = 200,
+    HeightPixels = 100,
+    MoveMode = ImageMoveMode.MoveAndSizeWithCells,
+};
+ws.AddImage(png, anchor, name: "Chart", altText: "季度图表");
+```
+
+```csharp
+public enum ImageMoveMode
+{
+    MoveAndSizeWithCells,        // move and size with the cells
+    MoveButDontSizeWithCells,    // move with the cells but do not size (default)
+    FixedPosition,               // fixed position
 }
 ```
 
-Supported fields: Row / Column (1-based), Placement (Floating only for now), Name, AltText, Anchor (TopLeftCell / offsets / size / MoveMode), Extension (png/jpg/gif/bmp auto), Data (bytes).
+Important parameters of `ImageAnchor`:
 
-InCell image read-back is scheduled for a later version. Existing images are not removed on write-back.
+| Parameter | Type | Description |
+|---|---|---|
+| `TopLeftCell` | `string` | Top-left cell A1 reference |
+| `TopLeftOffsetX` / `TopLeftOffsetY` | `int` | Top-left offset (EMU, 1px≈9525) |
+| `WidthPixels` / `HeightPixels` | `double` | Display size (pixels) |
+| `MoveMode` | `ImageMoveMode` | Move / size mode, default `MoveButDontSizeWithCells` |
 
-### Image Anchor and Move Mode (2.4.1+)
+Important parameters of `AddImage` (anchor overload):
 
-Floating images support high-precision anchors: top-left cell + EMU offsets + display size + move/resize behavior with cells, plus accessibility alt text (AltText):
+| Parameter | Type | Description |
+|---|---|---|
+| `data` | `byte[]` | Image binary |
+| `anchor` | `ImageAnchor` | High-precision anchor |
+| `name` | `string?` | Image name (optional) |
+| `altText` | `string?` | Accessibility alternative text (optional) |
+
+Output: (this example has no console output)
+
+> ⚠️ `ImageAnchor` applies only to Floating images; for InCell use the row/column overload (`Anchor` is ignored).
+
+#### 13.5 Reading back images
+
+After opening a file that contains images, `Worksheet.Images` is populated automatically:
 
 ```csharp
-ws.AddImage(logoData, new ImageAnchor
+var opened = Excel.Open("with_images.xlsx");
+foreach (var img in opened.Worksheets[0].Images)
 {
-    TopLeftCell = "B2",           // top-left cell A1 reference
-    TopLeftOffsetX = 9525,       // horizontal offset (EMU, 1px≈9525)
-    TopLeftOffsetY = 0,           // vertical offset
-    WidthPixels = 200,
-    HeightPixels = 120,
-    MoveMode = ImageMoveMode.MoveAndSizeWithCells, // move + size with cells
-}, extension: "png", name: "logo", altText: "Company Logo");
+    Console.WriteLine($"{img.CellAddress} {img.Placement} {img.Data.Length} bytes");
+    // img.Data is the original image bytes, img.Row/Column is the anchor, img.Extension is the extension
+}
 ```
 
-`ImageMoveMode` three modes:
+Output:
 
-| Mode | OOXML | Behavior |
-|---|---|---|
-| `MoveButDontSizeWithCells` (default) | oneCellAnchor | Moves with cells, does not resize |
-| `MoveAndSizeWithCells` | twoCellAnchor | Moves and resizes with cells (image stretches with grid) |
-| `FixedPosition` | oneCellAnchor editAs="absolute" | Fixed position, does not move/resize with cells |
+```
+A1 Floating 70 bytes
+C1 Floating 70 bytes
+A2 InCell 70 bytes
+```
 
-> `twoCellAnchor` end position is estimated using default column width≈64px / row height≈20px; with non-default grid the image scales with cells. `ImageAnchor` applies to Floating only; InCell ignores anchors.
+Key members of `WorksheetImage`: `Data` (bytes), `Extension`, `Row`/`Column` (1-based anchor), `Placement`, `WidthPx`/`HeightPx`, `Name`, `Anchor`, `AltText`, `CellAddress` (read-only A1 reference).
 
----
+#### 13.6 Mixed use across multiple sheets
 
-## 15. Data Validation (Dropdown List)
+Different worksheets can use Floating and InCell placement independently without interfering with each other:
 
 ```csharp
-var sheet = new SheetData
+byte[] img = File.ReadAllBytes("logo.png");
+var wb = Excel.Create();
+
+var wsBanner = wb.Worksheets[0];
+wsBanner.Name = "Banner";
+wsBanner.AddImage(img, 1, 1);                                 // floating image
+
+var wsEmbed = wb.Worksheets.Add("Embed");
+wsEmbed.AddImage(img, 1, 1, placement: ImagePlacement.InCell); // in-cell embedded image
+
+wb.SaveAs("multi_images.xlsx");
+
+// read-back verification
+var opened = Excel.Open("multi_images.xlsx");
+foreach (var s in opened.Worksheets)
+    foreach (var im in s.Images)
+        Console.WriteLine($"{s.Name}: {im.CellAddress} {im.Placement} {im.Data.Length} bytes");
+```
+
+Output:
+
+```
+Banner: A1 Floating 70 bytes
+Embed: A1 InCell 70 bytes
+```
+
+> ⚠️ Images are supported only in xlsx / xlsm (see the format support matrix in chapter 20). InCell images may not be recognized by older versions of Excel.
+---
+
+### 14. Data Validation
+
+#### 14.1 Writing Data Validation
+
+`Worksheet.Validations` is a `List<DataValidation>`, configured rule by rule via an object initializer; data validation is written only for xlsx / xlsm (other formats are discarded via degradation reporting):
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+ws.Validations = new List<DataValidation>
 {
-    Headers = new() { "Name", "Department", "Score" },
-    Rows = ...,
-    Validations = new()
+    // Drop-down list (comma-separated, wrapped in quotes)
+    new DataValidation
     {
-        // dropdown list
-        new DataValidation
-        {
-            Type = DataValidationType.List,
-            Sqref = "B2:B100",
-            Formula1 = "\"IT,HR,Finance,Sales\"",
-            AllowBlank = true,
-            PromptTitle = "Department",
-            Prompt = "Select a department from the list",
-        },
-        // integer range 0-100
-        new DataValidation
-        {
-            Type = DataValidationType.WholeNumber,
-            Sqref = "C2:C100",
-            Formula1 = "0",
-            Formula2 = "100",
-        },
+        Type = DataValidationType.List,
+        Sqref = "A1:A10",
+        Formula1 = "\"Active,Inactive,Pending\"",
+        AllowBlank = true,
+        PromptTitle = "请选择",
+        Prompt = "从下拉列表选择状态",
+    },
+    // Whole-number range validation
+    new DataValidation
+    {
+        Type = DataValidationType.WholeNumber,
+        Sqref = "B1:B10",
+        Formula1 = "1",
+        Formula2 = "100",
     },
 };
-XlsxWriter.Write("validation.xlsx", sheet);
 ```
 
-### DataValidationType
-
-| Type | Description | Formula1 | Formula2 |
-|---|---|---|---|
-| `List` | dropdown list | `"\"A,B,C\""` | not used |
-| `WholeNumber` | integer | lower bound | upper bound |
-| `Decimal` | decimal | lower bound | upper bound |
-| `Date` | date | start date | end date |
-
----
-
-## 16. Appending Data
-
-```csharp
-// Append 2 rows to existing sheet with same name; if name doesn't exist, add new sheet
-XlsxWriter.Append("data.xlsx", new SheetData
-{
-    SheetName = "Data",
-    Headers = new() { "ID" },
-    Rows = new() { new Cell[] { Cell.FromNumber(4) }, new Cell[] { Cell.FromNumber(5) } },
-});
-```
-
-> When appending to an existing file, LiteExcel preserves existing document properties (author, title, subject, created time, and so on) and automatically updates the modified time.
-
-> `Append` reconstructs the workbook from the LiteExcel model. Supported data such as styles, merged cells, filters, comments, and data validations is retained. OOXML parts not mapped by LiteExcel, including Excel Tables, themes, pivot tables, and charts, are not guaranteed to be retained.
-
-Pass a third argument to update selected properties:
-
-```csharp
-XlsxWriter.Append("data.xlsx", moreRows, new WorkbookProperties
-{
-    LastModifiedBy = "Editor",
-    Title = "Updated report",
-});
-```
-
----
-
-## 17. List&lt;T&gt; Mapping (reflection, AOT safe)
-
-> List<T> APIs use reflection, annotated with `[DynamicallyAccessedMembers]`, compatible with AOT/trimming (see §24). Call with a concrete type (e.g. `Excel.Write<Person>`).
-
-### Basic write
-
-```csharp
-public class Person
-{
-    [LiteColumn(Name = "Name", Order = 0)]
-    public string Name { get; set; }
-    [LiteColumn(Name = "Age", Order = 1)]
-    public int Age { get; set; }
-    [LiteColumn(Ignore = true)]
-    public string? InternalId { get; set; }
-}
-
-var list = new List<Person> { new() { Name = "Zhang San", Age = 25 } };
-XlsxWriter.Write("people.xlsx", list);
-```
-
-### Basic read
-
-```csharp
-var read = XlsxReader.Read<Person>("people.xlsx");
-```
-
-### Create a workbook with data (Excel.Create)
-
-```csharp
-// Returns a usable workbook (styles / freeze panes / conditional formatting / passwords)
-var wb = Excel.Create(list, "Employees");
-wb.Worksheets[0].HeaderStyle = new CellStyle { Bold = true };
-wb.SaveAs("out2.xlsx");
-
-// Add a sheet with data
-wb.Worksheets.Add("History", moreList);
-```
-
-### Import into an existing worksheet (Worksheet.ImportData)
-
-```csharp
-var opened = Excel.Open("people.xlsx");
-var ws = opened.Worksheets[0];
-ws.ImportData(read);                    // clears and rebuilds from A1 (first row is header)
-ws.ImportData(dataTable, includeHeader: false);   // DataTable overload, optional header
-opened.Save();
-```
-
-`ImportData` clears the whole sheet (including merged ranges) then rebuilds; cell styles remain editable afterwards.
-
-### Fluent configuration
-
-```csharp
-XlsxWriter.Write("people.xlsx", list, opt => opt
-    .Column(x => x.Name, "Name")
-    .Column(x => x.Age, "Age")
-    .Ignore(x => x.InternalId));
-```
-
-### Three Ways to Customize Columns
-
-1. **`[LiteColumn]` attribute**: `Name` / `Order` / `Format` / `IsFormula` / `Ignore`
-2. **Fluent callback**: `opt.Column(x => x.Name, "Name").Ignore(x => x.Id)` — `Column(..., isFormula: true)` for formula columns
-3. **Dictionary mapping**: `opt.Map(new Dictionary<string,string> { { "Name", "Name" } })`
-
-### Super Table (Table / ListObject)
-
-A super table is Excel's "Insert ▸ Table" — a region with banded styles, header filters, and structured scope.
-
-```csharp
-var wb = Excel.Create();
-var ws = wb.Worksheets[0];
-
-// Prepare data first (first row is the header)
-ws.SetValue("A1", "Name"); ws.SetValue("B1", "Salary"); ws.SetValue("C1", "HireDate");
-for (int i = 2; i <= 501; i++) { ws.SetValue($"A{i}", $"Emp{i}"); ws.SetValue($"B{i}", i * 100); }
-
-// Create a table (region needs at least 2 rows: header + 1 data row)
-var tbl = ws.AddTable("A1:C501", "Employees");                  // default TableStyleMedium9
-ws.AddTable("E1:F10", "History", TableStyleStyle.Medium6);      // or pick an enum
-
-// Column formats (user-defined): mapped to per-column dxf
-tbl.Column("Salary").NumberFormat = "#,##0.00";
-tbl.Column("HireDate").NumberFormat = "yyyy/m/d";
-tbl.Column("Name").Style = new CellStyle { FontColor = "#FF0000", Bold = true };
-
-// Style switches
-tbl.ShowRowStripes = true;      // banding (default true)
-tbl.ShowFirstColumn = false;    // first-column emphasis
-tbl.ShowLastColumn = false;     // last-column emphasis
-tbl.ShowColumnStripes = false;  // column banding
-tbl.AutoFilter = true;          // header filter dropdown (default true)
-tbl.CustomStyleName = "TableStyleDark3";   // or any style-name string (takes precedence)
-
-wb.SaveAs("table.xlsx");
-
-// Read back
-foreach (var t in Excel.Open("table.xlsx").Worksheets[0].Tables)
-    Console.WriteLine($"{t.Name} {t.Ref} {t.StyleName}");
-
-// Remove
-ws.RemoveTable("Employees");
-```
-
-> **How stripe styles work**: the look is rendered by the Excel program itself — **the file only stores the style-name string**. Excel has 60 built-in names: `TableStyleLight1~21`, `TableStyleMedium1~28`, `TableStyleDark1~11` (`None` = no style). A misspelled / wrong-cased name silently degrades to an unstyled table (no error). When you use the string overload with an unknown name, the library reports it via `OnDegradation`.
-
-> **Naming rules**: table names are unique per workbook; cannot start with a digit, cannot contain spaces, cannot be a cell reference (e.g. `C1`); Chinese is allowed.
-
-> **Scope**: write + read-back on xlsx/xlsm only; xls/xlsb/csv degrade via `OnDegradation` (tables not written). Not yet supported: totals rows, structured references (`TableName[#All]`), custom banded-style definitions.
-
----
-
-## 18. DataTable Convenience API (AOT safe)
-
-```csharp
-var dt = new DataTable();
-dt.Columns.Add("Name", typeof(string));
-dt.Columns.Add("Age", typeof(int));
-dt.Rows.Add("Zhang San", 25);
-XlsxWriter.Write("data.xlsx", dt);
-
-var read = XlsxReader.ReadAsDataTable("data.xlsx");
-```
-
-Create a workbook with data in one step, or import into an existing sheet:
-
-```csharp
-// One-step create (sheet name falls back to DataTable.TableName, then "Sheet1")
-var wb = Excel.Create(dt);
-wb.SaveAs("data.xlsx");
-
-// Import into an existing worksheet (clears and rebuilds from A1; includeHeader=false skips column names)
-var opened = Excel.Open("data.xlsx");
-opened.Worksheets[0].ImportData(dt, includeHeader: false);
-opened.Save();
-```
-
----
-
-## 19. Stream Read/Write
-
-All read/write APIs have Stream overloads:
-
-```csharp
-using var ms = new MemoryStream();
-XlsxWriter.Write(ms, sheet);           // write to stream
-ms.Position = 0;
-var read = XlsxReader.Read(ms, 0);     // read from stream
-
-using var fs = File.OpenRead("out.xlsx");
-var all = XlsxReader.ReadAll(fs);
-```
-
-> **Note**: Stream overloads do not close the passed stream (`leaveOpen: true`); the caller owns the stream lifecycle.
-
----
-
-## 20. Streaming Read & Progress Callback
-
-```csharp
-// Stream rows, no memory residency
-XlsxReader.StreamRows("big.xlsx", "Sheet1", row =>
-{
-    foreach (var cell in row) Process(cell);
-});
-
-// With progress callback
-XlsxReader.ReadWithProgress("big.xlsx", 0, (current, total) =>
-{
-    Console.WriteLine($"Progress: {current}/{total}");
-});
-```
-
----
-
-## 21. Document Properties (Author/Time/Title)
-
-### Write with Properties
-
-```csharp
-var props = new WorkbookProperties
-{
-    Creator = "Zhang San",                                    // author
-    LastModifiedBy = "Li Si",                                 // last modified by
-    Created = DateTime.Now,                                   // created
-    Modified = DateTime.Now,                                  // modified
-    Title = "Monthly Report",                                 // title
-    Subject = "Finance",                                      // subject
-    Application = "MyApp",                                    // application name (optional)
-};
-
-XlsxWriter.Write("report.xlsx", sheet, props);
-```
-
-> When `Application` is null, it defaults to the host assembly name (`Assembly.GetEntryAssembly().GetName().Name`).
-
-### Read Properties
-
-```csharp
-var props = XlsxReader.ReadProperties("report.xlsx");
-Console.WriteLine($"Creator: {props.Creator}");
-Console.WriteLine($"LastModifiedBy: {props.LastModifiedBy}");
-Console.WriteLine($"Created: {props.Created}");
-Console.WriteLine($"Modified: {props.Modified}");
-Console.WriteLine($"Title: {props.Title}");
-Console.WriteLine($"Subject: {props.Subject}");
-Console.WriteLine($"Application: {props.Application}");
-```
-
-> If the file has no docProps, no exception is thrown; an empty object is returned (all fields null).
-
-### Write without Properties (backward compatible)
-
-```csharp
-// No props passed, no docProps generated (same behavior as older versions)
-XlsxWriter.Write("output.xlsx", sheet);
-```
-
-### WorkbookProperties Fields
-
-| Field | Type | XML |
+| Parameter | Type | Description |
 |---|---|---|
-| `Creator` | `string?` | dc:creator |
-| `LastModifiedBy` | `string?` | cp:lastModifiedBy |
-| `Created` | `DateTime?` | dcterms:created |
-| `Modified` | `DateTime?` | dcterms:modified |
-| `Title` | `string?` | dc:title |
-| `Subject` | `string?` | dc:subject |
-| `Application` | `string?` | app.xml Application |
+| `Type` | `DataValidationType` | Validation type (see 14.2) |
+| `Sqref` | `string` | Applied range (A1 style, e.g. `A1:A10`) |
+| `Formula1` | `string` | For list validation, a comma-separated list wrapped in quotes; for range validation, the lower bound |
+| `Formula2` | `string?` | Upper bound for range validation (omittable for non-range types) |
+| `AllowBlank` | `bool` | Whether empty values are allowed (default false) |
+| `PromptTitle` / `Prompt` | `string?` | Input prompt title / body shown when the cell is selected |
+
+Output: (this example has no console output)
+
+#### 14.2 Data Validation Type `DataValidationType`
+
+`DataValidationType` determines the validation rule category, used together with `Formula1` / `Formula2`:
+
+```csharp
+public enum DataValidationType { List, WholeNumber, Decimal, Date }
+```
+
+- `List`: drop-down list validation; `Formula1` is a comma-separated list wrapped in quotes.
+- `WholeNumber` / `Decimal` / `Date`: numeric / date validation; `Formula1` is the lower bound, `Formula2` the upper bound (range validation).
+
+Output: (this example has no console output)
+
+#### 14.3 Reading Back Data Validation
+
+After opening a file that contains data validation, `Worksheet.Validations` is populated automatically; iterate to print each rule:
+
+```csharp
+var opened = Excel.Open("validations.xlsx");
+var validations = opened.Worksheets[0].Validations;
+if (validations is not null)
+    foreach (var v in validations)
+        Console.WriteLine($"{v.Type} {v.Sqref} {v.Formula1} {v.Formula2}");
+```
+
+Output:
+
+```
+List A1:A10 Active,Inactive,Pending 
+WholeNumber B1:B10 1 100
+```
 
 ---
 
-## 22. File-Level Security (Open Password / Modify Password)
+### 15. Conditional Formatting (cellIs / expression / colorScale / dataBar / long-tail / iconSet)
 
-### Opening an Encrypted File
+Conditional formatting is read/written in xlsx / xlsm. `Worksheet.ConditionalFormats` is a `List<ConditionalFormat>`.
 
-When reading an xlsx/xlsm/xlsb file that has an open password, provide the password via `ExcelReadOptions`:
+#### 15.1 Cell Value Comparison (cellIs)
 
-```csharp
-var wb = Excel.Open("encrypted.xlsx", new ExcelReadOptions
-{
-    OpenPassword = "your-password",            // open password
-    ModifyPassword = "your-modify-password",   // modify password (optional)
-});
-```
-
-> The encrypted samples in the repo (`files/` directory) follow the password convention: open password = `1`, modify password = `12`. For example `打开修改都需要密码.xlsx` (open=1, modify=12), `12.*` (modify only=12), `*.` (open only=1). Use your own passwords for production data.
-
-### Reading the Security State
-
-After opening, query the file's security state via `Workbook.Security`:
+`ConditionalFormatType.CellIs` compares against a fixed value using `ConditionalOperator`; when matched, `Style` is applied:
 
 ```csharp
-var security = wb.Security;
+var ws = Excel.Create().Worksheets["Sheet1"];
 
-bool hasOpenPwd = security.HasOpenPassword;     // has an open password
-bool hasModPwd  = security.HasModifyPassword;   // has a modify password (write protection)
-bool hasModAcc  = security.HasModifyAccess;     // modification authorized (optimistic authorization)
-bool isReadOnly = security.IsReadOnly;          // read-only
-bool canSave    = security.CanSave;             // can currently save
-```
-
-### Setting a Password
-
-```csharp
-// Set an open password (the file is encrypted on save)
-wb.Security.SetOpenPassword("your-password");
-
-// Set a modify password (write protection, fileSharing, not zip encryption)
-wb.Security.SetModifyPassword("your-modify-password");
-
-wb.SaveAs("protected.xlsx");
-```
-
-### Removing a Password
-
-```csharp
-// Remove the open password
-wb.Security.RemoveOpenPassword();
-
-// Remove the modify password (requires modify authorization, i.e. ModifyPassword was provided on open)
-wb.Security.RemoveModifyPassword();
-
-wb.SaveAs("plain.xlsx");
-```
-
-### Password Inheritance and Authorization Rules
-
-- After opening an encrypted file, `SaveAs` **inherits the open password by default**; call `Security.RemoveOpenPassword()` before saving to remove it.
-- A modify password is write protection (`<fileSharing>`), not zip encryption; providing `ModifyPassword` on read authorizes the modification (optimistic authorization, the sample value is not verified).
-- Passwords **never** appear in exception messages, logs, or test output.
-- Supported for xlsx/xlsm/xlsb only; csv/xls do not support passwords.
-
-### Sheet / Workbook Protection (2.4.6+)
-
-Sheet protection (`sheetProtection`) and workbook protection (`workbookProtection`) are **editing restrictions** (distinct from the file-level passwords above):
-
-```csharp
-// Sheet protection: restricts editing per flag, optional password
-wb.Worksheets[0].Protection = new SheetProtection
-{
-    Enabled = true,
-    SelectLockedCells = true,
-    SelectUnlockedCells = false,   // disallow selecting unlocked cells
-    Sort = false,                  // disallow sorting
-    AutoFilter = false,            // disallow auto filter
-};
-wb.Worksheets[0].Protection.SetPassword("pw");
-
-// Workbook protection: locks the structure (no insert/delete/move/rename sheets)
-wb.Protection = new WorkbookProtection
-{
-    Enabled = true,
-    LockStructure = true,
-    LockWindows = false,
-};
-wb.Protection.SetPassword("wb");
-
-wb.SaveAs("protected.xlsx");
-```
-
-- Read-back: `wb.Worksheets[i].Protection` / `wb.Protection` are auto-populated; `VerifyPassword(pwd)` validates the protection password.
-- Passwords are written as a SHA-512 + salt hash (same mechanism as `fileSharing`); no plaintext is stored.
-- Write supported for xlsx/xlsm only; xls/xlsb go through the existing degradation reporting.
-- Verified with real Excel COM: `ProtectContents` / `ProtectStructure` are True after opening.
-
----
-
-## 23. Error Handling
-
-### LiteExcelException
-
-All user-facing errors throw `LiteExcelException`:
-
-```csharp
-try
-{
-    var sheet = XlsxReader.Read("not-an-xlsx.txt", 0);
-}
-catch (LiteExcelException ex)
-{
-    Console.WriteLine($"Read failed: {ex.Message}");
-    // "This is not a valid xlsx file"
-}
-```
-
-### InvalidSheetNameException
-
-Invalid sheet name on write:
-
-```csharp
-try
-{
-    XlsxWriter.Write("bad.xlsx", new SheetData { SheetName = "sheet[1]" });
-}
-catch (InvalidSheetNameException ex)
-{
-    Console.WriteLine(ex.Message);
-}
-```
-
-### Common Errors
-
-> Exception messages are currently emitted in Chinese. The messages below reflect the current wording.
-
-| Scenario | Exception | Message |
-|---|---|---|
-| Not an xlsx file | `LiteExcelException` | "这不是有效的 xlsx 文件" |
-| Sheet name not found | `LiteExcelException` | "找不到工作表：{name}（共有 {n} 张表）" |
-| Invalid sheet name | `InvalidSheetNameException` | details included |
-| Sheet index out of range | `ArgumentOutOfRangeException` | "工作表索引超出范围" |
-| Empty sheet list | `ArgumentException` | "至少需要一张工作表" |
-
----
-
-## 24. AOT Compatibility
-
-All public APIs are compatible with Native AOT / trimming. The library compiles with `IsAotCompatible` and is verified in two ways:
-
-- **Compile time**: the repo includes `tests/LiteExcel.AotSmoke` (`PublishAot` + `TrimmerRootAssembly Include="LiteExcel"`), so ILC walks every library code path for trim analysis. Its publish emits zero IL warnings.
-- **Runtime**: a native AOT executable is exercised against xlsx/xlsb/xls/csv read+write, `[LiteColumn]`, formula columns, Fluent expressions, nullable/decimal, DataTable, `Excel.Create<T>` / `ImportData` / `Add<T>`, conditional formatting, named ranges, images (Floating/InCell), streaming read/write, degradation callback, hyperlinks, and freeze panes — all assertions pass.
-
-| API | AOT notes |
-|---|---|
-| Object model (`Workbook` / `Worksheet` / `Cell` / `ExcelRange` / `Cells`) | no reflection |
-| Streaming (`Excel.CreateWriter` / `Excel.StreamRows`) | no reflection |
-| `SheetData` read/write (`Read` / `Write` / `Append` / `AutoColumnWidths`) | no reflection |
-| DataTable (`ReadAsDataTable` / `Write(path, DataTable)` / `Create(DataTable)` / `ImportData(DataTable)`) | no reflection |
-| List&lt;T&gt; mapping (`Excel.Read<T>` / `Excel.Write<T>` / `Excel.Create<T>` / `Worksheet.ImportData<T>` / `WorksheetCollection.Add<T>`) | uses reflection, annotated with `[DynamicallyAccessedMembers]`, AOT/trim safe |
-| `WriteOptions.Column<TProp>` / `Ignore<TProp>` | only reads `MemberExpression.Member.Name`, never `.Compile()`, no member reflection |
-
-> Call `List<T>` APIs with a concrete type (e.g. `Excel.Write<Employee>`). If you forward them from your own unannotated open generic method, the compiler raises IL2091 — add matching annotations to your type parameter. This is the intended propagation behavior.
-
-> **Read entry boundary**: `Excel.Read<T>` / `XlsxReader.Read` support only xlsx/xlsm (OpenXML text format). For **xls / xlsb / csv reading, use `Excel.Open(path)`** (the facade routes by extension to the matching backend).
-
-> **InvariantGlobalization**: with `InvariantGlobalization=true` (common for AOT apps), all 19 native-executable assertions pass, including xls/xlsb read+write. Note that xls ANSI text is decoded as Latin1 under Invariant mode; characters outside the current system code page (e.g. Chinese GBK text) may be distorted — this is an inherent limitation of the xls binary format, unrelated to AOT.
-
----
-
-## 25. Conditional Formatting (2.4.3+)
-
-Supports four rule types: cell comparison, expression, color scale, and data bar.
-
-### Cell Comparison
-
-```csharp
-var ws = wb.Worksheets[0];
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "B2:B10",
     Type = ConditionalFormatType.CellIs,
-    Sqref = "B2:B100",
     Operator = ConditionalOperator.GreaterThan,
-    Formula = "60",
-    Style = new CellStyle { FontColor = "#FF0000" }, // red warning
+    Formula = "100",
+    Style = new CellStyle { Bold = true, FillColor = "#FFC7CE" },
 });
 ```
 
-### Expression (Formula)
+`ConditionalOperator`: `LessThan` / `LessThanOrEqual` / `Equal` / `NotEqual` / `GreaterThan` / `GreaterThanOrEqual` / `Between` / `NotBetween`. Between uses `Formula` (lower bound) + `Formula2` (upper bound).
+
+`ConditionalFormat` common members:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `Sqref` | `string` | Applied range (A1 style, may contain multiple areas, e.g. `A1:A100 D2:D9`) |
+| `Type` | `ConditionalFormatType` | Rule type (see the subsections of this chapter) |
+| `Operator` | `ConditionalOperator` | Only valid for `CellIs` (default `GreaterThan`) |
+| `Formula` / `Formula2` | `string?` | Comparison target / Between upper bound |
+| `Style` | `CellStyle?` | Style applied when matched (font / fill / border; excludes alignment and number format) |
+
+Output: (this example has no console output)
+
+#### 15.2 Formula Condition (expression)
+
+`ConditionalFormatType.Expression` uses a formula returning TRUE / FALSE to decide; the formula uses relative references (relative to the current cell):
 
 ```csharp
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "A1:A100",
     Type = ConditionalFormatType.Expression,
-    Sqref = "A2:E100",
-    Formula = "MOD(ROW(),2)=0",
-    Style = new CellStyle { FillColor = "#F2F2F2" },
+    Formula = "MOD(ROW(),2)=0",     // highlight even rows
+    Style = new CellStyle { FillColor = "#D9E1F2" },
 });
 ```
 
-### Color Scale (2–3 colors)
+Output: (this example has no console output)
+
+#### 15.3 Color Scale (colorScale)
+
+`ConditionalFormatType.ColorScale` blends between low / high colors based on the numeric value; when `MidColor` is non-null it becomes a 3-color scale:
 
 ```csharp
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "C2:C10",
     Type = ConditionalFormatType.ColorScale,
-    Sqref = "D2:D100",
     ColorScale = new ColorScaleInfo
     {
-        LowColor = "#FF0000",
-        MidColor = "#FFFF00",
-        HighColor = "#00FF00",
+        LowColor = "F8696B",
+        HighColor = "63BE7B",
+        MidColor = "FFEB84",        // set nonNull to enable 3-color scale
     },
 });
 ```
 
-### Data Bar
+| Parameter | Type | Description |
+|---|---|---|
+| `LowColor` | `string` | Low-value color (`#RRGGBB` or `RRGGBB`) |
+| `HighColor` | `string` | High-value color |
+| `MidColor` | `string?` | Middle color; when non-null it is a 3-color scale, otherwise 2-color |
+
+Output: (this example has no console output)
+
+#### 15.4 Data Bar (dataBar)
+
+`ConditionalFormatType.DataBar` draws a bar proportional to the value inside the cell:
 
 ```csharp
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "D2:D10",
     Type = ConditionalFormatType.DataBar,
-    Sqref = "E2:E100",
     DataBar = new DataBarInfo
     {
-        Color = "#63C384",
+        Color = "638EC6",
         ShowValue = true,
         MinLengthPercent = 0,
         MaxLengthPercent = 100,
@@ -1791,257 +1819,1423 @@ ws.ConditionalFormats.Add(new ConditionalFormat
 });
 ```
 
-### Reading
+| Parameter | Type | Description |
+|---|---|---|
+| `Color` | `string` | Bar color (default Excel blue `638EC6`) |
+| `ShowValue` | `bool` | Whether to also show the value (default true; false shows only the bar) |
+| `MinLengthPercent` / `MaxLengthPercent` | `int` | Shortest / longest bar length percentage (0–100) |
 
-Opening an xlsx/xlsm file with conditional formats now populates `Worksheet.ConditionalFormats`. **xls/xlsb/csv do not support conditional formatting** — writes will report degradations via [§26 Capability Degradation Callback](#26-capability-degradation-callback-ondegradation-242).
+Output: (this example has no console output)
 
-### Additional types (2.4.4+)
+#### 15.5 Long-tail Text / Blanks / Errors / Duplicates / Top N / Average Line
 
-Beyond `cellIs`/`expression`/`colorScale`/`dataBar`, the following rule types are also supported:
-
-| Type | Enum | Description | Key fields |
-|---|---|---|---|
-| Text contains | `ContainsText` | cell contains given text | `Text` |
-| Text begins with | `BeginsWith` | starts with given text | `Text` |
-| Text ends with | `EndsWith` | ends with given text | `Text` |
-| Text does not contain | `NotContainsText` | does not contain given text | `Text` |
-| Time period | `TimePeriod` | yesterday/today/lastWeek/thisMonth etc. | `TimePeriod` (e.g. `"thisMonth"`) |
-| Blanks | `Blanks` | blank cells | — |
-| Non-blanks | `NoBlanks` | non-blank cells | — |
-| Errors | `Errors` | error values | — |
-| Non-errors | `NoErrors` | non-error values | — |
-| Unique values | `Unique` | unique within range | — |
-| Duplicates | `Duplicate` | duplicate within range | — |
-| Top N | `Top10` | top N items or top N% | `Rank` + `Percent` |
-| Above average | `AboveAverage` | above range average | — |
-| Below average | `BelowAverage` | below range average | — |
-
-Example:
+The following types are the long-tail capabilities of conditional formatting; the matching rules and dedicated properties are described in the comments:
 
 ```csharp
+// Contains the specified text
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
-    Type = ConditionalFormatType.ContainsText,
-    Sqref = "B2:B100",
-    Text = "urgent",
-    Style = new CellStyle { FontColor = "#FF0000" },
-});
-ws.ConditionalFormats.Add(new ConditionalFormat
-{
-    Type = ConditionalFormatType.Top10,
     Sqref = "A2:A100",
-    Rank = 3,        // top 3 items; set Percent=true for top 3%
+    Type = ConditionalFormatType.ContainsText,
+    Text = "urgent",
+    Style = new CellStyle { Bold = true },
 });
+
+// Begins with / ends with / does not contain the specified text
+// Type = BeginsWith / EndsWith / NotContainsText, also uses Text
+
+// Text length comparison
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Sqref = "B2:B100",
+    Type = ConditionalFormatType.TextLength,
+    Operator = ConditionalOperator.GreaterThan,
+    Formula = "10",
+});
+
+// Time period
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Sqref = "C2:C100",
+    Type = ConditionalFormatType.TimePeriod,
+    TimePeriod = "today",   // yesterday/today/tomorrow/lastWeek/thisWeek/nextWeek/lastMonth/thisMonth/nextMonth
+});
+
+// Blanks / non-blanks / errors / non-errors
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "D2:D100", Type = ConditionalFormatType.Blanks });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "D2:D100", Type = ConditionalFormatType.NoBlanks });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "E2:E100", Type = ConditionalFormatType.Errors });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "E2:E100", Type = ConditionalFormatType.NoErrors });
+
+// Unique / duplicate values
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "F2:F100", Type = ConditionalFormatType.Unique });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "F2:F100", Type = ConditionalFormatType.Duplicate });
+
+// Top N items / top N%
+ws.ConditionalFormats.Add(new ConditionalFormat
+{
+    Sqref = "G2:G100",
+    Type = ConditionalFormatType.Top10,
+    Rank = 10,
+    Percent = false,
+});
+
+// Above / below average
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "H2:H100", Type = ConditionalFormatType.AboveAverage });
+ws.ConditionalFormats.Add(new ConditionalFormat { Sqref = "H2:H100", Type = ConditionalFormatType.BelowAverage });
 ```
 
-### Icon Sets (iconSet, 2.4.6+)
+Output: (this example has no console output)
 
-Cell visualization with arrows / traffic lights / symbols / star ratings:
+#### 15.6 Icon Set (iconSet)
+
+`IconSetInfo` provides 17 built-in set enums + any custom set name + thresholds:
 
 ```csharp
-// Minimal: three-color arrows, evenly divided percent thresholds (0/33/67)
 ws.ConditionalFormats.Add(new ConditionalFormat
 {
+    Sqref = "I2:I100",
     Type = ConditionalFormatType.IconSet,
-    Sqref = "B2:B10",
-    IconSet = new IconSetInfo(),
-});
-
-// Choose a set + custom thresholds
-ws.ConditionalFormats.Add(new ConditionalFormat
-{
-    Type = ConditionalFormatType.IconSet,
-    Sqref = "C2:C10",
     IconSet = new IconSetInfo
     {
-        Style = IconSetStyle.FourRating,
+        Style = IconSetStyle.ThreeArrows,       // default three colored arrows
         Percent = true,
         ShowValue = true,
-        Thresholds = new double[] { 25, 50, 75 },   // icon count - 1; empty = evenly divided
+        // When Thresholds is empty, percentages are divided evenly by the icon count
+        // Thresholds = new double[] { 33, 66 },
     },
 });
-
-// Read back
-foreach (var cf in wb.Worksheets[0].ConditionalFormats)
-    if (cf.Type == ConditionalFormatType.IconSet && cf.IconSet is not null)
-        Console.WriteLine($"{cf.Sqref} {cf.IconSet.Style}");
 ```
 
-> **How it works**: icons are rendered by Excel itself — the file only stores the set-name string (same as banded table styles). Excel has 17 built-in sets: `3Arrows` / `3ArrowsGray` / `3Flags` / `3TrafficLights1` / `3TrafficLights2` / `3Signs` / `3Symbols` / `3Symbols2` / `4Arrows` / `4ArrowsGray` / `4RedToBlack` / `4Rating` / `4TrafficLights` / `5Arrows` / `5ArrowsGray` / `5Rating` / `5Quarters`. The `IconSetStyle` enum covers all; `CustomStyleName` accepts any set-name string.
->
-> **Threshold rules**: default is evenly divided by icon count (3 → 0/33/67, 4 → 0/25/50/75, 5 → 0/20/40/60/80); `Thresholds` is custom (count = icon count - 1). `Percent=false` writes `type="num"` absolute thresholds. xls/xlsb/csv do not support conditional formatting and degrade via the callback.
+`IconSetStyle` enum (17 kinds): `ThreeArrows` / `ThreeArrowsGray` / `ThreeFlags` / `ThreeTrafficLights` / `ThreeTrafficLights2` / `ThreeSigns` / `ThreeSymbols` / `ThreeSymbols2` / `FourArrows` / `FourArrowsGray` / `FourRedToBlack` / `FourRating` / `FourTrafficLights` / `FiveArrows` / `FiveArrowsGray` / `FiveRating` / `FiveQuarters`. You can also use `CustomStyleName` to specify any set name string (takes precedence when non-empty).
+
+| Parameter | Type | Description |
+|---|---|---|
+| `Style` | `IconSetStyle` | Built-in set (default `ThreeArrows`) |
+| `CustomStyleName` | `string?` | Any set name string; takes precedence when non-empty |
+| `Percent` | `bool` | Whether thresholds are percentages (true) or absolute values (false), default true |
+| `ShowValue` | `bool` | Whether to also show the value in the cell, default true |
+| `Thresholds` | `double[]?` | Custom thresholds (icon count - 1 values, ascending); when empty, divided evenly by icon count |
+
+Output: (this example has no console output)
+
+#### 15.7 Reading Back Conditional Formatting
+
+After opening a file that contains conditional formatting, `Worksheet.ConditionalFormats` is populated automatically; iterate to print each rule:
+
+```csharp
+var opened = Excel.Open("cf.xlsx");
+var cfs = opened.Worksheets[0].ConditionalFormats;
+foreach (var cf in cfs)
+    Console.WriteLine($"{cf.Type} {cf.Sqref} {cf.Formula}");
+```
+
+Output:
+
+```
+CellIs B2:B10 100
+Expression A1:A100 MOD(ROW(),2)=0
+ColorScale C2:C10 
+DataBar D2:D10 
+IconSet I2:I100 
+```
+
+Other `ConditionalFormat` members: `Priority` (priority, auto-numbered by registration order by default), `Style` (style applied when the condition is met; excludes alignment and number format).
 
 ---
 
-## 26. Named Ranges (2.4.4+)
+### 16. Excel Tables (Table / ListObject, style enum and custom style names, column format)
 
-Read named ranges from `Workbook.Names` (each backed by `workbook.xml` `definedNames`):
+Excel tables are read/written in xlsx / xlsm. `Worksheet.AddTable` creates them; `Worksheet.Tables` reads them back.
+
+#### 16.1 Creating an Excel Table
+
+The first row of the covered range is used as the header column names; at least a header + 1 data row is required:
 
 ```csharp
-var wb = Excel.Open("data.xlsx");
-foreach (var nr in wb.Names)
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// First write the header + data
+ws.SetValue("A1", "Product");
+ws.SetValue("B1", "Price");
+ws.SetValue("A2", "Apple");
+ws.SetValue("B2", 3.5);
+ws.SetValue("A3", "Banana");
+ws.SetValue("B3", 2.0);
+
+var table = ws.AddTable("A1:B3", "Products");     // default Medium9 style
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `refAddress` | `string` | Table covered range (A1 style; the first row is always the header) |
+| `name` | `string` | Table name (unique across the workbook; Chinese allowed, cannot start with a digit, cannot contain spaces, cannot collide with a cell address) |
+| `style` | `TableStyleStyle?` | Built-in style enum; defaults to `Medium9` when omitted (there is also a `string styleName` overload, see 16.3) |
+
+Returns an `XlTable`, on which you can directly set properties such as column format.
+
+Output: (this example has no console output)
+
+#### 16.2 Style Enum `TableStyleStyle`
+
+The `TableStyleStyle` enum includes 60 built-in stripe names (Light 1-21 / Medium 1-28 / Dark 1-11) + `None`; the style appearance is rendered by Excel itself, and only the style name is saved in the file:
+
+```csharp
+var table = ws.AddTable("A1:B3", "Products", TableStyleStyle.Medium2);
+```
+
+Output: (this example has no console output)
+
+#### 16.3 Custom Style Name `CustomStyleName`
+
+The `string` overload `AddTable(ref, name, styleName)` accepts any style name string (including style names Excel may add in the future):
+
+```csharp
+var table = ws.AddTable("A1:B3", "Products", "TableStyleMedium9");
+// When not among the 60 built-in names, Excel opens it degraded to no style (reported via OnDegradation)
+```
+
+Output: (this example has no console output)
+
+> ⚠️ When the style name is not among the 60 built-in names, Excel silently degrades it to no style on open, reported via the `OnDegradation` callback (see Chapter 22).
+
+#### 16.4 Table Properties
+
+`XlTable` members: `Name` (unique across the workbook, Chinese allowed, cannot start with a digit, cannot contain spaces, cannot collide with a cell address), `Ref`, `Style`, `CustomStyleName`, `ShowRowStripes` (default true), `ShowFirstColumn`, `ShowLastColumn`, `ShowColumnStripes`, `AutoFilter` (default true), `TotalsRowShown` (preserved on read-back), `HeaderStyle`, `Columns`. The returned `XlTable` lets you read these properties directly:
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "Product");
+ws.SetValue("B1", "Price");
+ws.SetValue("A2", "Apple");
+ws.SetValue("B2", 3.5);
+
+var table = ws.AddTable("A1:B2", "Products", TableStyleStyle.Medium2);
+Console.WriteLine($"{table.Name} {table.Ref} {table.Style} 行条纹={table.ShowRowStripes} 筛选={table.AutoFilter}");
+```
+
+Output:
+
+```text
+Products A1:B2 Medium2 行条纹=True 筛选=True
+```
+
+#### 16.5 Column Format (`XlTableColumn`)
+
+`table.Column(name)` gets a column by its name (case-insensitive); set `Style` (font/fill/border → dxf) and `NumberFormat`:
+
+```csharp
+var table = ws.AddTable("A1:B3", "Products");
+table.Column("Price").NumberFormat = "#,##0.00";
+table.Column("Price").Style = new CellStyle { Bold = true };
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` of `Column(name)` | `string` | Column name (= header cell text, case-insensitive; throws `LiteExcelException` if it does not exist) |
+| `NumberFormat` | `string?` | Number format for this column (e.g. `"#,##0.00"`) |
+| `Style` | `CellStyle?` | Style for this column (font / fill / border; written out mapped to dxf) |
+
+Output: (this example has no console output)
+
+#### 16.6 Removing an Excel Table
+
+`RemoveTable(name)` removes a table by name (case-insensitive); returns `true` if it exists, otherwise `false`:
+
+```csharp
+bool removed = ws.RemoveTable("Products");   // removes it and returns true if it exists
+```
+
+Output: (this example has no console output)
+
+#### 16.7 Reading Back Excel Tables
+
+After opening a file that contains Excel tables, `Worksheet.Tables` is populated automatically (including styles and column formats); iterate to print:
+
+```csharp
+var opened = Excel.Open("tables.xlsx");
+foreach (var t in opened.Worksheets[0].Tables)
 {
-    Console.WriteLine($"Name={nr.Name} Ref={nr.Reference} Local={nr.LocalSheetId}");
+    Console.WriteLine($"{t.Name} {t.Ref} 样式={t.CustomStyleName ?? t.Style.ToString()}");
+    foreach (var col in t.Columns)
+        Console.WriteLine($"  {col.Name} fmt={col.NumberFormat}");
 }
 ```
 
-Fields: `Name` / `Reference` / `LocalSheetId` (-1 = workbook-global) / `IsLocalSheet`.
-Rewrites: existing names are preserved unchanged unless you edit `Workbook.Names` (not yet supported).
+Output:
+
+```
+Products A1:B3 样式=TableStyleMedium2
+  Product fmt=
+  Price fmt=#,##0.00
+```
 
 ---
 
-## 27. Capability Degradation Callback (OnDegradation) (2.4.2+)
+### 17. Named Ranges
 
-When saving to a format that does not support a capability (xls/xlsb/csv), those capabilities are silently dropped by default. Register the callback to receive a per-item list, so nothing is lost in silence.
+#### 17.1 Reading Named Ranges
+
+After opening a file containing named ranges, `Workbook.Names` is populated automatically (global + sheet-local); simply iterate to print them:
+
+```csharp
+var opened = Excel.Open("names.xlsx");
+foreach (var nr in opened.Names)
+    Console.WriteLine($"{nr.Name} = {nr.Reference} local={nr.LocalSheetId}");
+```
+
+`NamedRange` members: `Name`, `Reference` (e.g. `Sheet1!$A$1:$C$9`), `LocalSheetId` (-1 means a global name), `IsLocalSheet`.
+
+Output:
+
+```
+MyRange = Sheet1!$A$1:$C$9 local=-1
+LocalRange = Sheet1!$B$2 local=0
+```
+
+#### 17.2 Preservation on Write
+
+Named ranges are **preserved as-is** when the file is saved after being opened (the `definedNames` in `workbook.xml` is passed through), so they are not lost through editing:
+
+```csharp
+var opened = Excel.Open("names.xlsx");
+opened.Worksheets[0].SetValue("A1", "edited");
+opened.Save();   // named ranges are still preserved
+```
+
+Output: written to names.xlsx
+
+---
+
+### 18. File-Level Passwords (open / modify)
+
+File-level security is managed through `Workbook.Security` (`WorkbookSecurity`) and supports xlsx / xlsm / xlsb. The password payload itself is stored only inside the object and is never exposed in plain text.
+
+#### 18.1 Opening an Encrypted File
+
+The open password (Agile encryption) is provided via `ExcelReadOptions.OpenPassword`; if the file is encrypted and no password is provided, a clear exception is thrown:
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions { OpenPassword = "secret" });
+```
+
+Output: (this example has no console output)
+
+> ⚠️ Open / modify passwords are supported only for xlsx / xlsm / xlsb; when opening an encrypted file, reading throws an exception if the password is not provided (or is wrong).
+
+#### 18.2 Reading the Security State
+
+`Workbook.Security` (`WorkbookSecurity`) exposes read-only security state properties; read them together with the open options:
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "secret",
+    ModifyPassword = "write",
+});
+
+var sec = wb.Security;
+Console.WriteLine(sec.HasOpenPassword);      // true
+Console.WriteLine(sec.HasModifyPassword);    // true
+Console.WriteLine(sec.HasModifyAccess);      // true (a modify password was provided)
+Console.WriteLine(sec.IsReadOnly);           // false
+Console.WriteLine(sec.CanSave);              // true
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `HasOpenPassword` | `bool` | whether the file has an open password (file encryption) |
+| `HasModifyPassword` | `bool` | whether the file has a modify password (write protection) |
+| `HasModifyAccess` | `bool` | whether modify access has been granted (the correct modify password was provided) |
+| `IsReadOnly` | `bool` | read-only when the file has a modify password but access has not been granted |
+| `CanSave` | `bool` | whether saving is allowed (`!IsReadOnly`) |
+
+Output:
+
+```
+True
+True
+True
+False
+True
+```
+
+#### 18.3 Setting Passwords
+
+`Workbook.Security` provides methods for setting the open / modify passwords, which take effect on the next save:
 
 ```csharp
 var wb = Excel.Create();
-var ws = wb.Worksheets[0];
-ws.SetValue("A1", "x");
-ws.Filter = new AutoFilter { Range = "A1:A10" };
-ws.Comments = new Dictionary<string, string> { ["A1"] = "note" };
-ws.FreezeRows = 1;
-ws.Cell("B1").Style = new CellStyle { Bold = true };
-
-var options = new ExcelWriteOptions
-{
-    OnDegradation = d =>
-        Console.WriteLine($"[{d.Capability}] {d.SheetName} => {d.Message}")
-};
-Excel.Write("out.csv", wb, options);
+wb.Security.SetOpenPassword("secret");       // open password (file encryption)
+wb.Security.SetModifyPassword("write");      // modify password (write protection), read-only recommended by default
+wb.Security.SetModifyPassword("write", readOnlyRecommended: false);  // no read-only prompt
+wb.SaveAs("secured.xlsx");
 ```
 
-Default `null`: behaves identically to previous versions (zero breakage).
+| Method | Parameter | Description |
+|---|---|---|
+| `SetOpenPassword` | `password` | sets the open password (file encryption), overwriting the old value; null / blank is treated as removal |
+| `SetModifyPassword` | `password` | sets the modify password (write protection), overwriting the old value; null / blank is treated as removal |
+| `SetModifyPassword` | `readOnlyRecommended` | whether to recommend opening read-only (default true) |
+| `RemoveOpenPassword` | — | removes the open password (the next save has no open password) |
+| `RemoveModifyPassword` | — | removes the modify password (requires modify access) |
+| `ClearAll` | — | clears all file-level passwords (requires modify access) |
 
-### DegradationCapability enum
+Output: written to secured.xlsx
 
-Comments, DataValidation, AutoFilter, Images, DocumentProperties, NamedRanges, Styles, MergedCells, FreezePanes, Hyperlinks, RowHeights, ColumnWidths, Formulas, Charts, PivotTables, RichData.
+> ⚠️ The password payload is stored only inside the `WorkbookSecurity` object and is never exposed in plain text; error messages and logs do not contain passwords.
 
-### Per-format degradation matrix (2.4.2)
+#### 18.4 Removing Passwords
 
-| Capability | xlsx/xlsm | xlsb | xls | csv |
-|---|---|---|---|---|
-| Comments | supported | reported | reported | reported |
-| Data validation | supported | reported | reported | reported |
-| Auto filter | supported | reported | reported | reported |
-| Images | write-back only | reported | reported | reported |
-| Cell styles | supported | **NumberFormat only**, others reported | **NumberFormat only**, others reported | reported |
-| Hyperlinks | supported | supported | supported | reported |
-| Formulas | supported | cached value text | cached value text | reported (value text) |
-| Row heights / column widths / merge / freeze | supported | supported | supported | reported |
-| Charts / pivot tables / themes | round-trip preserved | round-trip preserved | not supported (never) | not supported |
+After opening a password-protected file (providing the correct password to gain authorization), call the removal methods and save to strip the passwords:
 
-`TargetFormat` is `ExcelFormat`; the library never mutates `DegradationInfo`.
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions { OpenPassword = "secret", ModifyPassword = "write" });
+wb.Security.RemoveOpenPassword();            // the next save has no open password
+wb.Security.RemoveModifyPassword();          // the next save has no modify protection
+wb.Security.ClearAll();                      // clears all file-level passwords
+wb.SaveAs("plain.xlsx");
+```
+
+Output: written to plain.xlsx
+
+> ⚠️ `RemoveModifyPassword` / `ClearAll` require modify access to have been granted (otherwise a `LiteExcelException` is thrown), preventing unauthorized stripping / replacement of write protection.
+
+#### 18.5 Modify Password Access and Read-Only
+
+A file that has a modify password but is opened without providing it opens in read-only mode; confirm via the security state properties:
+
+```csharp
+var wb = Excel.Open("readonly.xlsx");        // this file has a modify password but none was provided
+Console.WriteLine(wb.Security.IsReadOnly);   // true
+Console.WriteLine(wb.Security.CanSave);      // false
+```
+
+Output:
+
+```
+True
+False
+```
+
+- When the file has a modify password but it is not provided (or is wrong), the workbook opens in **read-only** mode with `IsReadOnly = true`, `CanSave = false`; saving throws a `LiteExcelException`.
+- Providing the correct `ModifyPassword` grants editing authorization (`HasModifyAccess = true`).
+- `SetModifyPassword` / `RemoveModifyPassword` / `ClearAll` require modify access to have been granted, otherwise an exception is thrown (prevents unauthorized stripping / replacement of write protection).
+- The original `fileSharing` captured at open time is passed through on save; it is regenerated when the user explicitly sets a new modify password.
+
+#### 18.6 Fidelity Write-Back
+
+After opening an encrypted file, `SaveAs` inherits the password by default, with no need to set it again:
+
+```csharp
+var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
+{
+    OpenPassword = "secret",
+    ModifyPassword = "write",
+});
+wb.SaveAs("secured_copy.xlsx");   // inherits the open password by default
+```
+
+Output: written to secured_copy.xlsx
+
+> ⚠️ When `ModifyPasswordTouched` (the user explicitly changed the modify password) is set, the original fileSharing is not passed through; it is regenerated according to the newly set modify password. Saving a workbook that contains VBA macros as xlsx / xls throws an error (the format does not support macros).
 
 ---
 
-## 28. Full API Reference
+### 19. Worksheet and Workbook Protection
 
-### Excel (facade)
+#### 19.1 Worksheet Protection `SheetProtection`
 
-| Method | Returns | Description |
+`Worksheet.Protection` controls which operations are allowed / disallowed on a protected worksheet, with an optional password (SHA-512 + salt hash):
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+var p = new SheetProtection
+{
+    Enabled = true,
+    // Allowed operations (default false means disallowed):
+    SelectLockedCells = true,
+    SelectUnlockedCells = true,
+    // FormatCells / FormatColumns / FormatRows / InsertColumns / InsertRows /
+    // InsertHyperlinks / DeleteColumns / DeleteRows / Sort / AutoFilter / PivotTables
+    Objects = true,                // default true: allows editing objects
+    Scenarios = true,              // default true: allows editing scenarios
+};
+p.SetPassword("protect123");      // optional password (a method, cannot be placed in the initializer)
+ws.Protection = p;
+```
+
+Read-back:
+
+```csharp
+var opened = Excel.Open("protected.xlsx");
+var p = opened.Worksheets[0].Protection;
+if (p is not null)
+{
+    Console.WriteLine(p.Enabled);
+    Console.WriteLine(p.HasPassword);
+    Console.WriteLine(p.VerifyPassword("protect123"));   // applies to the hash read from the file
+    p.RemovePassword();              // removes the protection password (null/blank is also treated as removal)
+}
+```
+
+`SheetProtection` parameters:
+
+| Parameter | Type | Description |
 |---|---|---|
-| `Open(path, options?)` / `Open(stream, format, options?)` | `Workbook` | open by extension |
-| `DetectFormat(path)` | `ExcelFormat` | detect format from extension |
-| `Create(format = Xlsx)` / `Create(sheetName, format)` / `Create(string[], format)` | `Workbook` | create empty / named / multi-sheet workbook |
-| `Create<T>(data, sheetName, format, configure?)` | `Workbook` | create workbook with List&lt;T&gt; data (first row is header, reflection, AOT safe) |
-| `Create(DataTable, sheetName?, format)` | `Workbook` | create workbook with DataTable data (falls back to TableName → Sheet1) |
-| `Write(path, Workbook, options?)` | `void` | write a workbook |
-| `Write(path, SheetData, options?)` | `void` | write single sheet (low-level model) |
-| `Write(path, DataTable, sheetName?, options?)` | `void` | write from DataTable (AOT safe) |
-| `Write<T>(path, IEnumerable<T>, sheetName?, configure?)` | `void` | write from List&lt;T&gt; (reflection, AOT safe) |
-| `Read<T>(path, sheetName?, configure?)` | `List<T>` | read as List&lt;T&gt; (xlsx/xlsm only) |
-| `ReadAsDataTable(path, sheetName?, firstRowIsHeader?)` | `DataTable` | read as DataTable |
-| `GetSheetNames(path)` | `List<string>` | list all sheet names |
-| `StreamRows(path, sheetName, onRow)` | `void` | streaming read (skips first row) |
-| `CreateWriter(path)` / `CreateWriter(stream)` | `XlsxStreamWriter` | streaming write (xlsx/xlsm only) |
+| `Enabled` | `bool` | whether protection is enabled (prerequisite for writing `sheetProtection`) |
+| `SelectLockedCells` / `SelectUnlockedCells` | `bool` | whether selecting locked / unlocked cells is allowed (default true) |
+| `Objects` / `Scenarios` | `bool` | whether editing objects / scenarios is allowed (default true) |
+| `FormatCells`…`PivotTables` | `bool` | allowed editing operations (default false, disallowed) |
+| `SetPassword` / `RemovePassword` | method | sets / removes the protection password (null / blank treated as removal) |
+| `VerifyPassword` | method | verifies a password (only applies to the hash read from the file) |
 
-### XlsxReader
+Output:
 
-| Method | Returns | Description |
+```
+True
+False
+True
+```
+
+> ⚠️ On read-back `HasPassword` is always `False` — the password is stored on disk as a SHA-512 + salt hash, and the library never reads plain text back into memory. Whether a protection password is set should be determined via `VerifyPassword(...)`, not `HasPassword`.
+
+#### 19.2 Workbook Protection `WorkbookProtection`
+
+`Workbook.Protection` locks the workbook structure / windows, with an optional password:
+
+```csharp
+var wb = Excel.Create();
+var p2 = new WorkbookProtection
+{
+    Enabled = true,
+    LockStructure = true,   // prevents inserting/deleting/moving/hiding/renaming worksheets
+    LockWindows = false,
+};
+p2.SetPassword("wbpass");     // optional password (a method, cannot be placed in the initializer)
+wb.Protection = p2;
+// p2.RemovePassword() removes the workbook protection password
+wb.SaveAs("wbprotected.xlsx");
+```
+
+Read-back:
+
+```csharp
+var opened = Excel.Open("wbprotected.xlsx");
+var p = opened.Protection;
+if (p is not null)
+    Console.WriteLine($"{p.Enabled} structure={p.LockStructure} hasPwd={p.HasPassword}");
+```
+
+`WorkbookProtection` parameters:
+
+| Parameter | Type | Description |
 |---|---|---|
-| `GetSheetNames(string path)` | `List<string>` | list all sheet names |
-| `GetSheetNames(Stream stream)` | `List<string>` | list from stream |
-| `Read(string path, int sheetIndex, bool firstRowIsHeader = true)` | `SheetData` | read by index |
-| `Read(string path, string sheetName, bool firstRowIsHeader = true)` | `SheetData` | read by name |
-| `Read(Stream stream, int sheetIndex, bool firstRowIsHeader = true)` | `SheetData` | read by index from stream |
-| `Read(Stream stream, string sheetName, bool firstRowIsHeader = true)` | `SheetData` | read by name from stream |
-| `ReadAll(string path)` | `List<SheetData>` | read all |
-| `ReadAll(Stream stream)` | `List<SheetData>` | read all from stream |
-| `StreamRows(string path, string sheetName, Action<IReadOnlyList<Cell>> onRow)` | `void` | stream rows |
-| `StreamRows(Stream stream, string sheetName, Action<IReadOnlyList<Cell>> onRow)` | `void` | stream rows from stream |
-| `ReadWithProgress(string path, int sheetIndex, Action<int,int> onProgress)` | `void` | read with progress |
-| `ReadAsDataTable(string path, int sheetIndex = 0, bool firstRowIsHeader = true)` | `DataTable` | read as DataTable |
-| `ReadAsDataTable(string path, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | read by name as DataTable |
-| `ReadAsDataTable(Stream stream, int sheetIndex = 0, bool firstRowIsHeader = true)` | `DataTable` | read as DataTable from stream |
-| `ReadAsDataTable(Stream stream, string sheetName, bool firstRowIsHeader = true)` | `DataTable` | read by name from stream |
-| `Read<T>(string path, int sheetIndex = 0, Action<ReadOptions<T>>? configure = null)` | `List<T>` | read as List<T> (reflection, AOT safe) |
-| `Read<T>(string path, string sheetName, Action<ReadOptions<T>>? configure = null)` | `List<T>` | read by name as List<T> |
-| `ReadProperties(string path)` / `ReadProperties(Stream stream)` | `WorkbookProperties` | read document properties (author/time/title) |
+| `Enabled` | `bool` | whether protection is enabled (prerequisite for writing `workbookProtection`) |
+| `LockStructure` | `bool` | prevents inserting / deleting / moving / hiding / renaming worksheets (default true) |
+| `LockWindows` | `bool` | locks windows (default false) |
+| `SetPassword` / `RemovePassword` | method | sets / removes the protection password (null / blank treated as removal) |
+| `VerifyPassword` | method | verifies a password (only applies to the hash read from the file) |
 
-### XlsxWriter
+Output:
 
-| Method | Description |
+```
+True structure=True hasPwd=False
+```
+
+> ⚠️ Same as 19.1: the read-back `hasPwd=False` does not mean no password is set — the reason is above (plain text never enters memory; use `VerifyPassword` to determine).
+
+---
+
+## Part 3 Multi-Format and Platform
+
+Chapters 20–23: multi-format behavior and degradation, streaming and append, AOT compatibility — cross-format and cross-platform differences are centralized here.
+
+### 20. Multi-Format Behavior (xlsx/xlsm full support, xls/xlsb/csv restrictions and degradation)
+
+#### 20.1 Format Capability Matrix
+
+The table below lists the support status of each capability across formats. Capabilities not supported by xls / xlsb / csv are reported via `ExcelWriteOptions.OnDegradation` when writing (see Chapter 22).
+
+| Capability | xlsx | xlsm | xlsb | xls | csv |
+|---|---|---|---|---|---|
+| Cell value / Header | ✔ | ✔ | ✔ | ✔ | ✔ |
+| Style (font/color/border/alignment/wrap) | ✔ | ✔ | NumberFormat only | NumberFormat only | ✘ |
+| Number format | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Merged cells | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Auto filter | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Row height / Column width | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Comments | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Data validation | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Hyperlinks | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Freeze panes | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Images (Floating/InCell) | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Conditional formatting | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Tables | ✔ | ✔ | ✘ | ✘ | ✘ |
+| Named ranges | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Document properties | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Open password / Modify password | ✔ | ✔ | ✔ | ✘ | ✘ |
+| Formulas | ✔ | ✔ | ✔ | ✔ | ✘ |
+| Charts / PivotTables | fidelity only | fidelity only | fidelity only | ✘ | ✘ |
+
+Write to csv with the degradation callback connected to observe discarded capabilities:
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string> { { "A1", "note" } };
+
+Excel.Write("matrix.csv", wb, new ExcelWriteOptions
+{
+    OnDegradation = info =>
+        Console.WriteLine($"[Degradation] {info.Capability} -> {info.TargetFormat} @ {info.SheetName}: {info.Message}"),
+});
+```
+
+Output:
+
+```
+[Degradation] Comments -> Csv @ Sheet1: CSV does not support comments, comments on sheet 'Sheet1' have been discarded.
+```
+
+#### 20.2 xls / xlsb Read Back as Static Values
+
+When reading xls / xlsb files, styles are degraded to retain only `NumberFormat` (to avoid BIFF hand-writing risks). Advanced capabilities such as comments / data validation / conditional formatting / images / tables are not read back. **These degradations are explicitly reported via `OnDegradation` when writing** (see Chapter 22).
+
+Reading an xls file (read back as static values, no longer carrying style information other than number format):
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets["Sheet1"].SetValue("A1", "hello");
+Excel.Write("roundtrip.xls", wb);
+
+var reopened = Excel.Open("roundtrip.xls");
+var ws = reopened.Worksheets["Sheet1"];
+Console.WriteLine($"{ws.Name}: {ws.Cell("A1").GetString()}");
+```
+
+Output:
+
+```
+Sheet1: hello
+```
+
+#### 20.3 CSV Behavior
+
+- CSV only supports single-sheet workbooks (writing multiple sheets throws `NotSupportedException`).
+- When reading, the first row is not split into headers (`CsvBackend.Read` (see Appendix B.4) returns raw rows).
+- Separator: auto-detected on read (comma > semicolon > tab, counting only outside quotes), `ExcelReadOptions.Separator` can be used to fix it; default separator for writing is comma, `ExcelWriteOptions.Separator` can be specified.
+- CSV does not support styles / merged cells / comments / data validation / hyperlinks / images / conditional formatting / tables / named ranges / document properties / formulas / passwords.
+
+Write then read back (first row is treated as data row, not split into headers):
+
+```csharp
+var sheet = new SheetData
+{
+    SheetName = "People",
+    Headers = new() { "Name", "Score" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("Alice"), Cell.FromNumber(95) },
+        new Cell[] { Cell.FromText("Bob"), Cell.FromNumber(88) },
+    },
+};
+Excel.Write("people.csv", sheet);
+
+var wb = Excel.Open("people.csv");
+var csv = wb.Worksheets[0].ToSheetData();
+for (int r = 0; r < csv.Rows.Count; r++)
+    Console.WriteLine($"{csv.Rows[r][0].GetString()}: {csv.Rows[r][1].GetString()}");
+```
+
+Output:
+
+```
+Name: Score
+Alice: 95
+Bob: 88
+```
+
+#### 20.4 Encrypted File Format Restrictions
+
+File-level passwords (open / modify) are only supported for xlsx / xlsm / xlsb. Saving to csv / xls with a password set throws `LiteExcelException`:
+
+```csharp
+var wb = Excel.Create();
+wb.Security.SetOpenPassword("1");
+try
+{
+    wb.SaveAs("enc.csv", ExcelFormat.Csv);
+}
+catch (LiteExcelException ex)
+{
+    Console.WriteLine(ex.Message);
+}
+```
+
+Output:
+
+```
+Cannot write Csv: Csv format does not support file-level passwords (open password/modify password). Please use xlsx/xlsm/xlsb to save, or remove the password first.
+```
+
+#### 20.5 Fidelity Round-Trip
+
+When opening xlsx / xlsm / xlsb, unmapped OOXML parts (macros / themes / drawings / charts / pivot tables, etc.) are captured and transparently passed through when saving, avoiding silent deletion. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros / charts.
+
+```csharp
+var wb = Excel.Open("macro.xlsm");   // open an xlsm containing macros
+wb.Worksheets[0].Name = "Renamed Sheet";  // renaming sheet does not lose drawing association
+wb.SaveAs("macro_copy.xlsm");
+```
+
+Output:
+
+```
+written to macro_copy.xlsm
+```
+
+---
+
+### 21. Streaming Read / Progress Callback / Append
+
+#### 21.1 Streaming Read `StreamRows`
+
+Row-by-row callback without holding all data in memory, suitable for large files. **xlsx / xlsm only**:
+
+```csharp
+var sheet = new SheetData
+{
+    SheetName = "Scores",
+    Headers = new() { "Name", "Score" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("Alice"), Cell.FromNumber(95) },
+        new Cell[] { Cell.FromText("Bob"), Cell.FromNumber(88) },
+    },
+};
+Excel.Write("scores.xlsx", sheet);
+
+Excel.StreamRows("scores.xlsx", "Scores", row =>
+{
+    foreach (var cell in row)
+        Console.Write($"{cell.GetString()} | ");
+    Console.WriteLine();
+});
+```
+
+Output:
+
+```
+Alice | 95 |
+Bob | 88 |
+```
+
+#### 21.2 Reading with Progress `ReadWithProgress`
+
+First quickly scans the total number of data rows, then streams row-by-row. `current` increments from 1 to `total` (number of data rows, excluding headers):
+
+```csharp
+var sheet = new SheetData
+{
+    SheetName = "Scores",
+    Headers = new() { "Name", "Score" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromText("Alice"), Cell.FromNumber(95) },
+        new Cell[] { Cell.FromText("Bob"), Cell.FromNumber(88) },
+        new Cell[] { Cell.FromText("Cara"), Cell.FromNumber(72) },
+    },
+};
+Excel.Write("progress.xlsx", sheet);
+
+Excel.ReadWithProgress("progress.xlsx", 0, (current, total) =>
+    Console.WriteLine($"{current}/{total}"));
+```
+
+Output:
+
+```
+1/3
+2/3
+3/3
+```
+
+#### 21.3 Append Data `Append`
+
+`Excel.Append(path, SheetData, WorkbookProperties?)` (`SheetData` see Appendix B.1): for an existing sheet with the same name, merges headers then appends rows; for a different name, adds as a new sheet; creates the file if it does not exist. **xlsx / xlsm only**:
+
+```csharp
+// write 3 rows first
+var sheet1 = new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromNumber(1) },
+        new Cell[] { Cell.FromNumber(2) },
+        new Cell[] { Cell.FromNumber(3) },
+    },
+};
+Excel.Write("append.xlsx", sheet1);
+
+// append 2 rows
+var appendData = new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID" },
+    Rows = new()
+    {
+        new Cell[] { Cell.FromNumber(4) },
+        new Cell[] { Cell.FromNumber(5) },
+    },
+};
+Excel.Append("append.xlsx", appendData);
+
+// read back to verify
+var read = Excel.ReadAsDataTable("append.xlsx");
+Console.WriteLine(read.Rows.Count);
+```
+
+Output:
+
+```
+5
+```
+
+Appending does not change the existing sheet order; worksheet-level preserved rels remain reusable (xlsm append does not lose macros).
+
+**Header alignment on append**: when appending to a sheet with the same name, headers from the new data that do not exist in the original headers are **appended to the end of the original headers**; data rows are aligned by column name to the merged column positions; missing columns are filled with `Empty`:
+
+```csharp
+// original file headers: ID | Name
+Excel.Write("align.xlsx", new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID", "Name" },
+    Rows = new() { new Cell[] { Cell.FromNumber(1), Cell.FromText("Alice") } },
+});
+
+// appended headers include new column Price → merged to ID | Name | Price; data rows aligned by column name
+Excel.Append("align.xlsx", new SheetData
+{
+    SheetName = "Data",
+    Headers = new() { "ID", "Price" },
+    Rows = new() { new Cell[] { Cell.FromNumber(2), Cell.FromNumber(9.5) } },
+});
+
+var sheet = XlsxReader.Read("align.xlsx", 0);   // low-level read back (see Appendix B.2)
+Console.WriteLine("headers: " + string.Join(" | ", sheet.Headers));
+var ws2 = Excel.Open("align.xlsx").Worksheets["Data"];
+Console.WriteLine($"C3 = {ws2.Cell("C3").Number}");   // Price aligned to column 3
+Console.WriteLine($"B3 type = {ws2.Cell("B3").Type}"); // missing column filled with Empty
+```
+
+Output:
+
+```
+headers: ID | Name | Price
+C3 = 9.5
+B3 type = Empty
+```
+
+#### 21.4 Streaming Writer `CreateWriter`
+
+`Excel.CreateWriter` returns an `XlsxStreamWriter` (see Appendix B.5), writing large files row by row without holding all data in memory. **Only supports .xlsx / .xlsm extensions**; must `Dispose` / `Close` to finalize the file:
+
+```csharp
+using var writer = Excel.CreateWriter("big_out.xlsx");
+for (int i = 0; i < 1_000_000; i++)
+    writer.WriteRow(new object?[] { i, $"row {i}", i * 1.5, i % 2 == 0 });
+// using block ends, auto Close
+```
+
+Output:
+
+```
+written to big_out.xlsx
+```
+
+Can also write to a stream (`LeaveOpen` is managed by the caller):
+
+```csharp
+using var ms = new MemoryStream();
+using (var writer = Excel.CreateWriter(ms))
+    writer.WriteRow(new object?[] { 1, "a" });
+ms.Position = 0;
+var read = XlsxReader.Read(ms, 0);
+```
+
+`XlsxStreamWriter` supports styles / formulas / hyperlinks per row (styles.xml and sheet rels are written uniformly on Close); advanced capabilities like merge / filter / images are not supported. When hyperlinks are extremely numerous, memory is no longer constant (all hyperlink references are buffered internally).
+
+---
+
+### 22. Degradation Callback OnDegradation
+
+`ExcelWriteOptions.OnDegradation` is an optional callback (default null; when not registered, behavior is identical to previous versions — no breaking change). When writing to a format that does not support a certain capability (xls / xlsb / csv), each capability that is silently discarded is reported via callback:
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string> { { "A1", "note" } };   // csv does not support comments
+
+Excel.Write("out.csv", wb, new ExcelWriteOptions
+{
+    OnDegradation = info =>
+    {
+        Console.WriteLine($"[Degradation] {info.Capability} -> {info.TargetFormat} @ {info.SheetName}: {info.Message}");
+    },
+});
+```
+
+Output:
+
+```
+[Degradation] Comments -> Csv @ Sheet1: CSV does not support comments, comments on sheet 'Sheet1' have been discarded.
+```
+
+#### 22.1 Capability Enum `DegradationCapability`
+
+The `DegradationCapability` enum lists all capabilities that can be reported for degradation:
+
+```csharp
+foreach (var cap in Enum.GetNames(typeof(DegradationCapability)))
+    Console.WriteLine(cap);
+```
+
+Output:
+
+```
+Comments
+DataValidation
+AutoFilter
+Images
+DocumentProperties
+NamedRanges
+Styles
+MergedCells
+FreezePanes
+Hyperlinks
+RowHeights
+ColumnWidths
+Formulas
+Charts
+PivotTables
+RichData
+ConditionalFormatting
+Tables
+```
+
+#### 22.2 Degradation Info `DegradationInfo`
+
+`DegradationInfo` carries the full description of a single degradation event: `Capability` (discarded capability), `SheetName` (null for workbook-level capabilities), `TargetFormat` (target format), `Message` (human-readable explanation).
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "x");
+ws.Comments = new Dictionary<string, string> { { "A1", "note" } };
+
+Excel.Write("deg.csv", wb, new ExcelWriteOptions
+{
+    OnDegradation = info =>
+    {
+        Console.WriteLine($"Capability={info.Capability}");
+        Console.WriteLine($"SheetName={info.SheetName}");
+        Console.WriteLine($"TargetFormat={info.TargetFormat}");
+        Console.WriteLine($"Message={info.Message}");
+    },
+});
+```
+
+Output:
+
+```
+Capability=Comments
+SheetName=Sheet1
+TargetFormat=Csv
+Message=CSV does not support comments, comments on sheet 'Sheet1' have been discarded.
+```
+
+#### 22.3 Style Degradation Details
+
+When writing to xls / xlsb, full styles (font / color / border / alignment / wrap) are degraded to retain only NumberFormat, reported via `DegradationCapability.Styles`:
+
+```csharp
+var wb = Excel.Create();
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", 1);
+ws.Cell("A1").Style = new CellStyle { Bold = true, FillColor = "FFFF00" };
+
+Excel.Write("style.xls", wb, new ExcelWriteOptions
+{
+    OnDegradation = info => Console.WriteLine($"{info.Capability}: {info.Message}"),
+});
+```
+
+Output:
+
+```
+Styles: xls only supports number format, full styles (font/color/border/alignment/wrap) on sheet 'Sheet1' have been degraded.
+```
+
+---
+
+### 23. AOT Compatibility (DAM, IsAotCompatible, verification and results)
+
+#### 23.1 DAM Annotations
+
+List\<T\> reflection-mapping APIs are annotated with `[DynamicallyAccessedMembers]`, safe for AOT / trimming:
+
+- `Excel.Create<T>` / `Excel.Write<T>` / `Excel.Read<T>` annotated with `PublicProperties` (reading also includes `PublicParameterlessConstructor`).
+- `Worksheet.ImportData<T>` / `WorksheetCollection.Add<T>` annotated with `PublicProperties`.
+- `XlsxReader.Read<T>` / `XlsxWriter.Write<T>` also annotated (see Appendix B.2 / B.3).
+
+Using the `Person` class from Chapter 5 as an example (mapping requires no extra configuration, public properties preserved by library annotations):
+
+```csharp
+var people = new List<Person> { new() { Name = "Zhang San", Age = 30 } };
+Excel.Write("people.xlsx", people);
+
+var read = Excel.Read<Person>("people.xlsx");
+Console.WriteLine(read.Count);
+```
+
+Output:
+
+```
+1
+```
+
+#### 23.2 IsAotCompatible
+
+The net8.0 target declares `IsAotCompatible=true` in the csproj, all public APIs are compatible with Native AOT / trimming:
+
+```csharp
+var wb = Excel.Create("Sheet1");
+wb.Worksheets["Sheet1"].SetValue("A1", "x");
+Excel.Write("aot.xlsx", wb);
+
+var reopened = Excel.Open("aot.xlsx");
+Console.WriteLine(reopened.Worksheets.Count);
+```
+
+Output:
+
+```
+1
+```
+
+#### 23.3 Verification and Results Summary
+
+- Verified via native AOT executable, all public APIs pass.
+- AOT zero IL warnings + runtime assertions pass.
+- Note: `Excel.Read<T>` / `XlsxReader.Read` (see Appendix B.2) only support xlsx / xlsm; **xls / xlsb / csv must use `Excel.Open(path)`** (routes by extension to the backend). Use `Excel.Open` for non-zip formats when reading sheet names on demand.
+
+Reading entry for non-zip formats:
+
+```csharp
+var wb = Excel.Open("data.xls");
+Console.WriteLine(string.Join(",", wb.Worksheets.Names));
+```
+
+Output:
+
+```
+Sheet1
+```
+
+#### 23.4 InvariantGlobalization
+
+Global invariants (common in AOT / containers):
+
+- Setting `<InvariantGlobalization>true</InvariantGlobalization>`` at publish time does not affect any functionality of this library; both `Encoding.GetEncoding` on the read side and `CultureInfo.InvariantCulture` on the write side have been verified.
+- **Prerequisite**: the base date boundary (1900/1904 date system) and xls ANSI strings require `Latin1` — characters not in the current system code page may be distorted, which is an inherent limitation of BIFF8 and unrelated to AOT.
+
+Date write / read-back under invariant mode (fixed `yyyy-MM-dd` number format):
+
+```csharp
+var wb = Excel.Create();
+wb.Worksheets["Sheet1"].SetValue("A1", new DateTime(2024, 1, 2));
+Excel.Write("inv.csv", wb);
+
+var reopened = Excel.Open("inv.csv");
+var data = reopened.Worksheets[0].ToSheetData();
+Console.WriteLine(data.Rows[0][0].GetString());
+```
+
+Output:
+
+```
+2024-01-02
+```
+
+---
+
+## Part 4 Operational Notes
+
+Chapters 24–25 cover exception handling and large-file considerations; it is recommended to read them through before going live.
+
+### 24. Exception Handling
+
+#### 24.1 Exception Hierarchy
+
+- `LiteExcelException`: the base class of all library exceptions.
+- `LiteXlsxException`: a compatibility alias for the old exception name (`[Obsolete]`, use `LiteExcelException` instead).
+- `InvalidSheetNameException`: thrown when a sheet name is invalid (empty, longer than 31 characters, or containing illegal characters); it carries a `SheetName` property.
+
+An invalid sheet name is thrown at write time (`SheetName` carries the original name):
+
+```csharp
+var sheet = new SheetData { SheetName = "非法?名称" };
+try
+{
+    Excel.Write("bad.xlsx", sheet);
+}
+catch (InvalidSheetNameException ex)
+{
+    Console.WriteLine($"非法 Sheet 名：{ex.SheetName}");
+}
+```
+
+Output:
+
+```
+非法 Sheet 名：非法?名称
+```
+
+#### 24.2 Common Exception Scenarios
+
+| Scenario | Exception |
 |---|---|
-| `Write(string path, SheetData data)` | write single sheet |
-| `Write(string path, IReadOnlyList<SheetData> sheets)` | write multiple sheets |
-| `Write(Stream stream, SheetData data)` | write single sheet to stream |
-| `Write(Stream stream, IReadOnlyList<SheetData> sheets)` | write multiple sheets to stream |
-| `Write(path/stream, sheets, WorkbookProperties? properties)` | write and carry document properties |
-| `Write(string path, DataTable table, string sheetName = "Sheet1")` | write from DataTable |
-| `Write<T>(string path, IEnumerable<T> data, Action<WriteOptions<T>>? configure = null)` | write from List<T> (reflection, AOT safe) |
-| `Append(string path, SheetData? newData, WorkbookProperties? updateProperties = null)` | append data and optionally update document properties |
-| `AutoColumnWidths(SheetData sheet)` | auto estimate column widths |
+| File not found | `FileNotFoundException` |
+| Empty path | `ArgumentException` |
+| Duplicate / missing worksheet name | `LiteExcelException` |
+| Invalid sheet name | `InvalidSheetNameException` |
+| Save path extension does not match format | `LiteExcelException` |
+| Saving a new workbook without a target path | `LiteExcelException` |
+| Saving a read-only workbook (modify password not authorized) | `LiteExcelException` |
+| Saving with a password as csv / xls | `LiteExcelException` |
+| Saving a workbook containing macros as xlsx / xls | `LiteExcelException` |
+| Streaming read / append of a non-xlsx/xlsm file | `LiteExcelException` |
+| CSV multi-sheet write | `NotSupportedException` |
+| Cell type mismatch on strongly-typed read | `InvalidCastException` |
 
-### CellRef (Utility)
+Typical catch order (specific exceptions before the base class):
 
-| Method | Description |
-|---|---|
-| `CellRef.Parse(string cellRef)` | "A1" → (row=0, col=0) |
-| `CellRef.ToString(int row, int col)` | (0, 0) → "A1" |
-| `CellRef.ColToLetter(int col)` | 0 → "A", 26 → "AA" |
-| `CellRef.LetterToCol(string letters)` | "A" → 0, "AA" → 26 |
+```csharp
+var wb = Excel.Create();
+try
+{
+    wb.Save();   // saving a new workbook without a target path
+}
+catch (LiteExcelException ex)
+{
+    Console.WriteLine(ex.Message);
+}
+```
 
-### Model Classes
+Output:
 
-| Class | Description |
-|---|---|
-| `SheetData` | worksheet data |
-| `Cell` | cell (including the `Hyperlink` property, see §12) |
-| `CellStyle` / `BorderStyle` / `BorderEdge` | styles |
-| `CellRange` | range (merged cells) |
-| `AutoFilter` / `FilterColumn` | auto filter |
-| `DataValidation` | data validation |
-| `Hyperlink` | cell hyperlink (`Target` / `Tooltip` / `IsInternal`) |
-| `WorksheetImage` | worksheet image (added via `ws.AddImage`, see §14) |
-| `WorkbookSecurity` | file security state (open password / modify password / read-only / can save) |
-| `ExcelReadOptions` | read options (`OpenPassword` / `ModifyPassword`) |
-| `WorkbookProperties` | document properties |
-| `LiteExcelException` / `InvalidSheetNameException` | exceptions |
-| `LiteColumnAttribute` | List<T> column attribute |
-| `WriteOptions<T>` / `ReadOptions<T>` | List<T> configuration |
+```
+当前工作簿没有目标路径，请使用 SaveAs 指定保存位置
+```
 
-### Worksheet Members (hyperlinks / freeze panes / images)
+#### 24.3 Recommendations
+
+```csharp
+try
+{
+    var wb = Excel.Open("report.xlsx", new ExcelReadOptions { OpenPassword = "secret" });
+    wb.SaveAs("out.xlsx");
+}
+catch (LiteExcelException ex)
+{
+    Console.WriteLine($"LiteExcel: {ex.Message}");
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Other: {ex.Message}");
+}
+```
+
+Output:
+
+```
+written to out.xlsx
+```
+
+
+### 25. Large-File Considerations
+
+- **Streaming read**: `Excel.StreamRows` (see Appendix B.2) invokes a per-row callback without holding data in memory; suited to large files (xlsx / xlsm only).
+- **Streaming write**: `Excel.CreateWriter` / `XlsxStreamWriter` (see Appendix B.5) writes large files row by row without holding data in memory (xlsx / xlsm only). You must call `Dispose` / `Close` after use.
+- **Progress**: `Excel.ReadWithProgress` first scans the total row count, then reads in streaming fashion; suited to progress display of long-running tasks.
+- **In-memory model**: the `Workbook` returned by `Excel.Open` / `Excel.Create` is an in-memory model; the entire workbook is loaded into memory. For very large files, use the streaming APIs instead of `Excel.Open`.
+- **Hyperlink count**: when the number of hyperlinks is extremely large, the streaming writer's memory usage is no longer constant (all hyperlink references are buffered internally).
+- **Append**: `Excel.Append` reads the entire existing file before writing it out; suited to incremental appends of small/medium files.
+
+
+---
+
+## Appendix A Object Model Quick Reference (class / member index)
+
+#### `Excel` static class (entry point of the object model)
 
 | Member | Description |
-|---|---|---|
-| `Cell.Hyperlink` | get/set a cell hyperlink (see §12) |
-| `Worksheet.FreezeRows` / `Worksheet.FreezeColumns` | freeze panes by rows/columns (see §13) |
-| `ws.AddImage(byte[] data, int row, int col, int widthPx, int heightPx, ImagePlacement placement, string? extension, string? name)` | add an image to the sheet (see §14) |
-| `ws.ImportData<T>(data, configure?)` | clear the sheet and rebuild from A1 (List&lt;T&gt;, first row is header) |
-| `ws.ImportData(DataTable, includeHeader = true)` | clear the sheet and rebuild from A1 (DataTable) |
-| `ws.Cell(row, col)` / `ws.Cell("A1")` / `ws.Range(...)` / `ws.Cells` | cell / range access |
-| `ws.Merge(...)` / `ws.Unmerge(...)` / `ws.MergedRanges` | merge cells |
-| `ws.ToSheetData()` | convert back to the low-level model (for writing) |
-
-### Enums
-
-| Enum | Values |
 |---|---|
-| `CellType` | Text, Number, Date, Boolean, Empty |
-| `HorizontalAlignment` | General, Left, Center, Right |
-| `VerticalAlignment` | Top, Center, Bottom |
-| `FilterType` | Equals, Compare, Contains, BeginsWith, EndsWith, Blank |
-| `FilterOperator` | GreaterThan, GreaterThanOrEqual, LessThan, LessThanOrEqual, Between |
-| `DataValidationType` | List, WholeNumber, Decimal, Date |
-| `ImagePlacement` | Floating, InCell |
+| `Open(path[, options])` | Opens a file, auto-detecting the format by extension |
+| `Open(path, format[, options])` | Opens a file with the specified format |
+| `Open(stream, format[, options])` | Opens from a stream (the format must be specified) |
+| `Create()` / `Create(sheetName)` / `Create(string[])` / `Create(format)` | Creates a new empty workbook |
+| `Create<T>(data[, sheetName, format, configure])` | Creates a workbook and writes a List\<T\> |
+| `Create(DataTable[, sheetName, format])` | Creates a workbook and writes a DataTable |
+| `Write(path, Workbook[, options])` | Writes out a workbook |
+| `Write(path, SheetData[, options])` | Writes a single sheet (low-level) |
+| `Write(path, DataTable[, sheetName, options])` | Writes out a DataTable |
+| `Write<T>(path, data[, sheetName, configure])` | Writes out a List\<T\> |
+| `Read<T>(path[, sheetName, configure])` | Reads into a List\<T\> |
+| `ReadAsDataTable(path[, sheetName, firstRowIsHeader])` | Reads into a DataTable |
+| `GetSheetNames(path)` / `GetSheetNames(stream)` | Lists worksheet names |
+| `StreamRows(path, sheetName, onRow)` | Streams rows one by one |
+| `CreateWriter(path)` / `CreateWriter(stream)` | Creates a streaming writer |
+| `Append(path, SheetData[, properties])` | Appends data |
+| `ReadWithProgress(path, sheetIndex, onProgress)` | Reads with progress reporting |
+| `DetectFormat(path)` | Detects the format by extension |
+
+#### `Workbook`
+
+| Member | Description |
+|---|---|
+| `Worksheets` | Worksheet collection (`WorksheetCollection`) |
+| `Properties` | Document properties (`WorkbookProperties`) |
+| `Format` | Current format (`ExcelFormat`) |
+| `Security` | File-level security (`WorkbookSecurity`) |
+| `Protection` | Workbook protection (`WorkbookProtection`) |
+| `Names` | Named ranges (`List<NamedRange>`) |
+| `CurrentPath` | Current target path |
+| `Save()` / `SaveAs(path[, format])` / `Save(stream, format)` | Saves |
+
+#### `Worksheet`
+
+| Member | Description |
+|---|---|
+| `Name` | Worksheet name |
+| `Cell(row, col)` / `Cell(address)` | Accesses a cell |
+| `Range(address)` / `Range(r1, c1, r2, c2)` | Accesses a range |
+| `Cells` | Cell collection of the whole sheet |
+| `SetValue(row, col, value)` / `SetValue(address, value)` | Sets a value |
+| `Merge` / `Unmerge` / `MergedRanges` | Merge |
+| `RowHeights` / `ColumnWidths` | Row heights / column widths |
+| `AutoColumnWidths()` | Auto-fits column widths |
+| `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | Styles |
+| `Comments` | Comments |
+| `Validations` | Data validation |
+| `Filter` | Auto-filter |
+| `ConditionalFormats` | Conditional formatting |
+| `Images` / `AddImage(...)` | Images |
+| `Protection` | Worksheet protection |
+| `Tables` / `AddTable` / `RemoveTable` | Tables |
+| `FreezeRows` / `FreezeColumns` / `FreezeHeader` | Frozen panes |
+| `ImportData<T>(data[, configure])` / `ImportData(DataTable[, includeHeader])` | Clears and rebuilds via import |
+| `ToSheetData()` | Exports to the low-level SheetData model |
+| `RowCount` / `MaxColumn` | Size information |
+
+#### `Cells`
+
+| Member | Description |
+|---|---|
+| `this[int row, int column]` | Indexer by row and column |
+| `this[string address]` | Indexer by A1 address |
+| `Range(address)` / `Range(r1, c1, r2, c2)` | Extracts a range |
+| `SetValue(...)` | Convenient value writing |
+| `Clear()` | Clears all sheet values |
+| `GetEnumerator()` | Enumerates existing cells |
+
+#### `ExcelRange`
+
+| Member | Description |
+|---|---|
+| `FirstRow` / `FirstCol` / `LastRow` / `LastCol` | Range boundaries (1-based) |
+| `Address` | A1 address |
+| `RowCount` / `ColumnCount` | Size |
+| `Cell(rowOffset, colOffset)` | Relative offset within the range |
+| `Fill(value)` / `Fill(object?[,])` | Bulk write |
+| `ToValues()` / `ToCells()` | Read back |
+| `Style` | Uniform style for the whole range |
+| `Merge()` / `Unmerge()` | Merge |
+| `Clear()` | Clears |
+| `GetEnumerator()` | Enumerates (row-major) |
+
+#### `Cell`
+
+| Member | Description |
+|---|---|
+| `Type` / `Text` / `Number` / `Date` / `Boolean` | Value fields |
+| `Style` / `NumberFormat` | Style |
+| `Formula` / `IsFormula` | Formula |
+| `Hyperlink` | Hyperlink |
+| `IsEmpty` | Whether empty |
+| `FromText` / `FromNumber` / `FromDate` / `FromBoolean` / `FromFormula` / `Empty` | Factory methods |
+| `SetValue(object?)` | Sets a value |
+| `GetString` / `GetDouble` / `GetDateTime` / `GetBoolean` / `GetValue` | Strongly-typed reads |
+| `TryGetString` / `TryGetDouble` / `TryGetDateTime` / `TryGetBoolean` | Try reads |
+
+#### Model Classes
+
+- `CellStyle` / `BorderStyle` / `BorderEdge` / `HorizontalAlignment` / `VerticalAlignment`
+- `CellRange` (0-based)
+- `AutoFilter` / `FilterColumn` / `FilterType` / `FilterOperator`
+- `DataValidation` / `DataValidationType`
+- `ConditionalFormat` / `ConditionalFormatType` / `ConditionalOperator` / `ColorScaleInfo` / `DataBarInfo` / `IconSetInfo` / `IconSetStyle`
+- `Hyperlink`
+- `NamedRange`
+- `XlTable` / `XlTableColumn` / `TableStyleStyle`
+- `WorksheetImage` / `ImageAnchor` / `ImagePlacement` / `ImageMoveMode`
+- `SheetProtection` / `WorkbookProtection`
+- `WorkbookProperties` / `WorkbookSecurity`
+- `DegradationInfo` / `DegradationCapability`
+- `ExcelFormat` / `ExcelReadOptions` / `ExcelWriteOptions` / `WriteOptions<T>` / `ReadOptions<T>` / `LiteColumnAttribute`
+- `CellRef` (A1 reference utility, static class)
+- `XlsxStreamWriter`
+- `LiteExcelException` / `LiteXlsxException` / `InvalidSheetNameException`
+
+---
+
+## Appendix B Low-Level API Reference (SheetData / XlsxReader / XlsxWriter / CsvBackend / streaming)
+
+> **Use cases**: suited to custom / bare-row-data / large-file scenarios. For everyday use, prefer the object model API (Chapters 2–25). Low-level API coordinate convention: the `Cell` in `SheetData.Rows` is a 0-based grid, and `Headers` holds the first-row header text.
+
+#### B.1 `SheetData` (complete data of one worksheet)
+
+↳ Main guide: Chapter 5 Data Types and Conversion (the underlying mapping of List<T> / DataTable is SheetData), Chapter 21 Streaming Read / Progress Callback / Append (the data carrier for streaming / append)
+
+```csharp
+public sealed class SheetData
+{
+    public string SheetName { get; set; } = "Sheet1";
+    public List<string> Headers { get; set; } = new();
+    public List<IReadOnlyList<Cell>> Rows { get; set; } = new();
+    public List<CellRange> MergedRanges { get; set; } = new();
+    public AutoFilter? Filter { get; set; }
+    public bool FreezeHeader { get; set; }
+    public int FreezeRows { get; set; }
+    public int FreezeColumns { get; set; }
+    public List<double>? ColumnWidths { get; set; }
+    public CellStyle? HeaderStyle { get; set; }
+    public CellStyle? DefaultStyle { get; set; }
+    public Dictionary<int, CellStyle>? RowStyles { get; set; }
+    public Dictionary<int, CellStyle>? ColumnStyles { get; set; }
+    public Dictionary<int, double>? RowHeights { get; set; }
+    public Dictionary<string, string>? Comments { get; set; }
+    public List<DataValidation>? Validations { get; set; }
+    public List<ConditionalFormat> ConditionalFormats { get; set; } = new();
+    public string? CodeName { get; set; }
+    public List<WorksheetImage>? Images { get; set; }
+    public SheetProtection? Protection { get; set; }
+    public List<XlTable> Tables { get; set; } = new();
+}
+```
+
+#### B.2 `XlsxReader` (static class, zero reflection, AOT-safe)
+
+↳ Main guide: Chapter 3 File Navigation: Open / Create / Save / Format (the low-level entry point for open / stream read), Chapter 21 Streaming Read / Progress Callback / Append (21.4 streaming read-back)
+
+| Member | Description |
+|---|---|
+| `Read(path, sheetIndex[, firstRowIsHeader])` | Reads a single sheet by index |
+| `Read(path, sheetName[, firstRowIsHeader])` | Reads a single sheet by name |
+| `Read(stream, sheetIndex/name[, firstRowIsHeader])` | Reads a single sheet from a stream |
+| `ReadAll(path)` / `ReadAll(stream)` | Reads all sheets |
+| `Read<T>(path, sheetIndex/name[, configure])` | Reads into a List\<T\> |
+| `ReadAsDataTable(path, sheetIndex/name[, firstRowIsHeader])` | Reads into a DataTable |
+| `GetSheetNames(path)` / `GetSheetNames(stream)` | Lists worksheet names |
+| `StreamRows(path/stream, sheetName, onRow)` | Streams rows one by one |
+| `ReadWithProgress(path, sheetIndex, onProgress)` | Reads with progress reporting |
+| `ReadProperties(path)` / `ReadProperties(stream)` | Reads document properties |
+
+#### B.3 `XlsxWriter` (static class, zero reflection, AOT-safe)
+
+↳ Main guide: Chapter 3 File Navigation: Open / Create / Save / Format (the low-level write behind Excel.Write), Chapter 21 Streaming Read / Progress Callback / Append (21.3 the low-level write of Append)
+
+| Member | Description |
+|---|---|
+| `Write(path, SheetData[, properties])` | Writes a single sheet |
+| `Write(path, IReadOnlyList<SheetData>[, properties])` | Writes multiple sheets |
+| `Write(stream, SheetData[, properties])` | Writes a single sheet to a stream |
+| `Write(stream, IReadOnlyList<SheetData>[, properties])` | Writes multiple sheets to a stream |
+| `Write<T>(path, data[, configure])` | Writes a List\<T\> |
+| `Write(path, DataTable[, sheetName])` | Writes a DataTable |
+| `Append(path, SheetData[, properties])` | Appends data |
+| `AutoColumnWidths(SheetData)` | Auto-fits column widths |
+
+Note: `XlsxWriter.Write` automatically writes out the macroEnabled main document type for the `.xlsm` extension; when writing a `SheetData`, the sheet name (`InvalidSheetNameException`) and duplicate sheet names (`LiteExcelException`) are validated.
+
+#### B.4 `CsvBackend` (internal class, CSV format backend)
+
+↳ Main guide: Chapter 20 Multi-Format Behavior (20.3 CSV behavior)
+
+> The low-level CSV backend is `internal`; for everyday CSV reads/writes, use `Excel.Open` / `Excel.Write`. The behavioral notes are listed here for reference.
+
+- Implements a basic subset of RFC 4180: fields containing separators / line breaks / quotes are wrapped in double quotes.
+- On read, the separator is auto-detected (comma > semicolon > Tab, counting only outside quotes); `ExcelReadOptions.Separator` can force a fixed one.
+- On write, comma is the default; `ExcelWriteOptions.Separator` can be specified.
+- Tabular data only; Excel-specific capabilities such as styles / merges / comments are not supported.
+
+#### B.5 `XlsxStreamWriter` (streaming writer)
+
+↳ Main guide: Chapter 21 Streaming Read / Progress Callback / Append (21.4 streaming write via CreateWriter)
+
+> Suited to writing large files row by row. Obtain it via `Excel.CreateWriter(path|stream)`.
+
+| Member | Description |
+|---|---|
+| `Create(path)` / `Create(stream)` | Creates a writer |
+| `WriteRow(IEnumerable<object?>)` | Writes one row of values |
+| `WriteRow(IEnumerable<Cell>)` | Writes one row of Cells |
+| `Close()` / `Dispose()` | Finalizes the file (must be called) |
+
+- Uses inline strings (inlineStr) to avoid a pre-scan of the shared string table.
+- Supports a single worksheet; styles / formulas / hyperlinks are written with each row (styles.xml and sheet rels are written out together at Close).
+- Advanced capabilities such as merges / filters / images are not supported.
+- Memory usage is no longer constant when the number of hyperlinks is extremely large.
+
+#### B.6 `CellRef` (A1 reference utility, static class)
+
+↳ Main guide: Chapter 4 Cells and Values (accessing cells by A1 address)
+
+| Member | Description |
+|---|---|
+| `Parse(cellRef)` | `"A1"` -> `(row=0, col=0)` |
+| `TryParse(cellRef, out pos)` | Tries to parse |
+| `ParseRange(range)` | Parses a range reference (0-based, inclusive) |
+| `ToString(row, col)` | `(0,0)` -> `"A1"` |
+| `ColToLetter(col)` | `0` -> `"A"` |
+| `LetterToCol(letters)` | `"A"` -> `0` |
+
+#### B.7 Old vs. New API Mapping
+
+A quick reference of equivalences between the object model API and the low-level API (the object model routes formats automatically by extension; the low-level API only handles xlsx/xlsm):
+
+| Scenario | Object model API | Low-level API |
+|---|---|---|
+| Open a file | `Excel.Open(path[, options])` | `XlsxReader.Read(path, 0)` (single sheet) / `XlsxReader.ReadAll(path)` (all sheets) |
+| Create and write out | `Excel.Create(...)` + `wb.SaveAs(path)` | `XlsxWriter.Write(path, sheet)` |
+| Read a single sheet | `wb.Worksheets[i]` / `wb.Worksheets["name"]` | `XlsxReader.Read(path, sheetIndex)` / `XlsxReader.Read(path, sheetName)` |
+| Read a List\<T\> | `Excel.Read<T>(path[, sheetName, configure])` | `XlsxReader.Read<T>(path, 0[, configure])` |
+| Read a DataTable | `Excel.ReadAsDataTable(path[, sheetName])` | `XlsxReader.ReadAsDataTable(path, 0)` |
+| Write a List\<T\> | `Excel.Write(path, list[, sheetName, configure])` | `XlsxWriter.Write(path, list)` |
+| Write a DataTable | `Excel.Write(path, table[, sheetName])` | `XlsxWriter.Write(path, table, sheetName)` |
+| Streaming read | `Excel.StreamRows(path, sheetName, onRow)` | `XlsxReader.StreamRows(path, sheetName, onRow)` |
+| Streaming write | `Excel.CreateWriter(path)` | `XlsxStreamWriter.Create(path)` |
+| Append data | `Excel.Append(path, sheetData[, properties])` | `XlsxWriter.Append(path, sheetData[, properties])` |
+| List sheet names | `Excel.GetSheetNames(path)` | `XlsxReader.GetSheetNames(path)` |
+
+> ⚠️ xls / xlsb / csv have no low-level API; always use the object model `Excel.Open` / `Excel.Write` (routed by extension).
+
+---
+
+*This guide covers all public capabilities of the current LiteExcel mainline.*
