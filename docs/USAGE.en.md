@@ -1384,11 +1384,11 @@ Output:
 var ws = Excel.Create().Worksheets["Sheet1"];
 
 // external link
-ws.Cell("A1").SetValue("OpenAI");
+ws.Cell("A1").SetValue("Example");
 ws.Cell("A1").Hyperlink = new Hyperlink
 {
-    Target = "https://openai.com",
-    Tooltip = "Visit OpenAI",
+    Target = "https://example.com",
+    Tooltip = "Visit Example",
     IsInternal = false,
 };
 
@@ -1427,7 +1427,7 @@ if (cell.Hyperlink is { } h)
 Output:
 
 ```
-https://openai.com internal=False tooltip=Visit OpenAI
+https://example.com internal=False tooltip=Visit Example
 ```
 
 Hyperlinks are supported for reading and writing in all four formats: xlsx / xlsm / xlsb / xls.

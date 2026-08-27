@@ -1386,11 +1386,11 @@ Console.WriteLine(note);   // 输出: 审核通过
 var ws = Excel.Create().Worksheets["Sheet1"];
 
 // 外部链接
-ws.Cell("A1").SetValue("OpenAI");
+ws.Cell("A1").SetValue("Example");
 ws.Cell("A1").Hyperlink = new Hyperlink
 {
-    Target = "https://openai.com",
-    Tooltip = "Visit OpenAI",
+    Target = "https://example.com",
+    Tooltip = "Visit Example",
     IsInternal = false,
 };
 
@@ -1429,7 +1429,7 @@ if (cell.Hyperlink is { } h)
 输出：
 
 ```
-https://openai.com internal=False tooltip=Visit OpenAI
+https://example.com internal=False tooltip=Visit Example
 ```
 
 超链接在 xlsx / xlsm / xlsb / xls 四格式读写均支持。
