@@ -340,7 +340,7 @@ T
 
 #### 3.10 Document Properties `WorkbookProperties`
 
-> ⚠️ Document properties are supported only for **xlsx / xlsm / xlsb** (OLE property sets are not implemented for xls). When writing to xls they are **silently dropped** (they are not reported via `OnDegradation`).
+> ⚠️ Document properties are supported only for **xlsx / xlsm / xlsb** (OLE property sets are not implemented for xls). When writing to xls they are **silently dropped**, reported via `OnDegradation`.
 
 `Workbook.Properties` corresponds to `docProps/core.xml` and `docProps/app.xml` inside the xlsx package:
 
@@ -2076,7 +2076,7 @@ Products A1:B3 样式=TableStyleMedium2
 
 ### 17. Named Ranges
 
-> ⚠️ Named ranges are supported only for **xlsx / xlsm** (read from `definedNames` in `workbook.xml`). xls / xlsb are not implemented: named ranges are **silently dropped** on write (they are not reported via `OnDegradation`).
+> ⚠️ Named ranges are supported only for **xlsx / xlsm** (read from `definedNames` in `workbook.xml`). xls / xlsb are not implemented: named ranges are **silently dropped** on write, reported via `OnDegradation`.
 
 #### 17.1 Reading Named Ranges
 

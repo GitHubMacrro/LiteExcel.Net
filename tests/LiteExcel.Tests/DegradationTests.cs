@@ -114,24 +114,48 @@ public class DegradationTests
     }
 
     [Fact]
-    public void XlsxWrite_ReportsNothing()
+    public void XlsWrite_ReportsNamedRangesAndDocProperties()
     {
-        // xlsx 无损路径不应触发任何降级
-        var file = GetTempFile(".xlsx");
-        var reported = new List<DegradationInfo>();
+        // 2.4.7：xls / xlsb 写出时命名区域 / 文档属性此前是静默丢失，现在应走 OnDegradation 上报
+        var xlsxPath = Path.Combine(Path.GetTempPath(), $"nr_{Guid.NewGuid():N}.xlsx");
+        var xlsPath = GetTempFile(".xls");
+        var reported = new List<DegradationCapability>();
         try
         {
             var wb = Excel.Create();
-            var ws = wb.Worksheets[0];
-            ws.SetValue("A1", "x");
-            ws.Comments = new Dictionary<string, string> { ["B1"] = "note" };
-            ws.Merge("C1:D1");
-            ws.FreezeRows = 1;
+            wb.Worksheets[0].SetValue("A1", "x");
+            wb.SaveAs(xlsxPath);
 
-            Excel.Write(file, wb, new ExcelWriteOptions { OnDegradation = d => reported.Add(d) });
+            // 注入 definedNames 模拟「有命名区域」的工作簿
+            using (var zip = System.IO.Compression.ZipFile.Open(xlsxPath,
+                       System.IO.Compression.ZipArchiveMode.Update))
+            {
+                var e = zip.GetEntry("xl/workbook.xml")!;
+                string xml;
+                using (var r = new StreamReader(e.Open())) xml = r.ReadToEnd();
+                xml = xml.Replace("</workbook>",
+                    "<definedNames><definedName name=\"Test\">Sheet1!$A$1</definedName></definedNames></workbook>");
+                e.Delete();
+                var ne = zip.CreateEntry("xl/workbook.xml");
+                using (var w = new StreamWriter(ne.Open(), new System.Text.UTF8Encoding(false)))
+                    w.Write(xml);
+            }
 
-            Assert.Empty(reported);
+            var wb2 = Excel.Open(xlsxPath);
+            var options = new ExcelWriteOptions { OnDegradation = d => reported.Add(d.Capability) };
+            Excel.Write(xlsPath, wb2, options);
+
+            Assert.Contains(DegradationCapability.NamedRanges, reported);
+            Assert.Contains(DegradationCapability.DocumentProperties, reported);
         }
-        finally { if (File.Exists(file)) File.Delete(file); }
+        finally
+        {
+            if (File.Exists(xlsxPath)) File.Delete(xlsxPath);
+            if (File.Exists(xlsPath)) File.Delete(xlsPath);
+        }
     }
+
+    //
+    // 已删除，新增用例上面
+    //
 }

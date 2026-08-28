@@ -113,12 +113,13 @@ internal static class XlsbWriter
     public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null, bool date1904 = false,
         string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false,
         Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Xlsb,
-        OoxmlPreservedParts? preserved = null, WorkbookProperties? properties = null)
+        OoxmlPreservedParts? preserved = null, WorkbookProperties? properties = null,
+        IReadOnlyList<NamedRange>? names = null)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
 
-        ReportSheetDegradations(sheets, onDegradation, targetFormat);
+        ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
 
         var sst = new List<string>();
         var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -220,11 +221,14 @@ internal static class XlsbWriter
         return XlsxWriter.MergeRelsXml(original, "xl/worksheets", new HashSet<string>(StringComparer.Ordinal), rebuilt);
     }
 
-    /// <summary>写出 xlsb 时对静默丢弃的 sheet 级能力逐项上报（P0-4/15/16 显式化） </summary>
-    private static void ReportSheetDegradations(IReadOnlyList<SheetData> sheets,
+    /// <summary>写出 xlsb 时对静默丢失的能力逐项上报（P0-4/15/16 显式化 + NamedRanges/DocumentProperties）。
+    /// namedRanges / documentProperties 为工作簿级，SheetName 为 null。</summary>
+    private static void ReportDegradations(IReadOnlyList<SheetData> sheets,
+        IReadOnlyList<NamedRange>? names, WorkbookProperties? properties,
         Action<DegradationInfo>? onDegradation, ExcelFormat targetFormat)
     {
         if (onDegradation is null) return;
+        ReportWorkbook(names, properties, onDegradation, targetFormat);
         foreach (var sheet in sheets)
         {
             void Report(DegradationCapability cap, string msg)
@@ -251,6 +255,28 @@ internal static class XlsbWriter
                 Report(DegradationCapability.Tables, $"xlsb 不支持超级表，工作表 '{sheet.SheetName}' 的超级表已丢弃。");
         }
     }
+
+    /// <summary>工作簿级静默丢失：命名区域仅读取不上报（root），文档属性已写为 OOXML 但也従工具的范围限制来看需要提醒。</summary>
+    private static void ReportWorkbook(IReadOnlyList<NamedRange>? names, WorkbookProperties? properties,
+        Action<DegradationInfo> onDegradation, ExcelFormat targetFormat)
+    {
+        void Report(DegradationCapability cap, string msg)
+            => onDegradation(new DegradationInfo
+            {
+                Capability = cap,
+                TargetFormat = targetFormat,
+                Message = msg,
+            });
+        if (names is { Count: > 0 })
+            Report(DegradationCapability.NamedRanges, $"xlsb 不支持命名区域（definedNames），工作簿的 {names.Count} 个命名区域已静默丢弃。");
+        if (HasMeaningfulProperties(properties))
+            Report(DegradationCapability.DocumentProperties, "xlsb 不支持文档属性（Title/Subject/Creator/...）,工作簿属性已静默丢弃。");
+    }
+
+    /// <summary>判断文档属性是否被填充。 </summary>
+    private static bool HasMeaningfulProperties(WorkbookProperties? p)
+        => p is not null && (p.Creator is not null || p.Title is not null || p.Subject is not null
+            || p.LastModifiedBy is not null || p.Created is not null || p.Modified is not null || p.Application is not null);
 
     /// <summary>收集工作表中外部超链接（按行序遍历，保持稳定顺序） </summary>
     private static List<string> CollectExternalHyperlinks(SheetData sheet)

@@ -340,7 +340,7 @@ T
 
 #### 3.10 文档属性 `WorkbookProperties`
 
-> ⚠️ 文档属性仅支持 **xlsx / xlsm / xlsb**；不支持 xls（OLE 属性集未实现）。写出 xls 时这些属性会**静默丢失**（不经 `OnDegradation` 上报）。
+> ⚠️ 文档属性仅支持 **xlsx / xlsm / xlsb**；不支持 xls（OLE 属性集未实现）。写出 xls 时属性会**静默丢失**，经 `OnDegradation` 上报。
 
 `Workbook.Properties` 对应 xlsx 包内的 `docProps/core.xml` 与 `docProps/app.xml`：
 
@@ -2078,7 +2078,7 @@ Products A1:B3 样式=TableStyleMedium2
 
 ### 17. 命名区域
 
-> ⚠️ 命名区域仅支持 **xlsx / xlsm**（从 `workbook.xml` 的 `definedNames` 读回）。xls / xlsb 未实现：写出时命名区域会**静默丢失**，也不经 `OnDegradation` 上报。
+> ⚠️ 命名区域仅支持 **xlsx / xlsm**（从 `workbook.xml` 的 `definedNames` 读回）。xls / xlsb 未实现：写出时命名区域会**静默丢失**，经 `OnDegradation` 上报。
 
 #### 17.1 读回命名区域
 

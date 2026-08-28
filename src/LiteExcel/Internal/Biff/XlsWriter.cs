@@ -74,19 +74,23 @@ internal static class XlsWriter
     };
 
     public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, bool date1904 = false,
-        Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Xls)
+        Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Xls,
+        IReadOnlyList<NamedRange>? names = null, WorkbookProperties? properties = null)
     {
-        ReportSheetDegradations(sheets, onDegradation, targetFormat);
+        ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
         var workbook = BuildWorkbookStream(sheets, date1904);
         var cfb = CfbWriter.Build("Workbook", workbook);
         stream.Write(cfb, 0, cfb.Length);
     }
 
-    /// <summary>写出 xls 时对静默丢弃的 sheet 级能力逐项上报（P0-4/15/16 显式化） </summary>
-    private static void ReportSheetDegradations(IReadOnlyList<SheetData> sheets,
+    /// <summary>写出 xls 时对静默丢失的能力逐项上报（P0-4/15/16 显式化 + NamedRanges/DocumentProperties）。
+    /// documentProperties / namedRanges 均为工作簿级能力，SheetName 为 null。</summary>
+    private static void ReportDegradations(IReadOnlyList<SheetData> sheets,
+        IReadOnlyList<NamedRange>? names, WorkbookProperties? properties,
         Action<DegradationInfo>? onDegradation, ExcelFormat targetFormat)
     {
         if (onDegradation is null) return;
+        ReportWorkbook(names, properties, onDegradation, targetFormat);
         foreach (var sheet in sheets)
         {
             void Report(DegradationCapability cap, string msg)
@@ -113,6 +117,28 @@ internal static class XlsWriter
                 Report(DegradationCapability.Tables, $"xls 不支持超级表，工作表 '{sheet.SheetName}' 的超级表已丢弃。");
         }
     }
+
+    /// <summary>工作簿级静默丢失：命名区域 + 文档属性。xls 不支持它们且不入 OLE SummaryInformation。</summary>
+    private static void ReportWorkbook(IReadOnlyList<NamedRange>? names, WorkbookProperties? properties,
+        Action<DegradationInfo> onDegradation, ExcelFormat targetFormat)
+    {
+        void Report(DegradationCapability cap, string msg)
+            => onDegradation(new DegradationInfo
+            {
+                Capability = cap,
+                TargetFormat = targetFormat,
+                Message = msg,
+            });
+        if (names is { Count: > 0 })
+            Report(DegradationCapability.NamedRanges, $"xls 不支持命名区域（definedNames），工作簿的 {names.Count} 个命名区域已静默丢弃。");
+        if (HasMeaningfulProperties(properties))
+            Report(DegradationCapability.DocumentProperties, "xls 不支持文档属性（Title/Subject/Creator/...），工作簿属性已静默丢弃。");
+    }
+
+    /// <summary>判断文档属性是否被填充（全部字段都为空才算无）。 </summary>
+    private static bool HasMeaningfulProperties(WorkbookProperties? p)
+        => p is not null && (p.Creator is not null || p.Title is not null || p.Subject is not null
+            || p.LastModifiedBy is not null || p.Created is not null || p.Modified is not null || p.Application is not null);
 
     private static byte[] BuildWorkbookStream(IReadOnlyList<SheetData> sheets, bool date1904)
     {

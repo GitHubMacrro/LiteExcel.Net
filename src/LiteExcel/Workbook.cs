@@ -228,7 +228,8 @@ public sealed class Workbook
             case ExcelFormat.Xls:
             {
                 var xlsSheets = BuildSheetDataList();
-                XlsWriter.Write(stream, xlsSheets, Date1904, DegradationCallback, ExcelFormat.Xls);
+                XlsWriter.Write(stream, xlsSheets, Date1904, DegradationCallback, ExcelFormat.Xls,
+                    Names, Properties);
                 break;
             }
             case ExcelFormat.Xlsb:
@@ -241,7 +242,7 @@ public sealed class Workbook
                     using var zipMs = new MemoryStream();
                     XlsbWriter.Write(zipMs, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
                         fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
-                        PreservedParts, Properties);
+                        PreservedParts, Properties, Names);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwdB);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -250,7 +251,7 @@ public sealed class Workbook
                 {
                     XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
                         fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
-                        PreservedParts, Properties);
+                        PreservedParts, Properties, Names);
                 }
                 break;
             }
