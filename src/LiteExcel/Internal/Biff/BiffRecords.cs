@@ -35,6 +35,8 @@ internal static class BiffRecords
     public const ushort OpFilePass = 0x002F;
     public const ushort OpHlink = 0x01B8;
     public const ushort OpHlinkTooltip = 0x0800;
+    public const ushort OpExternSheet = 0x0017;
+    public const ushort OpDefinedName = 0x0018;
 
     public readonly struct Record
     {

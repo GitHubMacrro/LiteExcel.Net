@@ -92,7 +92,7 @@ Support per format / 各格式支持度（写出到不支持的能力时经 `OnD
 | Images (Floating/InCell) / 图片 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Conditional formatting / 条件格式 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Excel Tables / 超级表 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Named ranges / 命名区域 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Named ranges / 命名区域 | ☑️ | ☑️ | ❌ | ☑️ | ❌ |
 | Document properties / 文档属性 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Open/modify passwords / 打开/修改密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Formulas / 公式 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |

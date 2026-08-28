@@ -2078,7 +2078,7 @@ Products A1:B3 样式=TableStyleMedium2
 
 ### 17. 命名区域
 
-> ⚠️ 命名区域仅支持 **xlsx / xlsm**（从 `workbook.xml` 的 `definedNames` 读回）。xls / xlsb 未实现：写出时命名区域会**静默丢失**，经 `OnDegradation` 上报。
+> ⚠️ 命名区域支持范围：**xlsx / xlsm** 完整读回（`workbook.xml` 的 `definedNames`）；**xls** 支持简单单元格/区域引用（PtgRef3d / PtgArea3d），复杂公式类命名区域会跳过；**xlsb 暂不支持**。写出到不支持该能力的格式时命名区域会**静默丢失**，经 `OnDegradation` 上报。
 
 #### 17.1 读回命名区域
 
@@ -2099,15 +2099,19 @@ MyRange = Sheet1!$A$1:$C$9 local=-1
 LocalRange = Sheet1!$B$2 local=0
 ```
 
+> xls 文件同样支持（简单单元格/区域引用读回），示例：`Excel.Open("names.xls")`。`Workbook.Names` 的填充逻辑对 xlsx/xlsm/xls 一致。
+
 #### 17.2 写出保留
 
-命名区域在打开后保存时**原样保留**（`workbook.xml` 的 `definedNames` 透传），不会因编辑丢失：
+命名区域在打开后保存时**原样保留**（xlsx/xlsm 走 `workbook.xml` 的 `definedNames` 透传），不会因编辑丢失：
 
 ```csharp
 var opened = Excel.Open("names.xlsx");
 opened.Worksheets[0].SetValue("A1", "edited");
 opened.Save();   // 命名区域仍保留
 ```
+
+> ⚠️ 保存到 xls 时命名区域**不会**写回（xls 写回未实现）；xlsx/xlsm 保存透传保留。
 
 输出：已写入 names.xlsx
 
@@ -2377,7 +2381,7 @@ True structure=True hasPwd=False
 | 图片（浮动/InCell） | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 条件格式 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 超级表 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| 命名区域 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| 命名区域 | ☑️ | ☑️ | ❌ | ☑️ | ❌ |
 | 文档属性 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | 打开密码 / 修改密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | 公式 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |

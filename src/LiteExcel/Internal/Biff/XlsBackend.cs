@@ -16,12 +16,20 @@ internal static class XlsBackend
     /// <summary>net48 无 Encoding.Latin1，用 ISO-8859-1 代码页等价 </summary>
     private static readonly Encoding Latin1 = Encoding.GetEncoding(28591);
 
+    /// <summary>最近一次 ReadAll 捕获的工作簿命名区域（DefinedName）快照，供 Excel.cs 挂到 Workbook.Names。 </summary>
+    [ThreadStatic]
+    private static List<NamedRange>? s_definedNames;
+
+    /// <summary>取最近一次 .xls 读取解析出的命名区域列表（可为 null/空）。 </summary>
+    public static IReadOnlyList<NamedRange>? DefinedNamesSnapshot => s_definedNames;
+
     public static List<SheetData> ReadAll(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         return ReadAll(fs);
     }
 
+    /// <summary>从流读取 .xls 工作簿（含命名区域快照捕获）。 </summary>
     public static List<SheetData> ReadAll(Stream stream)
     {
         var cfb = CfbFile.Open(stream);
@@ -64,6 +72,8 @@ internal static class XlsBackend
         var xfIfmt = new List<int>();
         bool date1904 = false;
         var boundSheets = new List<(string Name, byte Type)>();
+        var externSheets = new List<int>();          // EXTERNSHEET itab 列表（ixti → itab）
+        var definedNameRecords = new List<(byte[] Data, ushort Opcode)>();
 
         int i = 1;
         for (; i < records.Count; i++)
@@ -94,9 +104,23 @@ internal static class XlsBackend
                     if (rec.Data.Length >= 2)
                         date1904 = BiffRecords.ReadU16(rec.Data, 0) == 1;
                     break;
+                case BiffRecords.OpExternSheet:
+                    ParseExternSheet(rec.Data, externSheets);
+                    break;
+                case BiffRecords.OpDefinedName:
+                    ParseDefinedName(rec.Data, definedNameRecords);
+                    break;
             }
         }
 
+        // 命名区域：先按 EXTERNSHEET itab 映射到 sheet 名，再解析公式
+        var names = new List<NamedRange>();
+        foreach (var dn in definedNameRecords)
+        {
+            var nr = BuildNamedRange(dn, externSheets, boundSheets);
+            if (nr is not null) names.Add(nr);
+        }
+        s_definedNames = names;
         var result = new List<SheetData>();
         while (i < records.Count)
         {
@@ -133,6 +157,136 @@ internal static class XlsBackend
             name = Latin1.GetString(d, 8, bytes);
         }
         return (name, 0);
+    }
+
+    // ── 命名区域（DEFINEDNAME / EXTERNSHEET）──
+
+    /// <summary>EXTERNSHEET 记录：cXTI(2) + 每项 iSupBook(2) itabFirst(2) itabLast(2)。收集 itabFirst 序列（ixti → itab）。</summary>
+    private static void ParseExternSheet(byte[] d, List<int> externSheets)
+    {
+        if (d.Length < 2) return;
+        int count = BiffRecords.ReadU16(d, 0);
+        int pos = 2;
+        for (int i = 0; i < count && pos + 6 <= d.Length; i++)
+        {
+            int itab = BiffRecords.ReadU16(d, pos + 2);
+            externSheets.Add(itab);
+            pos += 6;
+        }
+    }
+
+    /// <summary>DEFINEDNAME 记录原始数据暂存（后续与 EXTERNSHEET 一起解析）。</summary>
+    private static void ParseDefinedName(byte[] d, List<(byte[] Data, ushort Opcode)> sink)
+    {
+        if (d.Length >= 14) sink.Add((d, 0));
+    }
+
+    /// <summary>把 DEFINEDNAME + EXTERNSHEET 解析为 NamedRange；无法解析（复杂公式/内置名）返回 null 跳过。</summary>
+    private static NamedRange? BuildNamedRange((byte[] Data, ushort Opcode) dn,
+        List<int> externSheets, List<(string Name, byte Type)> boundSheets)
+    {
+        var d = dn.Data;
+        // option_flag(2) keyboard_shortcut(1) cch(1) cce(2) extern(2) sheet(2)
+        //   customMenuLen(1) descLen(1) helpLen(1) statusLen(1) nameIsMultibyte(1) [built_in?] name formula
+        if (d.Length < 15) return null;
+        int optionFlag = BiffRecords.ReadU16(d, 0);
+        int cch = d[3];
+        int cce = BiffRecords.ReadU16(d, 4);
+        int sheetNumber = BiffRecords.ReadU16(d, 8);
+        bool isBuiltIn = (optionFlag & 0x0020) != 0;
+        if (isBuiltIn) return null; // 内置名（Print_Area 等）不作为用户命名区域
+        bool multibyte = d[14] != 0;
+        int namePos = 15;
+        string name = multibyte
+            ? (namePos + cch * 2 <= d.Length ? Encoding.Unicode.GetString(d, namePos, cch * 2) : "")
+            : (namePos + cch <= d.Length ? Latin1.GetString(d, namePos, cch) : "");
+        namePos += multibyte ? cch * 2 : cch;
+        if (namePos + cce > d.Length) return null;
+
+        // 公式：仅支持 PtgRef3d(0x3A) / PtgArea3d(0x3B) 的「ixti + 行列」简单引用；其它公式类型跳过
+        var formula = new byte[cce];
+        Array.Copy(d, namePos, formula, 0, cce);
+        string? reference = DecodeRef3d(formula, externSheets, boundSheets);
+        if (reference is null) return null;
+
+        // 局部名：sheetNumber 字段 = 总表数 - sheetIndex（本 Excel 版本行为）；全局名 = 0 → -1
+        int localSheetId;
+        if (sheetNumber == 0) localSheetId = -1;
+        else localSheetId = boundSheets.Count - sheetNumber;
+
+        return new NamedRange
+        {
+            Name = name,
+            Reference = reference,
+            LocalSheetId = localSheetId,
+        };
+    }
+
+    /// <summary>解码 PtgRef3d/PtgArea3d 为 "Sheet!$A$1" 文本；不支持返回 null。</summary>
+    private static string? DecodeRef3d(byte[] formula, List<int> externSheets, List<(string Name, byte Type)> boundSheets)
+    {
+        if (formula.Length == 0) return null;
+        int ptg = formula[0];
+        int pos = 1;
+        string? sheet = null;
+
+        // 3D 引用：ixti(2) 指向 EXTERNSHEET → itab → 本地 sheet 名
+        if (ptg == 0x3A || ptg == 0x3B)
+        {
+            if (pos + 2 > formula.Length) return null;
+            int ixti = BiffRecords.ReadU16(formula, pos);
+            pos += 2;
+            if (ixti >= 0 && ixti < externSheets.Count)
+            {
+                int itab = externSheets[ixti];
+                // itab → sheet 名：BOUNDSHEET 顺序（0-based），版本差异用 boundCount-1-itab 兜底
+                if (itab >= 0 && itab < boundSheets.Count)
+                    sheet = boundSheets[itab].Name;
+                else if (itab >= 0 && itab < boundSheets.Count * 1 && boundSheets.Count - 1 - itab >= 0)
+                {
+                    int idx = boundSheets.Count - 1 - itab;
+                    if (idx < boundSheets.Count) sheet = boundSheets[idx].Name;
+                }
+            }
+            if (sheet is null) return null;
+        }
+        else
+        {
+            // 非 3D（纯局部引用）暂不支持——命名区域几乎总是带表名
+            return null;
+        }
+
+        if (ptg == 0x3A) // PtgRef3d: rw(2) col(2)
+        {
+            if (pos + 4 > formula.Length) return null;
+            int rw = BiffRecords.ReadU16(formula, pos);
+            int col = BiffRecords.ReadU16(formula, pos + 2);
+            return sheet + "!" + RefCellText(rw, col);
+        }
+        if (ptg == 0x3B) // PtgArea3d: rw1(2) rw2(2) col1(2) col2(2)
+        {
+            if (pos + 8 > formula.Length) return null;
+            int rw1 = BiffRecords.ReadU16(formula, pos);
+            int rw2 = BiffRecords.ReadU16(formula, pos + 2);
+            int col1 = BiffRecords.ReadU16(formula, pos + 4);
+            int col2 = BiffRecords.ReadU16(formula, pos + 6);
+            return sheet + "!" + RefCellText(rw1, col1) + ":" + RefCellText(rw2, col2);
+        }
+        return null;
+    }
+
+    private static string RefCellText(int rw, int col)
+    {
+        var sb = new StringBuilder();
+        int c = col;
+        while (c >= 0)
+        {
+            sb.Insert(0, (char)('A' + (c % 26)));
+            c = c / 26 - 1;
+            if (c < 0) break;
+        }
+        sb.Append(rw + 1);
+        return sb.ToString();
     }
 
     private static void ParseFormat(byte[] d, Dictionary<int, string> formats)

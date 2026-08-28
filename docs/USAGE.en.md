@@ -2076,7 +2076,7 @@ Products A1:B3 样式=TableStyleMedium2
 
 ### 17. Named Ranges
 
-> ⚠️ Named ranges are supported only for **xlsx / xlsm** (read from `definedNames` in `workbook.xml`). xls / xlsb are not implemented: named ranges are **silently dropped** on write, reported via `OnDegradation`.
+> ⚠️ Named-range support: **xlsx / xlsm** full read-back (from `definedNames` in `workbook.xml`); **xls** supports simple cell/range references (PtgRef3d / PtgArea3d), names with complex formulas are skipped; **xlsb is not yet supported**. When writing to a format that does not support this capability, named ranges are **silently dropped**, reported via `OnDegradation`.
 
 #### 17.1 Reading Named Ranges
 
@@ -2097,15 +2097,19 @@ MyRange = Sheet1!$A$1:$C$9 local=-1
 LocalRange = Sheet1!$B$2 local=0
 ```
 
+> xls files are also supported (simple cell/range reference read-back), e.g. `Excel.Open("names.xls")`. The `Workbook.Names` population logic is identical for xlsx/xlsm/xls.
+
 #### 17.2 Preservation on Write
 
-Named ranges are **preserved as-is** when the file is saved after being opened (the `definedNames` in `workbook.xml` is passed through), so they are not lost through editing:
+Named ranges are **preserved as-is** when the file is saved after being opened (xlsx/xlsm pass through the `definedNames` in `workbook.xml`), so they are not lost through editing:
 
 ```csharp
 var opened = Excel.Open("names.xlsx");
 opened.Worksheets[0].SetValue("A1", "edited");
 opened.Save();   // named ranges are still preserved
 ```
+
+> ⚠️ Named ranges are **not written back** when saving to xls (xls write-back is not implemented); xlsx/xlsm saving passes them through.
 
 Output: written to names.xlsx
 
@@ -2376,7 +2380,7 @@ The table below lists the support status of each capability across formats. Capa
 | Images (Floating/InCell) | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Conditional formatting | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Tables | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Named ranges | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Named ranges | ☑️ | ☑️ | ❌ | ☑️ | ❌ |
 | Document properties | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Open password / Modify password | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Formulas | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |

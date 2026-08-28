@@ -67,6 +67,7 @@ public static class Excel
             {
                 var sheets = XlsBackend.ReadAll(path);
                 var wbX = Workbook.FromSheetData(sheets, null, ExcelFormat.Xls, path);
+                AttachXlsNames(wbX);
                 wbX.Date1904 = XlsBackend.ReadDate1904(path);
                 return wbX;
             }
@@ -196,6 +197,7 @@ public static class Excel
             {
                 var sheets = XlsBackend.ReadAll(ms);
                 var wbX = Workbook.FromSheetData(sheets, null, ExcelFormat.Xls, null);
+                AttachXlsNames(wbX);
                 ms.Position = 0;
                 wbX.Date1904 = XlsBackend.ReadDate1904(ms);
                 return wbX;
@@ -595,6 +597,15 @@ public static class Excel
         var format = DetectFormat(path);
         if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm)
             throw new LiteExcelException($"该格式不支持{operation}：{format}。仅支持 xlsx/xlsm。");
+    }
+
+    /// <summary>把 XlsBackend 快照到的命名区域挂到工作簿（xls 打开后 Names 自动填充）。</summary>
+    private static void AttachXlsNames(Workbook wb)
+    {
+        var names = XlsBackend.DefinedNamesSnapshot;
+        if (names is null) return;
+        foreach (var nr in names)
+            wb.Names.Add(nr);
     }
 
     // ── 内部辅助 ──
