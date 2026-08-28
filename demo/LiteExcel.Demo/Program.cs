@@ -39,6 +39,9 @@ Demo25_CreateWithData(outDir);
 Demo26_Protection(outDir);
 Demo27_SuperTable(outDir);
 Demo28_IconSet(outDir);
+        Demo29_FacadeAppend(outDir);
+        Demo30_AutoColumnWidths(outDir);
+        Demo31_ReadWithProgress(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -1105,6 +1108,98 @@ Demo28_IconSet(outDir);
         foreach (var cf in opened.Worksheets[0].ConditionalFormats)
             if (cf.Type == ConditionalFormatType.IconSet && cf.IconSet is not null)
                 Console.WriteLine($"  iconSet {cf.Sqref}  {cf.IconSet.Style}");
+        Console.WriteLine();
+    }
+
+    // 29. 门面 Excel.Append：追加数据到已有文件（同名表合并列后追加行）
+    // 注意：Excel.Append 是 SheetData（低层）语义——表头在 Headers，数据在 Rows。
+    // 两侧都用 SheetData 写/追加，表头合并与列对齐才生效。
+    private static void Demo29_FacadeAppend(string dir)
+    {
+        Console.WriteLine("[29] Excel.Append (facade)");
+
+        var file = Path.Combine(dir, "demo29_append.xlsx");
+
+        Excel.Write(file, new SheetData
+        {
+            SheetName = "Data",
+            Headers = new() { "ID", "Name" },
+            Rows = new()
+            {
+                new Cell[] { Cell.FromNumber(1), Cell.FromText("Alice") },
+                new Cell[] { Cell.FromNumber(2), Cell.FromText("Bob") },
+                new Cell[] { Cell.FromNumber(3), Cell.FromText("Charlie") },
+            },
+        });
+
+        Excel.Append(file, new SheetData
+        {
+            SheetName = "Data",
+            Headers = new() { "ID", "Name" },
+            Rows = new()
+            {
+                new Cell[] { Cell.FromNumber(4), Cell.FromText("David") },
+                new Cell[] { Cell.FromNumber(5), Cell.FromText("Eve") },
+            },
+        });
+
+        // 表头行在对象模型里也计入网格数据行，这里用低层读回精确核对数据行数
+        var read = XlsxReader.Read(file, 0);
+        Console.WriteLine($"  行数: {read.Rows.Count} (预期 5)");
+        Console.WriteLine($"  末行: {read.Rows[4][0].Number} {read.Rows[4][1].Text}");
+        Console.WriteLine();
+    }
+
+    // 30. 门面 Worksheet.AutoColumnWidths()：对象模型实例方法，估算并回填列宽
+    private static void Demo30_AutoColumnWidths(string dir)
+    {
+        Console.WriteLine("[30] Worksheet.AutoColumnWidths()");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets[0];
+        ws.SetValue("A1", "Short");
+        ws.SetValue("B1", "This is a much longer column header");
+        ws.SetValue("C1", "中");
+        ws.SetValue("A2", "some value");
+        ws.SetValue("B2", "Excel.Worksheet.AutoColumnWidths adapts the width");
+
+        ws.AutoColumnWidths();
+
+        var file = Path.Combine(dir, "demo30_autocolumnwidths.xlsx");
+        wb.SaveAs(file);
+
+        var reopened = Excel.Open(file);
+        var widths = reopened.Worksheets[0].ColumnWidths;
+        Console.WriteLine($"  列宽: " + (widths is null ? "(null)" :
+            string.Join(", ", widths.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value:0.0}"))));
+        Console.WriteLine();
+    }
+
+    // 31. 门面 Excel.ReadWithProgress：带进度读取（current 从 1 递增到 total，不含表头）
+    private static void Demo31_ReadWithProgress(string dir)
+    {
+        Console.WriteLine("[31] Excel.ReadWithProgress");
+
+        var file = Path.Combine(dir, "demo31_readwithprogress.xlsx");
+
+        var rows = new List<IReadOnlyList<Cell>>(1000);
+        for (int i = 0; i < 1000; i++)
+            rows.Add(new Cell[] { Cell.FromNumber(i + 1), Cell.FromText($"Row-{i:D4}") });
+        XlsxWriter.Write(file, new SheetData
+        {
+            SheetName = "Data",
+            Headers = new() { "ID", "Name" },
+            Rows = rows,
+        });
+
+        int lastReported = 0;
+        Excel.ReadWithProgress(file, 0, (current, total) =>
+        {
+            lastReported = current;
+            if (current == 1 || current == total || current % 250 == 0)
+                Console.WriteLine($"  Progress: {current}/{total} ({current * 100 / total}%)");
+        });
+        Console.WriteLine($"  Done! Total rows read: {lastReported}");
         Console.WriteLine();
     }
 }
