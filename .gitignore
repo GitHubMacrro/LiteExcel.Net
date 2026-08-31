@@ -44,3 +44,6 @@ Desktop.ini
 !docs/CHANGELOG.md
 !docs/USAGE.en.md
 !docs/USAGE.zh-CN.md
+screen_job/
+docs/internal/
+docs/newDoc/

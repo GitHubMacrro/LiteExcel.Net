@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Docs
+
+- **使用手册重构（中英双语）**：`docs/USAGE.zh-CN.md` 与 `docs/USAGE.en.md` 统一为 24 章 + 附录 A/B 结构（全文目录 + 章内目录），修正 3 处事实错误（图表/透视表在 xlsx / xlsm / xlsb 打开再保存时透传保留、xls/xlsb 公式读写行为拆分、能力矩阵重建为 26 项）。
+- **README 三份**：新增「效果预览」截图（LiteExcel 产出在 Excel 中打开的实际效果）、能力矩阵与已知边界小节；去除硬编码版本号与「2.4.x+」引入标注。
+- **截图入库**：`docs/screenshots/` 新增 6 张真实截图，并在 README 与使用手册对应章节内嵌。
+
 ## [2.4.7] - 2026-08-27
 
 ### Added
