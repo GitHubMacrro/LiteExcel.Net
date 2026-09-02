@@ -3023,6 +3023,37 @@ var read = XlsxReader.Read(ms, 0);
 
 `XlsxStreamWriter` 支持样式 / 公式 / 超链接随行写入（styles.xml 与 sheet rels 在 Close 时统一写出）；合并 / 筛选 / 图片等高级能力不支持。超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
 
+**单表行数上限**：Excel 每张工作表最多 1,048,576 行。达到上限时的行为由 `RowLimitExceededMode` 决定：
+
+- `Throw`（默认）：抛 `RowLimitExceededException`（继承 `LiteExcelException`），文件保持有效
+- `SpillToNewSheet`：自动新建工作表（`Sheet1` / `Sheet2` / ...）继续写入
+- `Truncate`：停止写入后续行，文件以满行为止；通过 `writer.Truncated` 查询是否发生了截断
+
+```csharp
+// 默认抛异常
+using var w1 = Excel.CreateWriter("a.xlsx");
+
+// 自动分表
+using var w2 = Excel.CreateWriter("b.xlsx", RowLimitExceededMode.SpillToNewSheet);
+
+// 截断
+using var w3 = Excel.CreateWriter("c.xlsx", RowLimitExceededMode.Truncate);
+for (int i = 0; i < 3_000_000; i++) w3.WriteRow(new object?[] { i });
+// w3.Truncated == true（超出 1,048,576 的部分被丢弃）
+```
+
+分表时可指定表头，让每张表首行一致：
+
+```csharp
+using var writer = Excel.CreateWriter("big_out.xlsx", RowLimitExceededMode.SpillToNewSheet,
+    spillHeader: new object?[] { "ID", "名称", "值" });
+for (int i = 0; i < 3_000_000; i++)
+    writer.WriteRow(new object?[] { i, "row" + i, i * 1.5 });
+// 3 个表，每表首行都是 ID/名称/值，调用方只写数据行
+```
+
+`spillHeader` 仅在 `SpillToNewSheet` 模式下生效；其他模式忽略。
+
 ## 21.5 大文件与内存模型
 
 大文件场景优先用流式入口，避免整体加载到内存：

@@ -2,11 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- **流式写入行数上限处理**：`XlsxStreamWriter` / `Excel.CreateWriter` 新增 `RowLimitExceededMode` 参数（默认 `Throw`）与可选 `spillHeader` 表头参数。
+  - `Throw`：单表达到 1,048,576 行上限时抛 `RowLimitExceededException`（继承 `LiteExcelException`，含 `RowNumber` / `MaxRows`），避免产出超出 Excel 行数上限的损坏文件。
+  - `SpillToNewSheet`：达到上限自动新建工作表（`Sheet1` / `Sheet2` / ...）继续写入，支持超过百万行的数据集一次写出。
+  - `Truncate`：达到上限停止写入，文件以满行为止；通过 `writer.Truncated` 属性查询是否截断。
+  - `spillHeader`：仅在 `SpillToNewSheet` 下生效，作为每张表（含 Sheet1）的首行表头，调用方只写数据行。
+  - 相应把 `workbook.xml` / `workbook.xml.rels` / `[Content_Types].xml` 延迟到 `Close()` 按实际表数写出。
+
 ### Docs
 
 - **使用手册重构（中英双语）**：`docs/USAGE.zh-CN.md` 与 `docs/USAGE.en.md` 统一为 24 章 + 附录 A/B 结构（全文目录 + 章内目录），修正 3 处事实错误（图表/透视表在 xlsx / xlsm / xlsb 打开再保存时透传保留、xls/xlsb 公式读写行为拆分、能力矩阵重建为 26 项）。
 - **README 三份**：新增「效果预览」截图（LiteExcel 产出在 Excel 中打开的实际效果）、能力矩阵与已知边界小节；去除硬编码版本号与「2.4.x+」引入标注。
 - **截图入库**：`docs/screenshots/` 新增 6 张真实截图，并在 README 与使用手册对应章节内嵌。
+- **流式写入文档**：§21.4 补充单表行数上限说明、三种 `RowLimitExceededMode` 行为（Throw/SpillToNewSheet/Truncate）与 `spillHeader` 表头示例。
 
 ## [2.4.7] - 2026-08-27
 

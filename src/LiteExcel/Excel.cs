@@ -560,22 +560,22 @@ public static class Excel
         XlsxReader.StreamRows(path, sheetName, onRow);
     }
 
-    /// <summary>创建流式写入器（逐行写大文件，不驻留内存）。使用后调用 Dispose/Close 完成文件 </summary>
-    public static XlsxStreamWriter CreateWriter(string path)
+    /// <summary>创建流式写入器（逐行写大文件，不驻留内存）。使用后调用 Dispose/Close 完成文件。超出单表行数上限时按 <paramref name="onRowLimitExceeded"/> 处理（默认抛异常）。<paramref name="spillHeader"/> 仅在 SpillToNewSheet 下生效，作为每张表首行表头 </summary>
+    public static XlsxStreamWriter CreateWriter(string path, RowLimitExceededMode onRowLimitExceeded = RowLimitExceededMode.Throw, object?[]? spillHeader = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
         var format = DetectFormat(path);
         if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm)
             throw new LiteExcelException($"该格式不支持流式写入：{format}。请使用 .xlsx 或 .xlsm 扩展名。");
-        return XlsxStreamWriter.Create(path);
+        return XlsxStreamWriter.Create(path, onRowLimitExceeded, spillHeader);
     }
 
-    /// <summary>创建流式写入器（写入流，LeaveOpen 由调用方管理） </summary>
-    public static XlsxStreamWriter CreateWriter(Stream stream)
+    /// <summary>创建流式写入器（写入流，LeaveOpen 由调用方管理）。超出单表行数上限时按 <paramref name="onRowLimitExceeded"/> 处理（默认抛异常）。<paramref name="spillHeader"/> 仅在 SpillToNewSheet 下生效，作为每张表首行表头 </summary>
+    public static XlsxStreamWriter CreateWriter(Stream stream, RowLimitExceededMode onRowLimitExceeded = RowLimitExceededMode.Throw, object?[]? spillHeader = null)
     {
         if (stream is null) throw new ArgumentNullException(nameof(stream));
-        return XlsxStreamWriter.Create(stream);
+        return XlsxStreamWriter.Create(stream, onRowLimitExceeded, spillHeader);
     }
 
     /// <summary>追加数据到已有文件（同名表合并列后追加行；文件不存在则创建） </summary>

@@ -2952,6 +2952,37 @@ var read = XlsxReader.Read(ms, 0);
 
 `XlsxStreamWriter` supports styles / formulas / hyperlinks per row (styles.xml and sheet rels are written uniformly on Close); advanced capabilities like merge / filter / images are not supported. When hyperlinks are extremely numerous, memory is no longer constant (all hyperlink references are buffered internally).
 
+**Per-sheet row limit**: each worksheet holds at most 1,048,576 rows. The behavior at the limit is controlled by `RowLimitExceededMode`:
+
+- `Throw` (default): throws `RowLimitExceededException` (inherits `LiteExcelException`); the file stays valid
+- `SpillToNewSheet`: automatically starts a new worksheet (`Sheet1` / `Sheet2` / ...) to continue
+- `Truncate`: stops writing further rows; check `writer.Truncated` to see if truncation occurred
+
+```csharp
+// Default: throw
+using var w1 = Excel.CreateWriter("a.xlsx");
+
+// Auto-spill
+using var w2 = Excel.CreateWriter("b.xlsx", RowLimitExceededMode.SpillToNewSheet);
+
+// Truncate
+using var w3 = Excel.CreateWriter("c.xlsx", RowLimitExceededMode.Truncate);
+for (int i = 0; i < 3_000_000; i++) w3.WriteRow(new object?[] { i });
+// w3.Truncated == true (rows beyond 1,048,576 are dropped)
+```
+
+When spilling, you can provide a header that is written as the first row of every sheet:
+
+```csharp
+using var writer = Excel.CreateWriter("big_out.xlsx", RowLimitExceededMode.SpillToNewSheet,
+    spillHeader: new object?[] { "ID", "Name", "Value" });
+for (int i = 0; i < 3_000_000; i++)
+    writer.WriteRow(new object?[] { i, "row" + i, i * 1.5 });
+// 3 sheets, each starting with ID/Name/Value; caller writes data rows only
+```
+
+`spillHeader` only takes effect in `SpillToNewSheet` mode; ignored otherwise.
+
 ---
 
 ## 21.5 Large Files and Memory Model
