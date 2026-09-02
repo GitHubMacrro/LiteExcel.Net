@@ -2873,6 +2873,7 @@ wb.SaveAs("macro_copy.xlsm");
 | 21.3 | [追加数据 `Append`](#213-追加数据-append) | 合并列后追加行 |
 | 21.4 | [流式写入 `CreateWriter`](#214-流式写入-createwriter) | `XlsxStreamWriter` 逐行写 |
 | 21.5 | [大文件与内存模型](#215-大文件与内存模型) | 流式与内存模型 |
+| 21.6 | [拉取式枚举 `EnumerateRows`](#216-拉取式枚举-enumeraterows) | LINQ 可组合、提前中断、不跳首行 |
 
 ---
 
@@ -3103,6 +3104,48 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 - **流式范围**：`Excel.CreateWriter` / `Excel.StreamRows` / `Excel.Append` 仅支持 xlsx / xlsm（见 21.1）。
 - **超链接数量**：流式写入器在超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
 - **追加**：`Excel.Append` 会读取整个既有文件再写出，适合中小文件增量追加。
+
+## 21.6 拉取式枚举 EnumerateRows
+
+`Excel.EnumerateRows` 返回 `IEnumerable<IReadOnlyList<Cell>>`，逐行延迟产出，支持 LINQ 与提前中断，不驻留内存。
+
+与 `StreamRows`（§21.1）的对照：
+
+| | `StreamRows` | `EnumerateRows` |
+|---|---|---|
+| 模型 | 推送（`Action` 回调） | 拉取（`IEnumerable`） |
+| 首行 | 自动跳过 | 不跳过，返回全部原始行 |
+| 提前中断 | 不支持 | 支持（`break` / `First()` / `Take(n)`） |
+| LINQ | 不支持 | 支持 |
+
+```csharp
+// 只要第一行（读到第一行即停，不扫完整表）
+var first = Excel.EnumerateRows("big.xlsx", "Sheet1").First();
+
+// 前 100 行
+foreach (var row in Excel.EnumerateRows("big.xlsx", "Sheet1").Take(100))
+    Console.WriteLine(row[0].GetString());
+
+// 跳过表头
+foreach (var row in Excel.EnumerateRows("big.xlsx", "Sheet1").Skip(1))
+    Process(row);
+
+// 不传表名 → 取第一张表
+foreach (var row in Excel.EnumerateRows("big.xlsx"))
+    Process(row);
+```
+
+`sheetName` 为 null 时取第一张表。仅支持 xlsx / xlsm。迭代器释放时关闭文件句柄，`break` 提前退出也会释放。
+
+```csharp
+// WinForms 异步调用，避免 UI 线程卡死
+var names = await Task.Run(() => Excel.GetSheetNames(sPath));
+await Task.Run(() =>
+{
+    foreach (var row in Excel.EnumerateRows(sPath, names[0]))
+        Handle(row);
+});
+```
 
 # 22. 降级回调 OnDegradation
 

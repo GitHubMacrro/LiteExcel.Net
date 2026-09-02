@@ -560,6 +560,26 @@ public static class Excel
         XlsxReader.StreamRows(path, sheetName, onRow);
     }
 
+    /// <summary>
+    /// 拉取式流式读取，逐行 yield，支持 LINQ 与提前中断，不驻留内存。
+    /// <para><paramref name="sheetName"/> 为 null 时取第一张表。</para>
+    /// <para>与 <see cref="StreamRows(string, string, Action{IReadOnlyList{Cell}})"/> 的区别：拉取模型（IEnumerable）、不跳过首行、支持提前中断。</para>
+    /// </summary>
+    public static IEnumerable<IReadOnlyList<Cell>> EnumerateRows(string path, string? sheetName = null)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("路径不能为空", nameof(path));
+        EnsureXlsxStreamingFormat(path, "流式读取");
+        return XlsxReader.EnumerateRows(path, sheetName);
+    }
+
+    /// <summary>拉取式流式读取（Stream 重载），逐行 yield，支持 LINQ 与提前中断 </summary>
+    public static IEnumerable<IReadOnlyList<Cell>> EnumerateRows(Stream stream, string? sheetName = null)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        return XlsxReader.EnumerateRows(stream, sheetName);
+    }
+
     /// <summary>创建流式写入器（逐行写大文件，不驻留内存）。使用后调用 Dispose/Close 完成文件。超出单表行数上限时按 <paramref name="onRowLimitExceeded"/> 处理（默认抛异常）。<paramref name="spillHeader"/> 仅在 SpillToNewSheet 下生效，作为每张表首行表头 </summary>
     public static XlsxStreamWriter CreateWriter(string path, RowLimitExceededMode onRowLimitExceeded = RowLimitExceededMode.Throw, object?[]? spillHeader = null)
     {

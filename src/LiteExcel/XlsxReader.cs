@@ -294,6 +294,63 @@ public static partial class XlsxReader
         }
     }
 
+    /// <summary>
+    /// 拉取式流式读取，逐行 yield，支持 LINQ 与提前中断。不驻留内存。
+    /// <para><paramref name="sheetName"/> 为 null 时取第一张表。</para>
+    /// <para>与 <see cref="StreamRows(string, string, Action{IReadOnlyList{Cell}})"/> 的区别：拉取模型（IEnumerable）、不跳过首行、支持提前中断。</para>
+    /// </summary>
+    public static IEnumerable<IReadOnlyList<Cell>> EnumerateRows(string path, string? sheetName = null)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("路径不能为空", nameof(path));
+        return EnumerateRowsCore(path, sheetName);
+    }
+
+    /// <summary>
+    /// 拉取式流式读取（Stream 重载），逐行 yield，支持 LINQ 与提前中断。
+    /// </summary>
+    public static IEnumerable<IReadOnlyList<Cell>> EnumerateRows(Stream stream, string? sheetName = null)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        return EnumerateRowsCore(stream, sheetName);
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateRowsCore(string path, string? sheetName)
+    {
+        using var fs = OpenFileStreamChecked(path);
+        foreach (var row in EnumerateRowsCore(fs, sheetName))
+            yield return row;
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateRowsCore(Stream stream, string? sheetName)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        var shared = ReadSharedStrings(zip);
+        var styles = ReadStyles(zip);
+        var sheets = ReadWorkbook(zip);
+
+        var info = sheetName is null
+            ? sheets.FirstOrDefault()
+            : sheets.FirstOrDefault(s => s.Name == sheetName);
+        if (info is null)
+            throw new LiteExcelException(sheetName is null
+                ? $"工作簿中没有工作表"
+                : $"找不到工作表：{sheetName}（共有 {sheets.Count} 张表）");
+
+        var entry = zip.GetEntry(info.Path)
+            ?? throw new LiteExcelException($"缺少工作表文件: {info.Path}");
+
+        using var reader = XmlReader.Create(entry.Open(), XmlSettings);
+        while (reader.Read())
+        {
+            if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "row") continue;
+            using var sub = reader.ReadSubtree();
+            var row = ParseRow(sub, shared, styles);
+            if (row is null) continue;
+            yield return row;
+        }
+    }
+
     /// <summary>读取工作簿文档属性（作者/最后保存者/时间/标题等） 无属性时返回空对象 </summary>
     public static WorkbookProperties ReadProperties(string path)
     {

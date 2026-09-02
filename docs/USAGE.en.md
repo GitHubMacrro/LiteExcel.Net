@@ -2802,6 +2802,7 @@ written to macro_copy.xlsm
 | 21.3 | [Append Data `Append`](#213-append-data-append) |
 | 21.4 | [Streaming Writer `CreateWriter`](#214-streaming-writer-createwriter) |
 | 21.5 | [Large Files and Memory Model](#215-large-files-and-memory-model) |
+| 21.6 | [Pull-Based Enumeration `EnumerateRows`](#216-pull-based-enumeration-enumeraterows) | LINQ composable, early termination, no header skip |
 
 ---
 
@@ -3035,6 +3036,47 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 - **Hyperlink count**: when the number of hyperlinks is extremely large, the streaming writer's memory is no longer constant (all hyperlink references are buffered internally).
 - **Append**: `Excel.Append` reads the entire existing file before writing; suited to incremental appends of small/medium files.
 
+## 21.6 Pull-Based Enumeration EnumerateRows
+
+`Excel.EnumerateRows` returns `IEnumerable<IReadOnlyList<Cell>>`, yielding one row at a time with deferred execution, LINQ support, and early termination, without holding the whole sheet in memory.
+
+Comparison with `StreamRows` (21.1):
+
+| | `StreamRows` | `EnumerateRows` |
+|---|---|---|
+| Model | Push (`Action` callback) | Pull (`IEnumerable`) |
+| First row | Skipped | Not skipped; all rows returned |
+| Early termination | No | Yes (`break` / `First()` / `Take(n)`) |
+| LINQ | No | Yes |
+
+```csharp
+// First row only (stops after the first row, does not scan the whole sheet)
+var first = Excel.EnumerateRows("big.xlsx", "Sheet1").First();
+
+// First 100 rows
+foreach (var row in Excel.EnumerateRows("big.xlsx", "Sheet1").Take(100))
+    Console.WriteLine(row[0].GetString());
+
+// Skip the header row
+foreach (var row in Excel.EnumerateRows("big.xlsx", "Sheet1").Skip(1))
+    Process(row);
+
+// No sheet name -> first sheet
+foreach (var row in Excel.EnumerateRows("big.xlsx"))
+    Process(row);
+```
+
+`sheetName` null defaults to the first sheet. Only xlsx / xlsm are supported. The iterator releases the file handle on dispose; `break` also releases it.
+
+```csharp
+// WinForms async call to avoid UI thread blocking
+var names = await Task.Run(() => Excel.GetSheetNames(sPath));
+await Task.Run(() =>
+{
+    foreach (var row in Excel.EnumerateRows(sPath, names[0]))
+        Handle(row);
+});
+```
 
 # 22. Degradation Callback OnDegradation
 
