@@ -416,6 +416,7 @@ JackZ
 | 4.3 | [集合式访问 `Cells`](#43-集合式访问-cells) | 整表入口与索引器 |
 | 4.4 | [区域操作 `ExcelRange`](#44-区域操作-excelrange) | 批量读写、样式、合并、清空 |
 | 4.5 | [单元格读取方法](#45-单元格读取方法) | 强类型与 Try 读取 |
+| 4.6 | [`Value` 属性](#46-value-属性) | 便捷读写（单格标量 / 多格数组） |
 
 ---
 
@@ -573,6 +574,28 @@ bool ok2 = cell.TryGetDouble(out double d2);
 bool ok3 = cell.TryGetDateTime(out DateTime dt2);
 bool ok4 = cell.TryGetBoolean(out bool b2);
 ```
+
+## 4.6 Value 属性
+
+`Cell.Value` 与 `ExcelRange.Value` 是 `SetValue` / `GetValue` 的便捷属性写法，与 Excel interop 的习惯一致。读取返回 `object?`，需要类型安全时仍用 4.5 的 `GetString()` / `GetDouble()` 等。
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// 单格：读写标量（Cell / Cells 索引器 / 单格 Range 均可）
+ws.Cell("A1").Value = "123";
+Console.WriteLine(ws.Cell("A1").Value);        // 123
+ws.Cells["B2"].Value = 42;
+ws.Cells[3, 3].Value = true;
+ws.Range("C1").Value = "经 Range 写";
+
+// 多格 Range：读返回 object?[,]（尺寸 = 区域），写标量铺满 / 写二维数组按位填
+ws.Range("A10:B11").Value = "x";                          // 4 格全为 x
+var grid = (object?[,])ws.Range("A10:B11").Value;         // 读 2D
+ws.Range("D1:E2").Value = new object?[,] { { 1, 2 }, { 3, 4 } };
+```
+
+`ExcelRange.Value` 行为：单格区域（1×1）读写标量；多格区域读返回 `object?[,]`、写标量等价 `Fill`、写二维数组等价 `Fill(object?[,])`。
 
 ---
 

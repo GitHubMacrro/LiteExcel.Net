@@ -428,6 +428,7 @@ JackZ
 | 4.3 | [Collection-Style Access with `Cells`](#43-collection-style-access-with-cells) |
 | 4.4 | [Range Operations with `ExcelRange`](#44-range-operations-with-excelrange) |
 | 4.5 | [Cell Read Methods](#45-cell-read-methods) |
+| 4.6 | [The `Value` Property](#46-the-value-property) |
 
 ---
 
@@ -538,6 +539,28 @@ bool ok4 = cell.TryGetBoolean(out bool b2);
 ```
 
 Output: (cell's raw value)
+
+## 4.6 The `Value` Property
+
+`Cell.Value` and `ExcelRange.Value` are convenient property wrappers around `SetValue` / `GetValue`, matching the Excel interop idiom. Reading returns `object?`; for type safety use `GetString()` / `GetDouble()` etc. from 4.5.
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+
+// Single cell: read/write a scalar (via Cell / Cells indexer / single-cell Range)
+ws.Cell("A1").Value = "123";
+Console.WriteLine(ws.Cell("A1").Value);        // 123
+ws.Cells["B2"].Value = 42;
+ws.Cells[3, 3].Value = true;
+ws.Range("C1").Value = "written via Range";
+
+// Multi-cell Range: read returns object?[,] (sized to the range); write a scalar fills, a 2D array fills cell by cell
+ws.Range("A10:B11").Value = "x";                          // all 4 cells are x
+var grid = (object?[,])ws.Range("A10:B11").Value;         // read as 2D
+ws.Range("D1:E2").Value = new object?[,] { { 1, 2 }, { 3, 4 } };
+```
+
+`ExcelRange.Value` behavior: a single-cell range (1×1) reads/writes a scalar; a multi-cell range reads as `object?[,]`, writing a scalar is equivalent to `Fill`, and writing a 2D array is equivalent to `Fill(object?[,])`.
 
 ---
 

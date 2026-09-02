@@ -262,4 +262,11 @@ public sealed class Cell
             _ => null,
         };
     }
+
+    /// <summary>按值的运行时类型写入或读取（等价于 <see cref="SetValue"/> / <see cref="GetValue"/>）。需要类型安全时请用 <see cref="GetString"/> / <see cref="GetDouble"/> 等。 </summary>
+    public object? Value
+    {
+        get => GetValue();
+        set => SetValue(value);
+    }
 }

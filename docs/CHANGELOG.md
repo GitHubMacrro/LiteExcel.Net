@@ -4,6 +4,7 @@
 
 ### Added
 
+- **`Value` 便捷属性**：`Cell.Value` 与 `ExcelRange.Value`（等价于 `SetValue`/`GetValue` 的属性写法，贴近 Excel interop 习惯）。`Cell.Value` 单格读写标量；`ExcelRange.Value` 单格读写标量、多格读返回 `object?[,]`、写标量铺满 / 写二维数组按位填（等价 `Fill`）。`SetValue` / `GetString()` / `GetDouble()` 等原 API 全部保留。
 - **流式写入行数上限处理**：`XlsxStreamWriter` / `Excel.CreateWriter` 新增 `RowLimitExceededMode` 参数（默认 `Throw`）与可选 `spillHeader` 表头参数。
   - `Throw`：单表达到 1,048,576 行上限时抛 `RowLimitExceededException`（继承 `LiteExcelException`，含 `RowNumber` / `MaxRows`），避免产出超出 Excel 行数上限的损坏文件。
   - `SpillToNewSheet`：达到上限自动新建工作表（`Sheet1` / `Sheet2` / ...）继续写入，支持超过百万行的数据集一次写出。

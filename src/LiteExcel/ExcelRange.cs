@@ -105,6 +105,21 @@ public sealed class ExcelRange : IEnumerable<Cell>
         }
     }
 
+    /// <summary>
+    /// 单格区域：读写该单元格的值（标量，等价于 <see cref="Cell(int, int)"/>.GetValue/SetValue）。
+    /// 多格区域：读返回 <c>object?[,]</c>（等价于 <see cref="ToValues"/>），写标量等价于 <see cref="Fill(object?)"/>、写二维数组等价于 <see cref="Fill(object?[,])"/>。
+    /// </summary>
+    public object? Value
+    {
+        get => (RowCount == 1 && ColumnCount == 1) ? Cell(0, 0).GetValue() : ToValues();
+        set
+        {
+            if (RowCount == 1 && ColumnCount == 1) { Cell(0, 0).SetValue(value); return; }
+            if (value is object?[,] arr) { Fill(arr); return; }
+            Fill(value);
+        }
+    }
+
     /// <summary>合并该区域 </summary>
     public void Merge() => _sheet.Merge(FirstRow, FirstCol, LastRow, LastCol);
 
