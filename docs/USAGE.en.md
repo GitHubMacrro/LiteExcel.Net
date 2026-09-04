@@ -1801,6 +1801,10 @@ A2 InCell 70 bytes
 
 Key members of `WorksheetImage`: `Data` (bytes), `Extension`, `Row`/`Column` (1-based anchor), `Placement`, `WidthPx`/`HeightPx`, `Name`, `Anchor`, `AltText`, `CellAddress` (read-only A1 reference).
 
+> ⚠️ **Floating images read back are fidelity-only**
+> Floating images populated on open are for inspection (bytes, anchor, size). **Editing their properties has no effect on the saved result**: the image itself passes through with the drawing part, which the writer never rebuilds.
+> Images added by the caller through `AddImage` are not subject to this limit and are written out normally, merged into any existing drawing part.
+
 ## 13.6 Mixed use across multiple sheets
 
 Different worksheets can use Floating and InCell placement independently without interfering with each other:
@@ -2797,6 +2801,15 @@ Cannot write Csv: Csv format does not support file-level passwords (open passwor
 ## 20.5 Fidelity Round-Trip
 
 When opening xlsx / xlsm / xlsb, unmapped OOXML parts (macros / themes / drawings / charts / pivot tables, etc.) are captured and transparently passed through when saving, avoiding silent deletion. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros / charts.
+
+Fidelity is more than keeping part bytes: the elements that reference them must survive too, otherwise a part is orphaned and Excel treats it as absent. The references below are written back verbatim on save, with relationship ids remapped whenever they get renumbered:
+
+| Reference element | Host part | Points to |
+| :--- | :--- | :--- |
+| `<drawing>` | `sheet{N}.xml` | drawing part (charts / shapes / pictures) |
+| `<pivotCaches>` | `workbook.xml` | pivot cache definitions |
+| `<externalReferences>` | `workbook.xml` | cross-workbook external links |
+| `<bookViews>` / `<definedNames>` | `workbook.xml` | window views / named ranges |
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // open an xlsm containing macros

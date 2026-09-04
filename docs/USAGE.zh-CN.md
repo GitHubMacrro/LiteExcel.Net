@@ -1884,6 +1884,10 @@ A2 InCell 70 bytes
 
 > ⚠️ 打开文件时 `Worksheet.Images` 会回填浮动与单元格内嵌图片（浮动 drawing 与 richData 均支持读回）。
 
+> ⚠️ **读回的浮动图片属只保真层级**
+> 回填的浮动图片仅供查看（字节、锚点、尺寸），**修改其属性不会影响保存结果**：图片本身随绘图部件原样透传，写入器不重建这部分内容。
+> 调用方经 `AddImage` 新增的图片不受此限制，正常写出并并入既有绘图部件。
+
 ## 13.6 多 Sheet 混合使用
 
 不同工作表可分别使用 Floating 与 InCell 放置，互不干扰：
@@ -2864,6 +2868,15 @@ catch (LiteExcelException ex)
 ## 20.5 保真回写
 
 打开 xlsx / xlsm / xlsb 时，未映射的 OOXML 部件（宏 / 主题 / 绘图 / 图表 / 透视表等）被捕获并在保存时按二进制透传，避免静默删除。改表名不再丢 drawing 关联；追加数据不再丢宏 / 图表。
+
+保真不只是留下部件字节，引用它们的元素同样要保留，否则部件成孤儿、Excel 视同不存在。以下引用均随保存原样回写，关系编号被重排时同步改写：
+
+| 引用元素 | 所在部件 | 指向 |
+| :--- | :--- | :--- |
+| `<drawing>` | `sheet{N}.xml` | 绘图部件（图表 / 形状 / 图片） |
+| `<pivotCaches>` | `workbook.xml` | 透视表缓存定义 |
+| `<externalReferences>` | `workbook.xml` | 跨工作簿外部链接 |
+| `<bookViews>` / `<definedNames>` | `workbook.xml` | 窗口视图 / 命名区域 |
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // 打开包含宏的 xlsm
