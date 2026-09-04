@@ -9,23 +9,26 @@ namespace LiteExcel;
 /// </summary>
 internal static class CsvBackend
 {
-    /// <summary>读取 CSV 文件为单张工作表的原始数据（首行不拆分为表头）。separator 为 null 时自动探测逗号/分号/Tab。</summary>
-    public static SheetData Read(string path, char? separator = null)
+    /// <summary>读取 CSV 文件为单张工作表的原始数据（首行不拆分为表头）。separator 为 null 时自动探测逗号/分号/Tab；encoding 为 null 时按 BOM 探测并回退 UTF-8。</summary>
+    public static SheetData Read(string path, char? separator = null, Encoding? encoding = null)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return Read(fs, Path.GetFileNameWithoutExtension(path), separator);
+        return Read(fs, Path.GetFileNameWithoutExtension(path), separator, encoding);
     }
 
-    /// <summary>从流读取 CSV 为单张工作表的原始数据。sheetName 用于工作表命名，separator 为 null 时自动探测。</summary>
-    public static SheetData Read(Stream stream, string sheetName = "Sheet1", char? separator = null)
+    /// <summary>从流读取 CSV 为单张工作表的原始数据。sheetName 用于工作表命名，separator 为 null 时自动探测；encoding 显式指定时优先于 BOM。</summary>
+    public static SheetData Read(Stream stream, string sheetName = "Sheet1", char? separator = null, Encoding? encoding = null)
     {
         var ms = new MemoryStream();
         stream.CopyTo(ms);
-        var encoding = DetectEncoding(ms) ?? Encoding.UTF8;
-        var probe = new string(encoding.GetString(ms.ToArray()).Take(8192).ToArray());
+        // 显式编码优先：调用方指定时不再按 BOM 覆盖；未指定时按 BOM 探测并回退 UTF-8
+        bool explicitEncoding = encoding is not null;
+        var enc = encoding ?? DetectEncoding(ms) ?? Encoding.UTF8;
+        ms.Position = 0;
+        var probe = new string(enc.GetString(ms.ToArray()).Take(8192).ToArray());
         char actual = separator ?? DetectSeparator(probe);
         ms.Position = 0;
-        using var reader = new StreamReader(ms, encoding, detectEncodingFromByteOrderMarks: true);
+        using var reader = new StreamReader(ms, enc, detectEncodingFromByteOrderMarks: !explicitEncoding);
         return Read(reader, sheetName, actual);
     }
 
@@ -148,13 +151,13 @@ internal static class CsvBackend
     }
 
     /// <summary>写入 CSV 文件 </summary>
-    public static void Write(string path, SheetData sheet, char? separator = null)
+    public static void Write(string path, SheetData sheet, char? separator = null, Encoding? encoding = null)
     {
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
-        Write(fs, sheet, onDegradation: null, targetFormat: ExcelFormat.Csv, separator: separator);
+        Write(fs, sheet, onDegradation: null, targetFormat: ExcelFormat.Csv, separator: separator, encoding: encoding);
     }
 
-    internal static void Write(Stream stream, SheetData sheet, Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Csv, char? separator = null)
+    internal static void Write(Stream stream, SheetData sheet, Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Csv, char? separator = null, Encoding? encoding = null)
     {
         char sep = separator ?? ',';
         ReportDegradations(sheet, onDegradation, targetFormat);
@@ -174,9 +177,13 @@ internal static class CsvBackend
             AppendRow(sb, fields, sep);
         }
 
-        var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
-        var text = sb.ToString();
-        var data = bytes.GetBytes(text);
+        // 默认 UTF-8 带 BOM（Excel 打开 UTF-8 CSV 需 BOM 才不按本地代码页解读中文）。
+        // BOM 由编码的 preamble 决定：GetBytes 不含 preamble，须显式写出。
+        var enc = encoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+        var preamble = enc.GetPreamble();
+        if (preamble.Length > 0)
+            stream.Write(preamble, 0, preamble.Length);
+        var data = enc.GetBytes(sb.ToString());
         stream.Write(data, 0, data.Length);
     }
 

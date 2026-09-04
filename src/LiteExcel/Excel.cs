@@ -60,7 +60,7 @@ public static class Excel
                 break;
             case ExcelFormat.Csv:
             {
-                var csvSheet = CsvBackend.Read(path, options.Separator);
+                var csvSheet = CsvBackend.Read(path, options.Separator, options.Encoding);
                 return Workbook.FromSheetData(new[] { csvSheet }, null, ExcelFormat.Csv, path);
             }
             case ExcelFormat.Xls:
@@ -190,7 +190,7 @@ public static class Excel
                 break;
             case ExcelFormat.Csv:
             {
-                var csvSheet = CsvBackend.Read(ms, "Sheet1", options.Separator);
+                var csvSheet = CsvBackend.Read(ms, "Sheet1", options.Separator, options.Encoding);
                 return FinishOpen(new[] { csvSheet }, null, ExcelFormat.Csv, null, options);
             }
             case ExcelFormat.Xls:
@@ -464,8 +464,9 @@ public static class Excel
         ApplyWriteOptions(workbook, options);
         // 批次 0：注入能力降级回调（默认 null，不注册则行为与历史一致）
         workbook.DegradationCallback = options.OnDegradation;
-        // 批次 P1-A：注入 CSV 写出分隔符（默认 null → 逗号）
+        // 批次 P1-A：注入 CSV 写出分隔符（默认 null → 逗号）与编码（默认 null → UTF-8 带 BOM）
         workbook.WriteSeparator = options.Separator;
+        workbook.WriteEncoding = options.Encoding;
         workbook.SaveAs(path, format);
     }
 

@@ -40,6 +40,14 @@ public sealed class ExcelReadOptions
     /// 自动探测策略：首位分隔符候选在引号外的出现频率中取最多；三个候选都未出现 → 默认逗号。
     /// </summary>
     public char? Separator { get; set; }
+
+    /// <summary>
+    /// CSV 读取编码（可选，默认 null → 按 BOM 探测，无 BOM 回退 UTF-8）。仅在 ExcelFormat.Csv 生效。
+    /// 显式指定时优先于 BOM（不再按 BOM 覆盖）。
+    /// 编码实例由调用方提供：net48 的 BCL 自带 GBK 等代码页；net8.0 需调用方先注册
+    /// <c>Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)</c>（本库不引用任何编码包）。
+    /// </summary>
+    public System.Text.Encoding? Encoding { get; set; }
 }
 
 /// <summary>
@@ -83,4 +91,13 @@ public sealed class ExcelWriteOptions
     /// CSV 写出时分隔符（可选，默认 null → 逗号）。仅在 ExcelFormat.Csv 生效。
     /// </summary>
     public char? Separator { get; set; }
+
+    /// <summary>
+    /// CSV 写出编码（可选，默认 null → UTF-8 带 BOM）。仅在 ExcelFormat.Csv 生效。
+    /// BOM 由所给编码的 preamble 决定：<c>Encoding.UTF8</c> / <c>new UTF8Encoding(true)</c> 写 BOM；
+    /// <c>new UTF8Encoding(false)</c> 与 GBK 等无 preamble 编码不写。
+    /// 编码实例由调用方提供：net48 的 BCL 自带 GBK 等代码页；net8.0 需调用方先注册
+    /// <c>Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)</c>（本库不引用任何编码包）。
+    /// </summary>
+    public System.Text.Encoding? Encoding { get; set; }
 }

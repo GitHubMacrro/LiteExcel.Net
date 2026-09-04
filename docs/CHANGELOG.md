@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.72]
+
+### Added
+
+- **CSV 编码选项**：`ExcelReadOptions.Encoding` / `ExcelWriteOptions.Encoding` 接受任意 `System.Text.Encoding` 实例。读取时显式指定优先于文件 BOM，未指定时保持 BOM 探测并回退 UTF-8；写出时 BOM 由所给编码的 preamble 决定（默认仍为 UTF-8 带 BOM）。编码实例由调用方提供，**本库不引用任何编码包，零依赖不变**；net48 的 BCL 自带 GBK 等代码页，net8.0 需调用方自行注册 `CodePagesEncodingProvider`。
+
+### Fixed
+
+- **CSV 写出未真正写入 UTF-8 BOM**：`Encoding.GetBytes()` 从不产出 preamble，而 `new UTF8Encoding(encoderShouldEmitUTF8Identifier: true)` 仅设置标志位不影响 `GetBytes`，导致写出的 CSV 实际无 BOM，Windows 版 Excel 打开时按本地代码页解读、中文乱码（文档此前声称「写带 BOM」，与实现不一致）。改为显式写出 `Encoding.GetPreamble()`。**注意：此修复改变了 CSV 写出的字节输出**（默认路径下文件开头新增 3 字节 `EF BB BF`）。
+
 ## [2.4.71] - 2026-09-03
 
 ### Added

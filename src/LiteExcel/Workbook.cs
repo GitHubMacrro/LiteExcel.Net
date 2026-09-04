@@ -21,6 +21,9 @@ public sealed class Workbook
     /// <summary>CSV 写出分隔符（由 Excel.Write 注入；为 null 时使用逗号） </summary>
     internal char? WriteSeparator { get; set; }
 
+    /// <summary>CSV 写出编码（由 Excel.Write 注入；为 null 时使用 UTF-8 带 BOM） </summary>
+    internal System.Text.Encoding? WriteEncoding { get; set; }
+
     /// <summary>工作表集合 </summary>
     public WorksheetCollection Worksheets { get; }
 
@@ -223,7 +226,7 @@ public sealed class Workbook
             case ExcelFormat.Csv:
                 if (Worksheets.Count != 1)
                     throw new NotSupportedException("CSV 仅支持单工作表工作簿");
-                CsvBackend.Write(stream, Worksheets[0].ToSheetData(), DegradationCallback, ExcelFormat.Csv, WriteSeparator);
+                CsvBackend.Write(stream, Worksheets[0].ToSheetData(), DegradationCallback, ExcelFormat.Csv, WriteSeparator, WriteEncoding);
                 break;
             case ExcelFormat.Xls:
             {

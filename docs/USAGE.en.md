@@ -2719,7 +2719,28 @@ Sheet1: hello
 - CSV only supports single-sheet workbooks (writing multiple sheets throws `NotSupportedException`).
 - When reading, the first row is not split into headers (`CsvBackend.Read` (see Appendix B.4) returns raw rows).
 - Separator: auto-detected on read (comma > semicolon > tab, counting only outside quotes), `ExcelReadOptions.Separator` can be used to fix it; default separator for writing is comma, `ExcelWriteOptions.Separator` can be specified.
+- Encoding: reading defaults to BOM detection falling back to UTF-8; writing defaults to UTF-8 with BOM. `ExcelReadOptions.Encoding` / `ExcelWriteOptions.Encoding` accept any `System.Text.Encoding` instance (see below).
 - CSV does not support styles / merged cells / comments / data validation / hyperlinks / images / conditional formatting / tables / named ranges / document properties / formulas / passwords.
+
+**Encoding options**: the encoding instance is supplied by the caller; this library references no encoding package.
+
+```csharp
+// Default: writes UTF-8 with BOM (so Excel shows non-ASCII text correctly), reads by BOM detection
+Excel.Write("out.csv", wb);
+var back = Excel.Open("out.csv");
+
+// Explicit encoding (BOM comes from that encoding's preamble)
+Excel.Write("out.csv", wb, new ExcelWriteOptions { Encoding = new UTF8Encoding(false) });   // no BOM
+Excel.Write("gbk.csv", wb, new ExcelWriteOptions { Encoding = Encoding.GetEncoding(936) }); // GBK
+var gbk = Excel.Open("gbk.csv", new ExcelReadOptions { Encoding = Encoding.GetEncoding(936) });
+```
+
+> ⚠️ Code-page encodings such as `Encoding.GetEncoding(936)` ship with the BCL on net48; on net8.0 the caller must
+> first call `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)` (requires the
+> `System.Text.Encoding.CodePages` package). That is the caller's dependency decision; this library stays
+> free of third-party dependencies.
+>
+> An explicit `Encoding` takes precedence over the file BOM; when omitted, the BOM wins.
 
 Write then read back (first row is treated as data row, not split into headers):
 

@@ -2787,7 +2787,27 @@ Sheet1: hello
 - CSV 仅支持单工作表工作簿（写出多表抛 `NotSupportedException`）。
 - 读取时首行不拆分为表头（`CsvBackend.Read`（见附录 B.4）返回原始行）。
 - 分隔符：读取自动探测（逗号 > 分号 > Tab，仅统计引号外），`ExcelReadOptions.Separator` 可固定；写出默认逗号，`ExcelWriteOptions.Separator` 可指定。
+- 编码：读取默认按 BOM 探测并回退 UTF-8，写出默认 UTF-8 带 BOM。`ExcelReadOptions.Encoding` / `ExcelWriteOptions.Encoding` 可指定任意 `System.Text.Encoding` 实例（见下）。
 - CSV 不支持样式 / 合并 / 批注 / 数据验证 / 超链接 / 图片 / 条件格式 / 超级表 / 命名区域 / 文档属性 / 公式 / 密码。
+
+**编码选项**：编码实例由调用方提供，本库不引用任何编码包。
+
+```csharp
+// 默认：写出 UTF-8 带 BOM（Excel 打开中文不乱码），读取按 BOM 探测
+Excel.Write("out.csv", wb);
+var back = Excel.Open("out.csv");
+
+// 指定编码（BOM 由该编码的 preamble 决定）
+Excel.Write("out.csv", wb, new ExcelWriteOptions { Encoding = new UTF8Encoding(false) });   // 不写 BOM
+Excel.Write("gbk.csv", wb, new ExcelWriteOptions { Encoding = Encoding.GetEncoding(936) }); // GBK
+var gbk = Excel.Open("gbk.csv", new ExcelReadOptions { Encoding = Encoding.GetEncoding(936) });
+```
+
+> ⚠️ `Encoding.GetEncoding(936)` 等代码页编码在 net48 由 BCL 自带；在 net8.0 需调用方先注册
+> `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`（需引用 `System.Text.Encoding.CodePages`）。
+> 这是调用方的依赖决策，本库保持零第三方依赖。
+>
+> 显式指定 `Encoding` 时优先于文件 BOM；未指定时 BOM 优先。
 
 写入再读回（读回时首行作为数据行，不拆分为表头）：
 
