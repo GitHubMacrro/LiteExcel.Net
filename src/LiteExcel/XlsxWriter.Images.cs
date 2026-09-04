@@ -76,6 +76,8 @@ public static partial class XlsxWriter
                     foreach (var img in list)
                     {
                         if (img is null || img.Data is null || img.Data.Length == 0) continue;
+                        // P0-28: 读取回填的图片已含在保真透传的 drawing 部件内，重复写出会导致 open-save 图片翻倍
+                        if (img.FromPreservedDrawing) continue;
                         img.MediaNumber = NextMedia();
                         plan.All.Add(img);
                         if (img.Placement == ImagePlacement.InCell)

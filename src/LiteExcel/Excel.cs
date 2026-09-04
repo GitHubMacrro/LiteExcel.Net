@@ -147,6 +147,8 @@ public static class Excel
             preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot; // ReadWorkbook 刚捕获
             // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
             preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
+            preserved.PivotCachesXml = XlsxReader.PivotCachesXmlSnapshot;
+            preserved.ExternalReferencesXml = XlsxReader.ExternalReferencesXmlSnapshot;
             preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
             wb = Workbook.FromSheetData(sheets, props, format, path);
             foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
@@ -273,6 +275,8 @@ public static class Excel
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
                 // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
                 preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
+                preserved.PivotCachesXml = XlsxReader.PivotCachesXmlSnapshot;
+                preserved.ExternalReferencesXml = XlsxReader.ExternalReferencesXmlSnapshot;
                 preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheetsD, propsD, format, null);
                 foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
@@ -293,6 +297,8 @@ public static class Excel
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
                 // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
                 preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
+                preserved.PivotCachesXml = XlsxReader.PivotCachesXmlSnapshot;
+                preserved.ExternalReferencesXml = XlsxReader.ExternalReferencesXmlSnapshot;
                 preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheets, props, format, null);
                 foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))

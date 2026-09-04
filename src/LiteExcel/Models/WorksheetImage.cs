@@ -74,6 +74,13 @@ public sealed class WorksheetImage
     /// <summary>全局 media 序号（image1..imageN），写回时由 XlsxWriter 统一分配 </summary>
     internal int MediaNumber { get; set; }
 
+    /// <summary>
+    /// P0-28: 该图片来自打开时保留的 drawing 部件（读取回填），不是调用方新增。
+    /// 保存时 drawing 部件按保真透传已含该图片，写入器须跳过，否则 open-save 图片翻倍。
+    /// 调用方修改此对象的任何属性都不会生效（drawing 属只保真层级）。
+    /// </summary>
+    internal bool FromPreservedDrawing { get; set; }
+
     /// <summary>解析后的像素尺寸（width, height）。探测失败返回 (0, 0) </summary>
     internal (int Width, int Height) PixelSize
     {

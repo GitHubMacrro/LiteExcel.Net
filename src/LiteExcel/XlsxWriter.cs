@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace LiteExcel;
@@ -152,8 +153,12 @@ public static partial class XlsxWriter
 
         WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled, imagePlan, tablePlan));
         WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
-        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended, workbookProtection));
-        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRelsXml(sheets.Count, preserved, imagePlan));
+        // 先算 workbook.xml.rels 以取得保留 rel 的 rId 重编号映射，
+        // workbook.xml 内的 pivotCaches / externalReferences 引用须按该映射改写
+        var keptRelIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var workbookRels = WorkbookRelsXml(sheets.Count, preserved, imagePlan, keptRelIdMap);
+        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended, workbookProtection, keptRelIdMap));
+        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", workbookRels);
 
         // 超级表部件
         foreach (var (entry, xml) in tablePlan.TableXmlParts)
@@ -182,12 +187,15 @@ public static partial class XlsxWriter
         {
             var hyperlinks = new List<(string Ref, string Target, string? Tooltip, bool IsInternal)>();
             var inCellVm = imagePlan.InCellVmBySheet(i);
-            bool hasDrawing = imagePlan.FloatingBySheet[i].Count > 0;
+            // P0-26: 本次有新图片，或保留的工作表 rels 已有 drawing 关联（图表/形状），都必须写出 <drawing>
+            // 否则 sheet XML 缺该元素，Excel 认为工作表无绘图，图表随之消失（rel 悬空）
+            bool hasNewFloating = imagePlan.FloatingBySheet[i].Count > 0;
+            bool hasPreservedDrawing = mergeSheetRels && HasPreservedDrawingRel(preserved, i + 1);
+            bool hasDrawing = hasNewFloating || hasPreservedDrawing;
             string drawingRelId = hasDrawing ? imagePlan.DrawingTargetFor(i, preserved).RelId : "";
             bool hasComments = sheets[i].Comments is { Count: > 0 };
             var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet, date1904, hyperlinks, inCellVm, hasDrawing, drawingRelId,
                 tablePartsXml: tablePlan.TablePartsXml(i), hasComments: hasComments);
-            WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
 
             // 批注：每张有批注的 sheet 对应一个 comments 文件 + VML legacyDrawing
             if (hasComments)
@@ -197,8 +205,15 @@ public static partial class XlsxWriter
             }
 
             // 工作表 rels：合并保留的绘图/超链接等 rel（工作表结构未变时），追加新建超链接/批注/drawing/table
+            var sheetKeptIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
             var sheetRels = MergeSheetRels(i + 1, hasComments, preserved, mergeSheetRels, hyperlinks, hasDrawing, imagePlan,
-                tableRels: tablePlan.SheetTableRels(i));
+                tableRels: tablePlan.SheetTableRels(i), keptIdMap: sheetKeptIdMap);
+            // 保留 rel 被重新编号时，sheet XML 里的 <drawing r:id> 须同步改写（只改该标签，避免误伤同名超链接 rId）
+            if (hasDrawing && drawingRelId.Length > 0 && sheetKeptIdMap.TryGetValue(drawingRelId, out var mappedDrawingId))
+            {
+                sheetXml = sheetXml.Replace($"<drawing r:id=\"{drawingRelId}\"/>", $"<drawing r:id=\"{mappedDrawingId}\"/>");
+            }
+            WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
             if (sheetRels is not null)
             {
                 WriteXmlEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.xml.rels", sheetRels);
@@ -239,6 +254,11 @@ public static partial class XlsxWriter
         {
             preserved = OoxmlPreservedParts.Capture(zip, allSheets.Count);
             preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
+            // 追加同样要带上 workbook.xml 内引用保留部件的元素，否则追加一次就丢命名区域 / 透视表缓存 / 外部链接
+            preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
+            preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
+            preserved.PivotCachesXml = XlsxReader.PivotCachesXmlSnapshot;
+            preserved.ExternalReferencesXml = XlsxReader.ExternalReferencesXmlSnapshot;
         }
 
         ApplyPropertyUpdates(properties, updateProperties);
@@ -1107,10 +1127,26 @@ public static partial class XlsxWriter
         public string TargetMode = "";
     }
 
+    /// <summary>保留的工作表 rels 中是否已有 drawing 关联（图表/形状等，非本次新增图片）</summary>
+    private static bool HasPreservedDrawingRel(OoxmlPreservedParts? preserved, int sheetNumber)
+    {
+        if (preserved is null) return false;
+        if (!preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetNumber}.xml.rels", out var relsXml)) return false;
+        if (string.IsNullOrEmpty(relsXml)) return false;
+        foreach (var rel in ParseRels(relsXml))
+        {
+            if (!rel.Type.EndsWith("/drawing", StringComparison.OrdinalIgnoreCase)) continue;
+            var abs = ResolveRelsTarget("xl/worksheets", rel.Target);
+            if (preserved.Parts.ContainsKey(abs)) return true;
+        }
+        return false;
+    }
+
     /// <summary>合并工作表级 rels：保留未重建目标（绘图/超链接等），追加新建超链接/批注/table rel。返回 null 表示无需写出 </summary>
     private static string? MergeSheetRels(int sheetNumber, bool hasComments, OoxmlPreservedParts? preserved,
         bool mergeSheetRels, List<(string Ref, string Target, string? Tooltip, bool IsInternal)>? hyperlinks = null,
-        bool hasDrawing = false, XlsxWriter.ImagePlan? imagePlan = null, List<RelInfo>? tableRels = null)
+        bool hasDrawing = false, XlsxWriter.ImagePlan? imagePlan = null, List<RelInfo>? tableRels = null,
+        Dictionary<string, string>? keptIdMap = null)
     {
         string original = "";
         if (mergeSheetRels && preserved is not null
@@ -1187,7 +1223,7 @@ public static partial class XlsxWriter
 
         string rebuilt = RelsXml(relParts);
         var rebuiltTargets = new HashSet<string> { $"xl/comments{sheetNumber}.xml" };
-        return MergeRelsXml(original, "xl/worksheets", rebuiltTargets, rebuilt);
+        return MergeRelsXml(original, "xl/worksheets", rebuiltTargets, rebuilt, keptIdMap);
     }
 
     /// <summary>把 rel 列表序列化为完整 &lt;Relationships&gt; XML </summary>
@@ -1213,9 +1249,11 @@ public static partial class XlsxWriter
     /// 追加写入器生成的重建 rels。保留条目的 rId 重新编号以避免冲突。
     /// 全部为空时返回 null。
     /// </summary>
-    internal static string? MergeRelsXml(string originalRelsXml, string baseDir, HashSet<string> rebuiltTargets, string rebuiltRelsXml)
+    internal static string? MergeRelsXml(string originalRelsXml, string baseDir, HashSet<string> rebuiltTargets, string rebuiltRelsXml,
+        Dictionary<string, string>? keptIdMap = null)
     {
         var kept = new List<RelInfo>();
+        var originalIds = new List<string>();
         if (!string.IsNullOrEmpty(originalRelsXml))
         {
             foreach (var rel in ParseRels(originalRelsXml))
@@ -1223,11 +1261,13 @@ public static partial class XlsxWriter
                 if (rel.TargetMode == "External")
                 {
                     kept.Add(rel);
+                    originalIds.Add(rel.Id);
                     continue;
                 }
                 var abs = ResolveRelsTarget(baseDir, rel.Target);
                 if (rebuiltTargets.Contains(abs)) continue;
                 kept.Add(rel);
+                originalIds.Add(rel.Id);
             }
         }
 
@@ -1236,12 +1276,17 @@ public static partial class XlsxWriter
 
         var usedIds = new HashSet<string>(rebuilt.Select(x => x.Id), StringComparer.Ordinal);
         int next = 1;
-        foreach (var rel in kept)
+        for (int i = 0; i < kept.Count; i++)
         {
+            var rel = kept[i];
             string id;
             do { id = "rId" + next++; } while (usedIds.Contains(id));
             rel.Id = id;
             usedIds.Add(id);
+            // 保留部件（图表/透视表缓存/外部链接）的 rId 被重新编号，
+            // workbook.xml 内引用这些 rId 的元素须按此映射同步改写，否则引用悬空
+            if (keptIdMap is not null && originalIds[i].Length > 0)
+                keptIdMap[originalIds[i]] = id;
         }
 
         var sb = new StringBuilder(256);
@@ -1441,7 +1486,8 @@ public static partial class XlsxWriter
 
     private static string WorkbookXml(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved, bool date1904,
         string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null,
-        bool fileSharingReadOnlyRecommended = false, WorkbookProtection? workbookProtection = null)
+        bool fileSharingReadOnlyRecommended = false, WorkbookProtection? workbookProtection = null,
+        Dictionary<string, string>? keptRelIdMap = null)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -1484,16 +1530,33 @@ public static partial class XlsxWriter
             sb.Append($"<sheet name=\"{name}\" sheetId=\"{i + 1}\" r:id=\"rId{i + 1}\"/>");
         }
         sb.Append("</sheets>");
+        // P0-29: externalReferences 原样回写（schema 位于 sheets 之后、definedNames 之前）
+        if (preserved?.ExternalReferencesXml is { Length: > 0 } extRefs)
+            sb.Append(RemapRelIds(extRefs, keptRelIdMap));
         // P0-6: definedNames 原样回写（schema 位于 sheets 之后，保留命名区域）
         if (preserved?.DefinedNamesXml is { Length: > 0 })
             sb.Append(preserved.DefinedNamesXml);
         // P0-12: 陈旧 calcChain 不透传，写 fullCalcOnLoad 让 Excel 保存时重建计算链
         sb.Append("<calcPr fullCalcOnLoad=\"1\"/>");
+        // P0-27: pivotCaches 原样回写（schema 位于 calcPr 之后），缺失会导致 Excel 拒绝打开含透视表的文件
+        if (preserved?.PivotCachesXml is { Length: > 0 } pivotCaches)
+            sb.Append(RemapRelIds(pivotCaches, keptRelIdMap));
         sb.Append("</workbook>");
         return sb.ToString();
     }
 
-    private static string WorkbookRelsXml(int sheetCount, OoxmlPreservedParts? preserved, ImagePlan? imagePlan = null)
+    // 保留部件的 rId 在 MergeRelsXml 内被重新编号，原样回写的 XML 片段里的 r:id 须按映射同步改写
+    private static string RemapRelIds(string xml, Dictionary<string, string>? map)
+    {
+        if (map is null || map.Count == 0) return xml;
+        return Regex.Replace(xml, "(r:id=\")([^\"]*)(\")", m =>
+            map.TryGetValue(m.Groups[2].Value, out var newId)
+                ? m.Groups[1].Value + newId + m.Groups[3].Value
+                : m.Value);
+    }
+
+    private static string WorkbookRelsXml(int sheetCount, OoxmlPreservedParts? preserved, ImagePlan? imagePlan = null,
+        Dictionary<string, string>? keptIdMap = null)
     {
         var rebuiltTargets = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 1; i <= sheetCount; i++)
@@ -1516,7 +1579,7 @@ public static partial class XlsxWriter
         if (preserved is not null && preserved.Rels.TryGetValue("xl/_rels/workbook.xml.rels", out var r))
             original = r;
 
-        return MergeRelsXml(original, "xl", rebuiltTargets, WriterWorkbookRels(sheetCount, imagePlan)) ?? WriterWorkbookRels(sheetCount, imagePlan);
+        return MergeRelsXml(original, "xl", rebuiltTargets, WriterWorkbookRels(sheetCount, imagePlan), keptIdMap) ?? WriterWorkbookRels(sheetCount, imagePlan);
     }
 
     private static string WriterWorkbookRels(int sheetCount, ImagePlan? imagePlan = null)

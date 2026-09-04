@@ -500,6 +500,9 @@ public static partial class XlsxReader
         // P0-6: 捕获 bookViews / definedNames 原始 XML（保存时原样回写，避免静默丢失命名区域与窗口视图）
         s_bookViewsXml = workbook.Element(ns + "bookViews")?.ToString();
         s_definedNamesXml = workbook.Element(ns + "definedNames")?.ToString();
+        // P0-27/P0-29: 捕获 pivotCaches / externalReferences 原始 XML（保存时重映射 rel Id 后回写）
+        s_pivotCachesXml = workbook.Element(ns + "pivotCaches")?.ToString(SaveOptions.DisableFormatting);
+        s_externalReferencesXml = workbook.Element(ns + "externalReferences")?.ToString(SaveOptions.DisableFormatting);
 
         // 捕获 workbookProtection（工作簿保护：锁结构/窗口 + 可选密码）
         s_workbookProtection = null;
@@ -607,6 +610,13 @@ public static partial class XlsxReader
     [ThreadStatic]
     private static string? s_definedNamesXml;
 
+    // P0-27/P0-29: workbook.xml 中 pivotCaches / externalReferences 的原始 XML 快照
+    [ThreadStatic]
+    private static string? s_pivotCachesXml;
+
+    [ThreadStatic]
+    private static string? s_externalReferencesXml;
+
     // 最近一次 ReadWorkbook 捕获的 workbookProtection（工作簿保护），供 OpenCore 取用
     [ThreadStatic]
     private static WorkbookProtection? s_workbookProtection;
@@ -628,6 +638,12 @@ public static partial class XlsxReader
 
     /// <summary>P0-6: 最近一次 ReadWorkbook 捕获的 definedNames 原始 XML </summary>
     internal static string? DefinedNamesXmlSnapshot => s_definedNamesXml;
+
+    /// <summary>P0-27: 最近一次 ReadWorkbook 捕获的 pivotCaches 原始 XML </summary>
+    internal static string? PivotCachesXmlSnapshot => s_pivotCachesXml;
+
+    /// <summary>P0-29: 最近一次 ReadWorkbook 捕获的 externalReferences 原始 XML </summary>
+    internal static string? ExternalReferencesXmlSnapshot => s_externalReferencesXml;
 
     private static SheetData ReadWorksheet(ZipArchive zip, string sheetPath, string sheetName,
         List<string> shared, StylesheetInfo styles, bool firstRowIsHeader)
@@ -1208,6 +1224,8 @@ public static partial class XlsxReader
             if (img is null) continue;
 
             img.Placement = ImagePlacement.Floating;
+            // P0-28: 标记来源为保留的 drawing，保存时写入器跳过（drawing 部件已按保真透传含该图片）
+            img.FromPreservedDrawing = true;
             sheet.Images ??= new List<WorksheetImage>();
             sheet.Images.Add(img);
         }

@@ -35,6 +35,12 @@ internal sealed class OoxmlPreservedParts
     /// <summary>P0-6: 打开时捕获的 workbook.xml 中 definedNames 元素原始 XML，保存时原样回写（schema 位于 sheets 之后） </summary>
     public string? DefinedNamesXml { get; set; }
 
+    /// <summary>P0-27: 打开时捕获的 workbook.xml 中 pivotCaches 元素原始 XML，保存时按新 rel Id 重映射后回写（schema 位于 calcPr 之后） </summary>
+    public string? PivotCachesXml { get; set; }
+
+    /// <summary>P0-29: 打开时捕获的 workbook.xml 中 externalReferences 元素原始 XML，保存时按新 rel Id 重映射后回写（schema 位于 sheets 之后、definedNames 之前） </summary>
+    public string? ExternalReferencesXml { get; set; }
+
     /// <summary>捕获 zip 中写入器不重建的部件与 rels。sheetCount 用于排除所有工作表/批注重建条目。
     /// <paramref name="binary"/> = true 时按 xlsb 容器布局排除（.bin 工作表/工作簿/styles 等）</summary>
     public static OoxmlPreservedParts Capture(ZipArchive zip, int sheetCount, bool binary = false)
