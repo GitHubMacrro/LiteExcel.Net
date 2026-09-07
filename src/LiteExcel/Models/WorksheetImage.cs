@@ -75,7 +75,7 @@ public sealed class WorksheetImage
     internal int MediaNumber { get; set; }
 
     /// <summary>
-    /// P0-28: 该图片来自打开时保留的 drawing 部件（读取回填），不是调用方新增。
+    /// 该图片来自打开时保留的 drawing 部件（读取回填），不是调用方新增。
     /// 保存时 drawing 部件按保真透传已含该图片，写入器须跳过，否则 open-save 图片翻倍。
     /// 调用方修改此对象的任何属性都不会生效（drawing 属只保真层级）。
     /// </summary>

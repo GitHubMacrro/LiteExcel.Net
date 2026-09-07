@@ -13,7 +13,6 @@ namespace LiteExcel;
 /// </summary>
 public static class Excel
 {
-    // ── 打开 / 新建 ──
 
     /// <summary>打开工作簿，按扩展名自动识别格式。已支持 xlsx/xlsm/xls/xlsb/csv </summary>
     public static Workbook Open(string path, ExcelReadOptions? options = null)
@@ -81,7 +80,7 @@ public static class Excel
                         var decrypted = DecryptWithPasswordCheck(fs, path, options.OpenPassword!);
                         var sheets = XlsbBackend.ReadAll(decrypted);
                         var wbB = Workbook.FromSheetData(sheets, null, ExcelFormat.Xlsb, path);
-                        // P0-14/18: 捕获保留部件与文档属性（与读取同一解密快照）
+                        // 从同一解密快照读取保留部件与文档属性。
                         decrypted.Position = 0;
                         using (var zipB = new ZipArchive(decrypted, ZipArchiveMode.Read, leaveOpen: true))
                         {
@@ -111,7 +110,7 @@ public static class Excel
                 }
                 var sheetsX = XlsbBackend.ReadAll(path);
                 var wbXB = Workbook.FromSheetData(sheetsX, null, ExcelFormat.Xlsb, path);
-                // P0-14/18: 捕获保留部件与文档属性（图表/透视表/主题/绘图不再随保存丢失）
+                // 捕获保留部件与文档属性，确保图表、透视表、主题和绘图可随文件保存。
                 using (var capFs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                 using (var capZip = new ZipArchive(capFs, ZipArchiveMode.Read))
                 {
@@ -144,11 +143,12 @@ public static class Excel
             var sheets = XlsxReader.ReadAllRaw(zip);
             var props = XlsxReader.ReadProperties(zip);
             preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
-            preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot; // ReadWorkbook 刚捕获
-            // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
+            preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot; // 由 ReadWorkbook 捕获
+            // 保留命名区域和窗口视图，同时解析到 Workbook.Names。
             preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
             preserved.PivotCachesXml = XlsxReader.PivotCachesXmlSnapshot;
             preserved.ExternalReferencesXml = XlsxReader.ExternalReferencesXmlSnapshot;
+            preserved.WorkbookExtLstXml = XlsxReader.WorkbookExtLstXmlSnapshot;
             preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
             wb = Workbook.FromSheetData(sheets, props, format, path);
             foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
@@ -273,10 +273,11 @@ public static class Excel
                 var propsD = XlsxReader.ReadProperties(zipD);
                 preserved = OoxmlPreservedParts.Capture(zipD, sheetsD.Count);
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
-                // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
+                // 保留命名区域和窗口视图，同时解析到 Workbook.Names。
                 preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
                 preserved.PivotCachesXml = XlsxReader.PivotCachesXmlSnapshot;
                 preserved.ExternalReferencesXml = XlsxReader.ExternalReferencesXmlSnapshot;
+                preserved.WorkbookExtLstXml = XlsxReader.WorkbookExtLstXmlSnapshot;
                 preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheetsD, propsD, format, null);
                 foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
@@ -295,10 +296,11 @@ public static class Excel
                 var props = XlsxReader.ReadProperties(zip);
                 preserved = OoxmlPreservedParts.Capture(zip, sheets.Count);
                 preserved.WorkbookCodeName = XlsxReader.WorkbookCodeNameSnapshot;
-                // P0-6: 命名区域与窗口视图原样回写；同时解析到 Workbook.Names
+                // 保留命名区域和窗口视图，同时解析到 Workbook.Names。
                 preserved.BookViewsXml = XlsxReader.BookViewsXmlSnapshot;
                 preserved.PivotCachesXml = XlsxReader.PivotCachesXmlSnapshot;
                 preserved.ExternalReferencesXml = XlsxReader.ExternalReferencesXmlSnapshot;
+                preserved.WorkbookExtLstXml = XlsxReader.WorkbookExtLstXmlSnapshot;
                 preserved.DefinedNamesXml = XlsxReader.DefinedNamesXmlSnapshot;
                 wb = Workbook.FromSheetData(sheets, props, format, null);
                 foreach (var nr in XlsxReader.ParseDefinedNames(preserved.DefinedNamesXml))
@@ -468,9 +470,9 @@ public static class Excel
         format = extFormat;
 
         ApplyWriteOptions(workbook, options);
-        // 批次 0：注入能力降级回调（默认 null，不注册则行为与历史一致）
+        // 注入能力降级回调；未设置时保持默认行为。
         workbook.DegradationCallback = options.OnDegradation;
-        // 批次 P1-A：注入 CSV 写出分隔符（默认 null → 逗号）与编码（默认 null → UTF-8 带 BOM）
+        // 注入 CSV 写出分隔符和编码。
         workbook.WriteSeparator = options.Separator;
         workbook.WriteEncoding = options.Encoding;
         workbook.SaveAs(path, format);

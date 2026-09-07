@@ -38,6 +38,9 @@ internal static class BiffRecords
     public const ushort OpExternSheet = 0x0017;
     public const ushort OpDefinedName = 0x0018;
 
+    /// <summary>BIFF8 透视表视图记录（SXVIEW）。出现此记录表示工作簿含透视表 </summary>
+    public const ushort OpSxView = 0x00B0;
+
     public readonly struct Record
     {
         public readonly ushort Opcode;

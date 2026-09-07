@@ -63,6 +63,14 @@ public sealed class Workbook
     /// <summary>打开时捕获的原 fileSharing（修改密码哈希），保存时透传保留。用户显式设置新修改密码时失效 </summary>
     internal Internal.Encryption.FileSharingInfo? FileSharingToPreserve { get; set; }
 
+    /// <summary>源文件是否含透视表（XLS 检测 SXVIEW 记录）。含透视表时默认阻止保存，因为当前模型无法保真写回 BIFF8 透视表。
+    /// 用户可通过 <see cref="AllowFeatureLossOnSave"/> 显式允许降级写出。 </summary>
+    internal bool SourceHasPivotTables { get; set; }
+
+    /// <summary>是否允许保存时丢失不支持的高级功能（如 BIFF8 透视表）。默认 false：含透视表的 XLS 保存被阻止。
+    /// 用户显式设为 true 后允许保存，但透视表等不可保真能力会被丢弃，并通过降级回调上报。 </summary>
+    public bool AllowFeatureLossOnSave { get; set; }
+
     /// <summary>
     /// 当前目标路径。
     /// <see cref="Open"/> 后指向源文件；<see cref="SaveAs"/> 后更新为新路径；
@@ -179,8 +187,10 @@ public sealed class Workbook
 
     private void SaveCore(string path, ExcelFormat format)
     {
-        // 先做格式能力校验（宏不支持目标格式时提前报错），避免创建残缺文件
+        // 在创建目标文件前完成格式能力校验。
         ThrowIfMacroNotSupported(format);
+        // 在创建目标文件前阻止无法保真的 XLS 透视表保存。
+        ThrowIfPivotTablesNotPreservable(format);
 
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
         SaveCore(fs, format);
@@ -188,10 +198,12 @@ public sealed class Workbook
 
     private void SaveCore(Stream stream, ExcelFormat format)
     {
-        // Stream 版同样校验宏保护
+        // 流写出路径同样执行格式能力校验。
         ThrowIfMacroNotSupported(format);
         // 文件级密码仅支持 xlsx/xlsm/xlsb；csv/xls 不支持加密写出
         ThrowIfPasswordNotSupported(format);
+        // 阻止无法保真的 BIFF8 透视表保存。
+        ThrowIfPivotTablesNotPreservable(format);
 
         switch (format)
         {
@@ -200,16 +212,17 @@ public sealed class Workbook
             {
                 var sheets = BuildSheetDataList();
                 bool structureUnchanged = StructureUnchanged(sheets);
+                bool verbatimX = CanVerbatimXlsx(sheets);
                 var openPwd = Security.GetOpenPassword();
                 var (fsHash, fsSalt, fsSpin, fsRo) = BuildFileSharingParams();
                 if (!string.IsNullOrEmpty(openPwd))
                 {
-                    // 打开密码：先写 zip 到内存，再加密封装为 CFB 输出
+                    // 先写入 ZIP，再封装为加密 CFB。
                     using var zipMs = new MemoryStream();
                     XlsxWriter.Write(zipMs, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
                         macroEnabled: format == ExcelFormat.Xlsm, date1904: Date1904,
                         fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo,
-                        workbookProtection: Protection, degradationCallback: DegradationCallback);
+                        workbookProtection: Protection, degradationCallback: DegradationCallback, verbatim: verbatimX);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwd);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -219,7 +232,7 @@ public sealed class Workbook
                     XlsxWriter.Write(stream, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
                         macroEnabled: format == ExcelFormat.Xlsm, date1904: Date1904,
                         fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo,
-                        workbookProtection: Protection, degradationCallback: DegradationCallback);
+                        workbookProtection: Protection, degradationCallback: DegradationCallback, verbatim: verbatimX);
                 }
                 break;
             }
@@ -240,12 +253,13 @@ public sealed class Workbook
                 var xlsbSheets = BuildSheetDataList();
                 var openPwdB = Security.GetOpenPassword();
                 var (fsHashB, fsSaltB, fsSpinB, fsRoB) = BuildFileSharingParams();
+                bool verbatimB = CanVerbatimXlsb(xlsbSheets);
                 if (!string.IsNullOrEmpty(openPwdB))
                 {
                     using var zipMs = new MemoryStream();
                     XlsbWriter.Write(zipMs, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
                         fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
-                        PreservedParts, Properties, Names);
+                        PreservedParts, Properties, Names, verbatim: verbatimB);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwdB);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -254,7 +268,7 @@ public sealed class Workbook
                 {
                     XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
                         fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
-                        PreservedParts, Properties, Names);
+                        PreservedParts, Properties, Names, verbatim: verbatimB);
                 }
                 break;
             }
@@ -283,6 +297,28 @@ public sealed class Workbook
                 "请使用 xlsx/xlsm/xlsb 保存，或先移除密码。");
     }
 
+    /// <summary>源 XLS 含透视表时默认阻止保存（BIFF8 透视表无法保真写回或转换到其他格式）。
+    /// 用户可设 <see cref="AllowFeatureLossOnSave"/> = true 显式允许降级，此时透视表会被丢弃并经降级回调上报。 </summary>
+    private void ThrowIfPivotTablesNotPreservable(ExcelFormat format)
+    {
+        if (!SourceHasPivotTables) return;
+        if (AllowFeatureLossOnSave)
+        {
+            // 显式允许降级时上报并继续写出。
+            DegradationCallback?.Invoke(new DegradationInfo
+            {
+                Capability = DegradationCapability.PivotTables,
+                TargetFormat = format,
+                Message = $"源 XLS 文件包含透视表，当前版本无法保真写回或转换 BIFF8 透视表到 {format} 格式。" +
+                    "透视表将被丢弃（数据保留，透视视图丢失）。",
+            });
+            return;
+        }
+        throw new LiteExcelException(
+            $"源 XLS 文件包含透视表，当前版本无法保真写回或转换 BIFF8 透视表，保存会永久删除透视表。默认已阻止本次保存。\n" +
+            "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
+    }
+
     /// <summary>
     /// 生成 fileSharing（修改密码）写出参数。
     /// 优先透传打开时捕获的原 fileSharing（未改动修改密码时）；否则从 Security 的修改密码重新生成。
@@ -301,11 +337,11 @@ public sealed class Workbook
             return (Convert.ToBase64String(hash), Convert.ToBase64String(salt), 100000, Security.ReadOnlyRecommended);
         }
 
-        // 用户主动移除/改过修改密码：不透传原 fileSharing（无修改密码则无保护）
+        // 修改密码被主动变更时不保留原 fileSharing。
         if (Security.ModifyPasswordTouched)
             return (null, null, null, false);
 
-        // 透传打开时捕获的原 fileSharing（保留原修改密码）
+        // 保留打开时捕获的 fileSharing。
         var preserved = FileSharingToPreserve;
         if (preserved is not null)
             return (Convert.ToBase64String(preserved.HashValue),
@@ -327,12 +363,79 @@ public sealed class Workbook
     /// <summary>
     /// 工作表数量相对打开时是否未变（决定能否复用工作表级保留 rels）。
     /// 只比较数量而非表名：表名仅存在于 workbook.xml，不影响 sheet{i}.xml 与其 rels 的绑定；
-    /// 改表名不应导致 drawing/图表关联被丢弃（P0-3）。
+    /// 改表名不应导致 drawing/图表关联被丢弃。
     /// 注意：重排（Move）后同位置 sheet rels 可能错配，属低频场景，保留比删除更安全。
     /// </summary>
     private bool StructureUnchanged(List<SheetData> sheets)
     {
         return _openedSheetNames is not null && sheets.Count == _openedSheetNames.Count;
+    }
+
+    /// <summary>
+    /// 判断是否可对 XLSB 做 verbatim 保留（原样写出原始二进制部件而非重建）。
+    /// 条件：源格式为 XLSB + 结构不变（表数+表名）+ 无工作表修改 + 原始二进制部件已捕获。
+    /// </summary>
+    private bool CanVerbatimXlsb(List<SheetData> sheets)
+    {
+        if (Format != ExcelFormat.Xlsb) return false;
+        if (_openedSheetNames is null) return false;
+        if (sheets.Count != _openedSheetNames.Count) return false;
+        for (int i = 0; i < sheets.Count; i++)
+            if (!string.Equals(sheets[i].SheetName, _openedSheetNames[i], System.StringComparison.Ordinal))
+                return false;
+        foreach (var ws in Worksheets)
+            if (ws.IsModified)
+                return false;
+        if (PreservedParts?.VerbatimBinaries is null) return false;
+        if (!PreservedParts.VerbatimBinaries.ContainsKey("xl/workbook.bin")) return false;
+        if (!PreservedParts.VerbatimBinaries.ContainsKey("xl/styles.bin")) return false;
+        // 修改密码变动时需重建包含 BrtFileSharingIso 记录的 workbook.bin。
+        if (Security.ModifyPasswordTouched) return false;
+        if (Security.HasModifyPassword) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// 判断是否可对 XLSX/XLSM 做 verbatim 保留（原样写出原始 styles.xml / sharedStrings.xml / sheetN.xml）。
+    /// 条件：源格式为 xlsx/xlsm + 结构不变（表数+表名）+ 无工作表修改 + 原始 XML 部件已捕获
+    ///     + 原始 styles 含扩展内容（否则重建路径更干净，避免改变既有简化文件的行为）。
+    /// 用于保留 slicerStyles / timelineStyles / pivotButton XF 等扩展样式，避免重建时样式索引变化导致透视表/切片器渲染失败。
+    /// </summary>
+    private bool CanVerbatimXlsx(List<SheetData> sheets)
+    {
+        if (Format != ExcelFormat.Xlsx && Format != ExcelFormat.Xlsm) return false;
+        if (_openedSheetNames is null) return false;
+        if (sheets.Count != _openedSheetNames.Count) return false;
+        for (int i = 0; i < sheets.Count; i++)
+            if (!string.Equals(sheets[i].SheetName, _openedSheetNames[i], System.StringComparison.Ordinal))
+                return false;
+        foreach (var ws in Worksheets)
+            if (ws.IsModified)
+                return false;
+        if (PreservedParts?.VerbatimXmlParts is null) return false;
+        if (!PreservedParts.VerbatimXmlParts.TryGetValue("xl/styles.xml", out var rawStyles) || rawStyles is null)
+            return false;
+        if (!HasExtendedStyles(rawStyles)) return false;
+        for (int i = 1; i <= sheets.Count; i++)
+            if (!PreservedParts.VerbatimXmlParts.ContainsKey($"xl/worksheets/sheet{i}.xml"))
+                return false;
+        // 修改密码变动时需重建包含 fileSharing 的 workbook.xml。
+        if (Security.ModifyPasswordTouched) return false;
+        if (Security.HasModifyPassword) return false;
+        return true;
+    }
+
+    /// <summary>原始 styles.xml 是否含扩展样式内容（extLst 切片器/时间线样式、pivotButton XF、自定义 XF/numFmt 等），
+    /// 是则值得 verbatim 保留；否则重建路径（支持稀疏写出等简化）更合适。 </summary>
+    private static bool HasExtendedStyles(byte[] stylesXml)
+    {
+        var text = System.Text.Encoding.UTF8.GetString(stylesXml);
+        // extLst（slicerStyles/timelineStyles）、pivotButton XF、自定义 cellStyleXfs 都表明文件有扩展样式
+        if (text.IndexOf("extLst", StringComparison.Ordinal) >= 0) return true;
+        if (text.IndexOf("pivotButton", StringComparison.Ordinal) >= 0) return true;
+        if (text.IndexOf("slicerStyles", StringComparison.Ordinal) >= 0) return true;
+        if (text.IndexOf("timelineStyles", StringComparison.Ordinal) >= 0) return true;
+        return false;
     }
 
     // ── 集合回调 ──

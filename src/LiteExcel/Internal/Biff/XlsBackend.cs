@@ -23,6 +23,13 @@ internal static class XlsBackend
     /// <summary>取最近一次 .xls 读取解析出的命名区域列表（可为 null/空）。 </summary>
     public static IReadOnlyList<NamedRange>? DefinedNamesSnapshot => s_definedNames;
 
+    /// <summary>最近一次 ReadAll 是否检测到透视表记录（SXVIEW）。 </summary>
+    [ThreadStatic]
+    private static bool s_hasPivotTables;
+
+    /// <summary>取最近一次 .xls 读取是否含透视表。 </summary>
+    public static bool HasPivotTablesSnapshot => s_hasPivotTables;
+
     public static List<SheetData> ReadAll(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -67,6 +74,9 @@ internal static class XlsBackend
         if (records.Count == 0 || records[0].Opcode != BiffRecords.OpBof)
             throw new LiteExcelException("这不是有效的 .xls 文件（缺少全局 BOF 记录）");
 
+        s_hasPivotTables = false;
+        foreach (var r in records)
+            if (r.Opcode == BiffRecords.OpSxView) { s_hasPivotTables = true; break; }
         var sst = new List<string>();
         var formats = new Dictionary<int, string>();
         var xfIfmt = new List<int>();
@@ -708,7 +718,7 @@ internal static class XlsBackend
                 var text = FormulaParser.Parse(rpn, biff12: false);
                 if (!string.IsNullOrEmpty(text))
                 {
-                    // P0-8: 公式串放入 Formula，不覆盖缓存值
+                    // 将公式文本存入 Formula，不覆盖缓存值。
                     cell.IsFormula = true;
                     cell.Formula = text;
                 }

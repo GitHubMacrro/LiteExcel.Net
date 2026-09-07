@@ -187,7 +187,7 @@ internal static class CsvBackend
         stream.Write(data, 0, data.Length);
     }
 
-    /// <summary>写出 CSV 时对静默丢弃的 Excel 专有能力逐项上报（P0-19 显式化） </summary>
+    /// <summary>写出 CSV 时逐项上报不支持的 Excel 专有能力。</summary>
     private static void ReportDegradations(SheetData sheet, Action<DegradationInfo>? onDegradation, ExcelFormat targetFormat)
     {
         if (onDegradation is null) return;

@@ -2877,6 +2877,14 @@ catch (LiteExcelException ex)
 | `<pivotCaches>` | `workbook.xml` | 透视表缓存定义 |
 | `<externalReferences>` | `workbook.xml` | 跨工作簿外部链接 |
 | `<bookViews>` / `<definedNames>` | `workbook.xml` | 窗口视图 / 命名区域 |
+| `<extLst>`（`x14:slicerCaches`） | `workbook.xml` | 切片器 / 日程表缓存 |
+| `<extLst>`（`x14:slicerList`） | `sheet{N}.xml` | 工作表级切片器 |
+| `<sheet>` 的 `sheetId` / `state` | `workbook.xml` | 工作表标识 / 可见性（切片器缓存以 `tabId` 引用，重排会导致孤儿） |
+| `styles.xml` 原样透传 | `xl/styles.xml` | 切片器样式 / 时间线样式 / 透视表按钮 XF（含 `extLst` 扩展样式时原样保留，否则重建） |
+| `sheet{N}.xml` / `sharedStrings.xml` 原样透传 | `xl/worksheets/sheet{N}.xml` | 稀疏单元格布局与绝对引用（与 `styles.xml` 一致判定，未修改时原样保留） |
+| `workbook.bin` / `styles.bin` / `sheet{N}.bin` 原样透传 | XLSB 包内二进制部件 | BIFF12 透视表 / 切片器宿主记录（未修改 + 结构未变时原样保留，否则重建） |
+
+> **XLS 透视表保护**：源 .xls 文件包含透视表（检测到 `SXVIEW` 记录）时，保存默认被阻止并抛 `LiteExcelException`，因为当前模型无法保真写回或转换 BIFF8 透视表。设 `wb.AllowFeatureLossOnSave = true` 后允许保存，透视表被丢弃并经降级回调上报。
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // 打开包含宏的 xlsm

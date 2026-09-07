@@ -450,4 +450,176 @@ public class ReferenceIntegrityTests
     /// <summary>1x1 有效 PNG（Excel 可打开，手工构造的字节会被拒） </summary>
     private static byte[] MinimalPng => Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwMB/6X5x2wAAAAASUVORK5CYII=");
+
+    /// <summary>Q1: 工作表原始起始行号保真——数据从第 3 行起的文件 open-save 后必须仍从第 3 行起，
+    /// 前导空行补齐，不能整体上移（透视表/合并区域等绝对行号引用会错位） </summary>
+    [Fact]
+    public void OpenSave_PreservesFirstRowNumber_WhenDataStartsAtOffset()
+    {
+        var file = GetTempFile();
+        try
+        {
+            // 直接构造 sheet1.xml：数据从第 3 行起（前两行空占位），合并 B3:C3
+            using (var zip = new ZipArchive(File.Open(file, FileMode.Create, FileAccess.ReadWrite), ZipArchiveMode.Update))
+            {
+                WriteEntry(zip, "xl/worksheets/sheet1.xml",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                    "<sheetData>" +
+                    "<row r=\"3\"><c r=\"A3\" t=\"s\"><v>0</v></c><c r=\"B3\"/><c r=\"C3\"/></row>" +
+                    "<row r=\"4\"><c r=\"A4\"><v>1</v></c></row>" +
+                    "<row r=\"5\"><c r=\"A5\"><v>2</v></c></row>" +
+                    "</sheetData>" +
+                    "<mergeCells><mergeCell ref=\"B3:C3\"/></mergeCells>" +
+                    "</worksheet>");
+                WriteEntry(zip, "xl/sharedStrings.xml",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"3\" uniqueCount=\"1\">" +
+                    "<si><t>头</t></si></sst>");
+                WriteEntry(zip, "xl/styles.xml",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><cellXfs count=\"1\"><xf numFmtId=\"0\"/></cellXfs></styleSheet>");
+                WriteEntry(zip, "xl/workbook.xml",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                    "<sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");
+                WriteEntry(zip, "xl/_rels/workbook.xml.rels",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    $"<Relationships xmlns=\"{PkgRelNs}\">" +
+                    $"<Relationship Id=\"rId1\" Type=\"{OfficeRelNs}/worksheet\" Target=\"worksheets/sheet1.xml\"/>" +
+                    $"<Relationship Id=\"rId2\" Type=\"{OfficeRelNs}/sharedStrings\" Target=\"sharedStrings.xml\"/>" +
+                    $"<Relationship Id=\"rId3\" Type=\"{OfficeRelNs}/styles\" Target=\"styles.xml\"/>" +
+                    "</Relationships>");
+                WriteEntry(zip, "_rels/.rels",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    $"<Relationships xmlns=\"{PkgRelNs}\">" +
+                    $"<Relationship Id=\"rId1\" Type=\"{OfficeRelNs}/officeDocument\" Target=\"xl/workbook.xml\"/>" +
+                    "</Relationships>");
+                WriteEntry(zip, "[Content_Types].xml",
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
+                    "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>" +
+                    "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
+                    "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>" +
+                    "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>" +
+                    "<Override PartName=\"/xl/sharedStrings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml\"/>" +
+                    "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>" +
+                    "</Types>");
+            }
+
+            var opened = Excel.Open(file);
+            Assert.Equal(3, opened.Worksheets[0].FirstRowNumber);
+            // grid[0] 对应源行 3，B3 -> grid 0
+            Assert.Equal(0, opened.Worksheets[0].MergedRanges[0].FirstRow);
+            opened.Worksheets[0].SetValue("D1", "add");
+            opened.Save();
+
+            using var check = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            var saved = ReadText(check, "xl/worksheets/sheet1.xml");
+            Assert.Contains("<row r=\"1\"", saved);
+            Assert.Contains("<row r=\"2\"", saved);
+            Assert.Contains("<c r=\"A3\"", saved);
+            Assert.Contains("<c r=\"A5\"", saved);
+            Assert.Matches("ref=\"B3:C3\"", saved);
+            AssertNoDanglingRels(check);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    /// <summary>Q2: workbook extLst（含 slicerCaches）+ sheet extLst（含 slicerList）+ 原 sheetId
+    /// 三者 open-save 后必须全部保留，r:id 经重编号后仍可解析。切片器缓存以 tabId 引用 sheetId，
+    /// sheetId 被重排为 1-based 位置序号会导致切片器成孤儿（Excel COM SlicerCaches.Count=0）。</summary>
+    [Fact]
+    public void OpenSave_PreservesSlicerExtLstAndOriginalSheetId()
+    {
+        var file = GetTempFile();
+        try
+        {
+            var wb = Excel.Create();
+            wb.Worksheets["Sheet1"].SetValue("A1", "v");
+            wb.SaveAs(file);
+
+            using (var zip = new ZipArchive(File.Open(file, FileMode.Open, FileAccess.ReadWrite), ZipArchiveMode.Update))
+            {
+                // workbook.xml：sheetId 改成 7（非默认 1）；注入 workbook extLst 含 slicerCaches 引用 rId900/rId901
+                var wbXml = ReadText(zip, "xl/workbook.xml");
+                wbXml = Regex.Replace(wbXml, "sheetId=\"1\"", "sheetId=\"7\"");
+                const string SlicerExtLst =
+                    "<extLst><ext uri=\"{BBE1A952-AA13-448e-AADC-164F8A28A991}\" " +
+                    "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\">" +
+                    "<x14:slicerCaches><x14:slicerCache r:id=\"rId900\"/>" +
+                    "<x14:slicerCache r:id=\"rId901\"/></x14:slicerCaches></ext></extLst>";
+                wbXml = wbXml.Replace("</workbook>", SlicerExtLst + "</workbook>");
+                WriteEntry(zip, "xl/workbook.xml", wbXml);
+                AddWorkbookRel(zip, "rId900", "http://schemas.microsoft.com/office/2007/relationships/slicerCache",
+                    "slicerCaches/slicerCache1.xml");
+                AddWorkbookRel(zip, "rId901", "http://schemas.microsoft.com/office/2007/relationships/slicerCache",
+                    "slicerCaches/slicerCache2.xml");
+
+                // slicer 部件本体（最小有效内容）
+                WriteEntry(zip, "xl/slicerCaches/slicerCache1.xml",
+                    "<slicerCacheDefinition xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" " +
+                    "name=\"X\" tabId=\"7\"><pivotTables/></slicerCacheDefinition>");
+                WriteEntry(zip, "xl/slicerCaches/slicerCache2.xml",
+                    "<slicerCacheDefinition xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" " +
+                    "name=\"Y\" tabId=\"7\"><pivotTables/></slicerCacheDefinition>");
+                WriteEntry(zip, "xl/slicers/slicer1.xml",
+                    "<slicer xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" name=\"X\" " +
+                    "cache=\"slicerCache1\"><extLst/></slicer>");
+
+                // sheet1.xml：注入 sheet extLst 含 slicerList 引用 rId800
+                var sheet = ReadText(zip, "xl/worksheets/sheet1.xml");
+                const string SheetExtLst =
+                    "<extLst><ext uri=\"{A8765BA9-456A-4dab-B4F3-ACF838C121DE}\" " +
+                    "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\">" +
+                    "<x14:slicerList><x14:slicer r:id=\"rId800\"/></x14:slicerList></ext></extLst>";
+                sheet = sheet.Replace("</worksheet>", SheetExtLst + "</worksheet>");
+                WriteEntry(zip, "xl/worksheets/sheet1.xml", sheet);
+
+                // sheet1 rels：加 slicer rel rId800
+                var srels = ReadText(zip, "xl/worksheets/_rels/sheet1.xml.rels");
+                const string slicerRel =
+                    $"<Relationship Id=\"rId800\" Type=\"http://schemas.microsoft.com/office/2007/relationships/slicer\" " +
+                    "Target=\"../slicers/slicer1.xml\"/>";
+                if (srels.Length == 0)
+                    srels = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                            $"<Relationships xmlns=\"{PkgRelNs}\">{slicerRel}</Relationships>";
+                else if (srels.Contains("</Relationships>"))
+                    srels = srels.Replace("</Relationships>", slicerRel + "</Relationships>");
+                else
+                    srels = srels.Replace("<Relationships/>",
+                        $"<Relationships xmlns=\"{PkgRelNs}\">{slicerRel}</Relationships>");
+                WriteEntry(zip, "xl/worksheets/_rels/sheet1.xml.rels", srels);
+
+                AddContentTypeOverride(zip, "/xl/slicerCaches/slicerCache1.xml", "application/vnd.ms-excel.slicerCache+xml");
+                AddContentTypeOverride(zip, "/xl/slicerCaches/slicerCache2.xml", "application/vnd.ms-excel.slicerCache+xml");
+                AddContentTypeOverride(zip, "/xl/slicers/slicer1.xml", "application/vnd.ms-excel.slicer+xml");
+            }
+
+            var opened = Excel.Open(file);
+            opened.Worksheets[0].SetValue("B1", "x");
+            opened.Save();
+
+            using var check = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
+            var savedWb = ReadText(check, "xl/workbook.xml");
+            // sheetId 必须仍是 7（不能被重排为 1）
+            Assert.Matches("sheetId=\"7\"", savedWb);
+            // workbook extLst 含 2 个 slicerCache 引用，rId 经重编号后仍可解析
+            Assert.Contains("slicerCaches", savedWb);
+            AssertRelIdsResolvable(check, "xl/workbook.xml", "xl/_rels/workbook.xml.rels");
+
+            var savedSheet = ReadText(check, "xl/worksheets/sheet1.xml");
+            Assert.Contains("slicerList", savedSheet);
+            AssertRelIdsResolvable(check, "xl/worksheets/sheet1.xml", "xl/worksheets/_rels/sheet1.xml.rels");
+
+            // 部件本体仍存在
+            Assert.NotNull(check.GetEntry("xl/slicerCaches/slicerCache1.xml"));
+            Assert.NotNull(check.GetEntry("xl/slicerCaches/slicerCache2.xml"));
+            Assert.NotNull(check.GetEntry("xl/slicers/slicer1.xml"));
+            AssertNoDanglingRels(check);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

@@ -45,6 +45,7 @@ public sealed class Cells : IEnumerable<Cell>
     /// <summary>清空整表所有单元格（值置空，不删除行列） </summary>
     public void Clear()
     {
+        _sheet.IsModified = true;
         var snapshot = _sheet.EnumerateStoredCells().ToList();
         foreach (var cell in snapshot)
             cell.SetValue(null);

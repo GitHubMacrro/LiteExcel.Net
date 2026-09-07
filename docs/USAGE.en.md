@@ -2810,6 +2810,14 @@ Fidelity is more than keeping part bytes: the elements that reference them must 
 | `<pivotCaches>` | `workbook.xml` | pivot cache definitions |
 | `<externalReferences>` | `workbook.xml` | cross-workbook external links |
 | `<bookViews>` / `<definedNames>` | `workbook.xml` | window views / named ranges |
+| `<extLst>` (`x14:slicerCaches`) | `workbook.xml` | slicer / timeline caches |
+| `<extLst>` (`x14:slicerList`) | `sheet{N}.xml` | worksheet-level slicers |
+| `<sheet>` `sheetId` / `state` | `workbook.xml` | sheet identity / visibility (slicer caches reference by `tabId`; renumbering orphans them) |
+| `styles.xml` verbatim passthrough | `xl/styles.xml` | slicer styles / timeline styles / pivot button XF (preserved verbatim when `extLst` present, otherwise rebuilt) |
+| `sheet{N}.xml` / `sharedStrings.xml` verbatim passthrough | `xl/worksheets/sheet{N}.xml` | sparse cell layout and absolute references (same condition as `styles.xml`; preserved when unmodified) |
+| `workbook.bin` / `styles.bin` / `sheet{N}.bin` verbatim passthrough | XLSB binary parts | BIFF12 pivot table / slicer host records (preserved verbatim when unmodified + structure unchanged, otherwise rebuilt) |
+
+> **XLS pivot table protection**: when a source .xls file contains pivot tables (detected via `SXVIEW` record), saving is blocked by default with a `LiteExcelException`, because the current model cannot faithfully write back or convert BIFF8 pivot tables. Set `wb.AllowFeatureLossOnSave = true` to allow saving; pivot tables are dropped and reported via the degradation callback.
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // open an xlsm containing macros

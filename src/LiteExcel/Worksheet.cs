@@ -15,6 +15,10 @@ public sealed class Worksheet
     private readonly List<List<Cell>> _grid = new();
     private readonly List<CellRange> _mergedRanges = new();
 
+    /// <summary>工作表是否被用户修改过（SetValue/Merge/Import/Clear 等）。
+    /// 打开文件时为 false；XLSB verbatim 保留路径用它判断是否可原样透传 sheetN.bin </summary>
+    internal bool IsModified { get; set; }
+
     /// <summary>工作表名 </summary>
     public string Name { get; set; } = "Sheet1";
 
@@ -32,6 +36,22 @@ public sealed class Worksheet
 
     /// <summary>行高（0-based 行索引 -> 高度，磅） </summary>
     public Dictionary<int, double>? RowHeights { get; set; }
+
+    /// <summary>
+    /// 数据区起始的原始 1-based 行号（0 = 紧凑模式，从第 1 行写）。
+    /// 打开文件时由 <see cref="SheetData.FirstRowNumber"/> 回填；写出时经 <see cref="ToSheetData"/> 透传。
+    /// 高层坐标仍 1-based 紧凑，本字段只在写出层体现前置空行补齐。
+    /// </summary>
+    public int FirstRowNumber { get; set; }
+
+    /// <summary>读取时捕获的 worksheet extLst 原始 XML（内部使用，写出时透传保留） </summary>
+    internal string? SheetExtLstXml { get; set; }
+
+    /// <summary>读取时捕获的 workbook.xml 中 sheet 元素原始 sheetId（内部使用，写出时透传保留） </summary>
+    internal string SheetId { get; set; } = "";
+
+    /// <summary>读取时捕获的 sheet 元素 state 属性（hidden / veryHidden，内部使用） </summary>
+    internal string? SheetState { get; set; }
 
     /// <summary>表头样式（写出时作用于首行） </summary>
     public CellStyle? HeaderStyle { get; set; }
@@ -113,6 +133,7 @@ public sealed class Worksheet
         if (row < 1 || column < 1)
             throw new ArgumentOutOfRangeException(nameof(row), "图片锚点行/列必须从 1 开始");
 
+        IsModified = true;
         var img = new WorksheetImage
         {
             Data = data,
@@ -140,6 +161,7 @@ public sealed class Worksheet
         if (anchor is null)
             throw new ArgumentNullException(nameof(anchor));
 
+        IsModified = true;
         var (r, c) = CellRef.Parse(anchor.TopLeftCell);
         var img = new WorksheetImage
         {
@@ -220,6 +242,7 @@ public sealed class Worksheet
     /// <summary>设置单元格值（越界自动扩展网格）。value 为 null/DBNull 时写空单元格 </summary>
     public void SetValue(int row, int column, object? value)
     {
+        IsModified = true;
         var cell = Cell(row, column);
         cell.SetValue(value);
     }
@@ -227,6 +250,7 @@ public sealed class Worksheet
     /// <summary>按 A1 地址设置单元格值 </summary>
     public void SetValue(string address, object? value)
     {
+        IsModified = true;
         var cell = Cell(address);
         cell.SetValue(value);
     }
@@ -257,6 +281,7 @@ public sealed class Worksheet
 
     private void ImportSheet(SheetData sheet, bool includeHeader)
     {
+        IsModified = true;
         _grid.Clear();
         _mergedRanges.Clear();
 
@@ -394,6 +419,7 @@ public sealed class Worksheet
         if (firstRow < 1 || firstCol < 1 || lastRow < firstRow || lastCol < firstCol)
             throw new ArgumentOutOfRangeException(nameof(firstRow), $"无效的区域坐标：({firstRow},{firstCol})-({lastRow},{lastCol})");
 
+        IsModified = true;
         var r = new CellRange(firstRow - 1, lastRow - 1, firstCol - 1, lastCol - 1);
         if (!_mergedRanges.Any(m => m.FirstRow == r.FirstRow && m.LastRow == r.LastRow && m.FirstCol == r.FirstCol && m.LastCol == r.LastCol))
             _mergedRanges.Add(r);
@@ -409,6 +435,7 @@ public sealed class Worksheet
     /// <summary>取消合并区域（A1 地址） </summary>
     public void Unmerge(string address)
     {
+        IsModified = true;
         var range = Range(address);
         for (int i = _mergedRanges.Count - 1; i >= 0; i--)
         {
@@ -448,6 +475,7 @@ public sealed class Worksheet
     internal void OnCellChanged(Cell cell)
     {
         if (!ReferenceEquals(cell.Owner, this)) return;
+        IsModified = true;
         SetCell(cell.OwnerRow, cell.OwnerCol, cell);
     }
 
@@ -475,6 +503,10 @@ public sealed class Worksheet
             RowStyles = RowStyles,
             ColumnStyles = ColumnStyles,
             RowHeights = RowHeights,
+            FirstRowNumber = FirstRowNumber,
+            SheetExtLstXml = SheetExtLstXml,
+            SheetId = SheetId,
+            SheetState = SheetState,
             ColumnWidths = ToColumnWidthsList(ColumnWidths),
             Comments = Comments,
             Validations = Validations,
@@ -503,7 +535,7 @@ public sealed class Worksheet
     }
 
     /// <summary>
-    /// P0-2: 把高层稀疏字典（key=0-based 列索引）转为低层 List&lt;double&gt;，按下标补齐，
+    /// 把高层稀疏字典（key=0-based 列索引）转为低层 List&lt;double&gt;，按下标补齐，
     /// 未设置的列填 0（哨兵=无自定义列宽，与各写入器跳过 &lt;=0 的约定一致）。
     /// 旧实现 <c>.Select(kv =&gt; kv.Value).ToList()</c> 丢弃 key 且枚举顺序无保证，导致稀疏列宽错位。
     /// </summary>
@@ -534,6 +566,10 @@ public sealed class Worksheet
             RowStyles = sheet.RowStyles,
             ColumnStyles = sheet.ColumnStyles,
             RowHeights = sheet.RowHeights,
+            FirstRowNumber = sheet.FirstRowNumber,
+            SheetExtLstXml = sheet.SheetExtLstXml,
+            SheetId = sheet.SheetId,
+            SheetState = sheet.SheetState,
             Comments = sheet.Comments,
             Validations = sheet.Validations,
             Filter = sheet.Filter,
@@ -587,6 +623,7 @@ public sealed class Worksheet
 
     private void SetRowCells(int row0, List<Cell> cells)
     {
+        IsModified = true;
         while (_grid.Count <= row0)
             _grid.Add(new List<Cell>());
         _grid[row0] = cells;

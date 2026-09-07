@@ -53,7 +53,7 @@ public sealed class Cell
 
     /// <summary>
     /// 公式表达式（如 "SUM(A1:A3)"）。与缓存值字段（<see cref="Text"/>/<see cref="Number"/> 等）分离。
-    /// P0-8：公式串不再占用 <see cref="Text"/>，避免覆盖文本公式的缓存结果值。
+    /// 公式文本独立存储，避免覆盖文本公式的缓存结果值。
     /// 兼容：旧代码设 <see cref="IsFormula"/>=true 并把公式写入 <see cref="Text"/>，写入器兼容垫片仍能读出。
     /// </summary>
     public string? Formula { get; set; }

@@ -55,4 +55,25 @@ public sealed class SheetData
 
     /// <summary>读取时捕获的 sheet tableParts rel id 列表（内部使用，写出时透传保留） </summary>
     internal List<string>? TablesRawRelIds { get; set; }
+
+    /// <summary>
+    /// 数据区起始的原始 1-based 行号（含表头 / 数据首行在内）。
+    /// 默认 0 = 紧凑模式（行为同现状：首行从第 1 行写，前导空行被压缩）。
+    /// &gt;0 时表示源文件首个实际行的原始行号；写出时第 1..FirstRowNumber-1 行补齐空行，
+    /// 避免数据整体上移、与会话表/合并区等绝对行号引用错位。
+    /// Rows / RowHeights / RowStyles 的 key 仍为 0-based、对应 Rows，不受本字段影响。
+    /// </summary>
+    public int FirstRowNumber { get; set; }
+
+    /// <summary>读取时捕获的 worksheet extLst 原始 XML（含 x14:slicerList 等），写出时透传保留。
+    /// 内部使用：r:id 在写出时按关系重编号映射改写 </summary>
+    internal string? SheetExtLstXml { get; set; }
+
+    /// <summary>读取时捕获的 workbook.xml 中 &lt;sheet&gt; 元素原始 sheetId 属性值。
+    /// 切片器缓存等扩展部件以 tabId 引用工作表，sheetId 必须与原文件一致，否则切片器缓存无法链接到工作表。
+    /// 默认空字符串 = 新建工作簿场景，写出时按 1-based 位置序号分配。</summary>
+    internal string SheetId { get; set; } = "";
+
+    /// <summary>读取时捕获的 &lt;sheet&gt; 元素 state 属性（hidden / veryHidden）；默认 null = 可见。</summary>
+    internal string? SheetState { get; set; }
 }

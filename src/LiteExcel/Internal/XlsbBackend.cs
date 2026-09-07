@@ -714,7 +714,7 @@ internal static class XlsbBackend
         var text = Biff.FormulaParser.Parse(rpn, biff12: true);
         if (!string.IsNullOrEmpty(text))
         {
-            // P0-8: 公式串放入 Formula，不覆盖缓存值
+            // 将公式文本存入 Formula，不覆盖缓存值。
             cell.IsFormula = true;
             cell.Formula = text;
         }

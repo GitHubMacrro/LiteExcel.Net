@@ -83,7 +83,7 @@ internal static class XlsWriter
         stream.Write(cfb, 0, cfb.Length);
     }
 
-    /// <summary>写出 xls 时对静默丢失的能力逐项上报（P0-4/15/16 显式化 + NamedRanges/DocumentProperties）。
+    /// <summary>写出 xls 时逐项上报不支持的能力。
     /// documentProperties / namedRanges 均为工作簿级能力，SheetName 为 null。</summary>
     private static void ReportDegradations(IReadOnlyList<SheetData> sheets,
         IReadOnlyList<NamedRange>? names, WorkbookProperties? properties,

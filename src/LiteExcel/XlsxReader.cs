@@ -168,9 +168,8 @@ public static partial class XlsxReader
             throw new ArgumentOutOfRangeException(nameof(sheetIndex), $"工作表索引超出范围：{sheetIndex}（共 {sheets.Count} 张表）");
 
         var info = sheets[sheetIndex];
-        return ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader);
+        return ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader, info.SheetId, info.State);
     }
-
     /// <summary>按名称读取单表 </summary>
     public static SheetData Read(Stream stream, string sheetName, bool firstRowIsHeader = true)
     {
@@ -182,7 +181,7 @@ public static partial class XlsxReader
         var info = sheets.FirstOrDefault(s => s.Name == sheetName)
             ?? throw new LiteExcelException($"找不到工作表：{sheetName}（共有 {sheets.Count} 张表）");
 
-        return ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader);
+        return ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader, info.SheetId, info.State);
     }
 
     /// <summary>读取所有工作表 </summary>
@@ -196,7 +195,7 @@ public static partial class XlsxReader
         var result = new List<SheetData>(sheets.Count);
         foreach (var info in sheets)
         {
-            result.Add(ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader: true));
+            result.Add(ReadWorksheet(zip, info.Path, info.Name, shared, styles, firstRowIsHeader: true, sheetId: info.SheetId, sheetState: info.State));
         }
         ReadInCellImages(zip, sheets, result);
         return result;
@@ -415,6 +414,8 @@ public static partial class XlsxReader
     {
         public string Name = "";
         public string Path = "";
+        public string SheetId = "";
+        public string? State;
     }
 
     private static List<string> ReadSharedStrings(ZipArchive zip)
@@ -497,12 +498,27 @@ public static partial class XlsxReader
             }
         }
 
-        // P0-6: 捕获 bookViews / definedNames 原始 XML（保存时原样回写，避免静默丢失命名区域与窗口视图）
+        // 捕获 bookViews / definedNames 原始 XML，保存时按 OOXML 顺序回写。
         s_bookViewsXml = workbook.Element(ns + "bookViews")?.ToString();
         s_definedNamesXml = workbook.Element(ns + "definedNames")?.ToString();
-        // P0-27/P0-29: 捕获 pivotCaches / externalReferences 原始 XML（保存时重映射 rel Id 后回写）
+        // 捕获 pivotCaches / externalReferences 原始 XML，保存时同步重映射关系 ID。
         s_pivotCachesXml = workbook.Element(ns + "pivotCaches")?.ToString(SaveOptions.DisableFormatting);
         s_externalReferencesXml = workbook.Element(ns + "externalReferences")?.ToString(SaveOptions.DisableFormatting);
+        // 捕获 workbook extLst（含 x14/x15 slicerCaches 等），保存时重映射 rel Id 后回写。
+        // 直接取原始字节文本以保留命名空间继承（XElement.ToString 会引入冗余 xmlns 声明，Excel 对切片器缓存的命名空间敏感）。
+        s_workbookExtLstXml = null;
+        using (var rawStream = wbEntry.Open())
+        using (var rawReader = new StreamReader(rawStream, System.Text.Encoding.UTF8))
+        {
+            var raw = rawReader.ReadToEnd();
+            int start = raw.IndexOf("<extLst>", StringComparison.Ordinal);
+            if (start >= 0)
+            {
+                int end = raw.IndexOf("</extLst>", start, StringComparison.Ordinal);
+                if (end >= 0)
+                    s_workbookExtLstXml = raw.Substring(start, end - start + "</extLst>".Length);
+            }
+        }
 
         // 捕获 workbookProtection（工作簿保护：锁结构/窗口 + 可选密码）
         s_workbookProtection = null;
@@ -551,6 +567,10 @@ public static partial class XlsxReader
         {
             var name = s.Attribute("name")?.Value ?? "";
             var relId = s.Attributes().FirstOrDefault(a => a.Name.LocalName == "id")?.Value ?? "";
+            // 捕获原始 sheetId（切片器缓存等扩展部件以 tabId 引用工作表，sheetId 必须与原文件一致，
+            // 否则切片器缓存无法链接到工作表 → Excel COM 报告 SlicerCaches.Count=0）。
+            var sheetId = s.Attribute("sheetId")?.Value ?? "";
+            var state = s.Attribute("state")?.Value;
 
             string sheetPath = "";
             if (relMap.TryGetValue(relId, out var target))
@@ -560,7 +580,7 @@ public static partial class XlsxReader
                 else sheetPath = target;
             }
 
-            result.Add(new SheetInfo { Name = name, Path = sheetPath });
+            result.Add(new SheetInfo { Name = name, Path = sheetPath, SheetId = sheetId, State = state });
         }
 
         // 把 date1904 标记附加到每个 SheetInfo... 用静态字段更简单
@@ -603,19 +623,22 @@ public static partial class XlsxReader
         return result;
     }
 
-    // P0-6: workbook.xml 中 bookViews / definedNames 的原始 XML 快照
+    // workbook.xml 中 bookViews / definedNames 的原始 XML 快照
     [ThreadStatic]
     private static string? s_bookViewsXml;
 
     [ThreadStatic]
     private static string? s_definedNamesXml;
 
-    // P0-27/P0-29: workbook.xml 中 pivotCaches / externalReferences 的原始 XML 快照
+    // workbook.xml 中 pivotCaches / externalReferences 的原始 XML 快照
     [ThreadStatic]
     private static string? s_pivotCachesXml;
 
     [ThreadStatic]
     private static string? s_externalReferencesXml;
+
+    [ThreadStatic]
+    private static string? s_workbookExtLstXml;
 
     // 最近一次 ReadWorkbook 捕获的 workbookProtection（工作簿保护），供 OpenCore 取用
     [ThreadStatic]
@@ -633,25 +656,30 @@ public static partial class XlsxReader
     /// <summary>最近一次 ReadWorkbook 捕获的 fileSharing（修改密码）信息 </summary>
     internal static Internal.Encryption.FileSharingInfo? FileSharingSnapshot => s_fileSharingHash;
 
-    /// <summary>P0-6: 最近一次 ReadWorkbook 捕获的 bookViews 原始 XML </summary>
+    /// <summary>最近一次 ReadWorkbook 捕获的 bookViews 原始 XML。</summary>
     internal static string? BookViewsXmlSnapshot => s_bookViewsXml;
 
-    /// <summary>P0-6: 最近一次 ReadWorkbook 捕获的 definedNames 原始 XML </summary>
+    /// <summary>最近一次 ReadWorkbook 捕获的 definedNames 原始 XML。</summary>
     internal static string? DefinedNamesXmlSnapshot => s_definedNamesXml;
 
-    /// <summary>P0-27: 最近一次 ReadWorkbook 捕获的 pivotCaches 原始 XML </summary>
+    /// <summary>最近一次 ReadWorkbook 捕获的 pivotCaches 原始 XML。</summary>
     internal static string? PivotCachesXmlSnapshot => s_pivotCachesXml;
 
-    /// <summary>P0-29: 最近一次 ReadWorkbook 捕获的 externalReferences 原始 XML </summary>
+    /// <summary>最近一次 ReadWorkbook 捕获的 externalReferences 原始 XML。</summary>
     internal static string? ExternalReferencesXmlSnapshot => s_externalReferencesXml;
 
+    /// <summary>最近一次 ReadWorkbook 捕获的 workbook extLst 原始 XML（含 slicerCaches 等） </summary>
+    internal static string? WorkbookExtLstXmlSnapshot => s_workbookExtLstXml;
+
     private static SheetData ReadWorksheet(ZipArchive zip, string sheetPath, string sheetName,
-        List<string> shared, StylesheetInfo styles, bool firstRowIsHeader)
+        List<string> shared, StylesheetInfo styles, bool firstRowIsHeader, string sheetId = "", string? sheetState = null)
     {
         var entry = zip.GetEntry(sheetPath)
             ?? throw new LiteExcelException($"缺少工作表文件: {sheetPath}");
 
         var sheet = new SheetData { SheetName = sheetName };
+        sheet.SheetId = sheetId;
+        sheet.SheetState = sheetState;
         var hiddenRowNumbers = new HashSet<int>(); // 1-based XML row numbers that are hidden
 
         using var reader = XmlReader.Create(entry.Open(), XmlSettings);
@@ -698,7 +726,7 @@ public static partial class XlsxReader
             }
             else if (reader.LocalName == "col")
             {
-                // P0-1: 回填列宽。仅记录带 customWidth 的用户自定义列，跳过默认宽度的 catch-all 条目。
+            // 仅记录带 customWidth 的用户自定义列，跳过默认宽度条目。
                 // 0 哨兵表示"无自定义列宽"，与各写入器（跳过 <=0）的既有约定一致。
                 var minAttr = reader.GetAttribute("min");
                 var maxAttr = reader.GetAttribute("max");
@@ -731,6 +759,11 @@ public static partial class XlsxReader
                 var row = ParseRow(sub, shared, styles);
                 if (row is null) continue;
 
+                // 记录数据区起始的原始 1-based 行号（首个有效行）。Excel 通常带 r 属性；
+                // 罕见缺失时回退为 1（紧凑首行）。
+                if (sheet.FirstRowNumber == 0)
+                    sheet.FirstRowNumber = xmlRowNum > 0 ? xmlRowNum : 1;
+
                 if (isHidden)
                     hiddenRowNumbers.Add(xmlRowNum);
 
@@ -762,7 +795,9 @@ public static partial class XlsxReader
                     {
                         var (r1, c1) = CellRef.Parse(parts[0]);
                         var (r2, c2) = CellRef.Parse(parts[1]);
-                        int headerOffset = sheet.Headers.Count > 0 ? 1 : 0;
+                        // MergedRanges 以 Rows（数据行）0-based 存储：绝对行号 r（CellRef.Parse 已 0-based）减
+                        // 表头偏移（有 Headers 则 +1，表头独占一行不在 Rows 内）和数据区起始偏移（FirstRowNumber-1）。
+                        int headerOffset = (sheet.Headers.Count > 0 ? 1 : 0) + (sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber - 1 : 0);
                         sheet.MergedRanges.Add(new CellRange(
                             Math.Min(r1, r2) - headerOffset, Math.Max(r1, r2) - headerOffset,
                             Math.Min(c1, c2), Math.Max(c1, c2)));
@@ -803,12 +838,25 @@ public static partial class XlsxReader
                 if (!string.IsNullOrEmpty(rid))
                     (sheet.TablesRawRelIds ??= new List<string>()).Add(rid);
             }
+            else if (reader.LocalName == "extLst")
+            {
+                // 捕获 worksheet extLst 原始 XML（含 x14:slicerList 等），保存时原样回写。
+                // r:id 在写出时按 sheet rels 重编号映射改写。
+                // 去除 ReadOuterXml 引入的冗余命名空间声明（r 与默认命名空间在 worksheet 根已继承），
+                // Excel 对切片器缓存的命名空间继承敏感。
+                var outerXml = reader.ReadOuterXml();
+                sheet.SheetExtLstXml = System.Text.RegularExpressions.Regex.Replace(
+                    outerXml,
+                    @" xmlns(:r)?=""http://schemas\.(openxmlformats\.org/officeDocument/2006/relationships|openxmlformats\.org/spreadsheetml/2006/main)""",
+                    "");
+            }
         }
 
         // Convert hidden XML row numbers to 0-based data row indices
         if (hiddenRowNumbers.Count > 0 && sheet.Filter is not null)
         {
-            int headerOffset = sheet.Headers.Count > 0 ? 1 : 0;
+            // 隐藏行同样按 Rows（数据行）0-based 换算：表头偏移 + 数据区起始偏移（FirstRowNumber-1）
+            int headerOffset = (sheet.Headers.Count > 0 ? 1 : 0) + (sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber - 1 : 0);
             foreach (var xmlRowNum in hiddenRowNumbers)
             {
                 int dataRowIdx = xmlRowNum - 1 - headerOffset;
@@ -1224,7 +1272,7 @@ public static partial class XlsxReader
             if (img is null) continue;
 
             img.Placement = ImagePlacement.Floating;
-            // P0-28: 标记来源为保留的 drawing，保存时写入器跳过（drawing 部件已按保真透传含该图片）
+                    // 标记为保留部件中的图片，写出时避免重复添加。
             img.FromPreservedDrawing = true;
             sheet.Images ??= new List<WorksheetImage>();
             sheet.Images.Add(img);
@@ -1501,7 +1549,7 @@ public static partial class XlsxReader
                 var cell = ConvertCellValue(raw, t, sAttr, shared, styles);
                 if (hasFormula)
                 {
-                    // P0-8: 公式串放入 Formula，不覆盖缓存值（Text/Number/Date/Boolean）
+                    // 将公式文本存入 Formula，不覆盖缓存值。
                     cell.IsFormula = true;
                     cell.Formula = formula;
                 }

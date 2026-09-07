@@ -88,6 +88,7 @@ public sealed class ExcelRange : IEnumerable<Cell>
     /// <summary>清空区域内所有单元格的值 </summary>
     public void Clear()
     {
+        _sheet.IsModified = true;
         for (int r = FirstRow; r <= LastRow; r++)
             for (int c = FirstCol; c <= LastCol; c++)
                 _sheet.Cell(r, c).SetValue(null);

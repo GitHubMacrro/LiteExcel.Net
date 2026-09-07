@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- **切片器在打开再保存后消失**：`workbook.xml` 的 `<extLst>`（含 `x14:slicerCaches`）与工作表 `<extLst>`（含 `x14:slicerList`）被丢弃，切片器缓存与切片器部件成孤儿，Excel COM 报告 `SlicerCaches` 为空。改为原样捕获并按 OOXML 全序回写，关系编号重排时同步重映射 `r:id`。
+- **工作表原始起始行号在打开再保存后丢失**：数据从非首行起的文件（如第 3 行起，配合会话表/透视表的绝对行号引用），保存后整体上移到第 1 行，透视表 `<location>` 与合并区域等绝对引用随之错位。改为记录首个实际行的原始行号，写出时补齐前导空行、合并区域与隐藏行按绝对行号换算。
+- **工作表 `sheetId` 被重排为位置序号**：切片器缓存等扩展以 `tabId` 引用工作表 `sheetId`，重排为 1-based 位置序号会导致切片器缓存无法链接到工作表。改为原样回写 `<sheet>` 元素的 `sheetId` 与 `state` 属性。
 - **图表在打开再保存后消失**：保留的绘图部件（图表 / 形状）没有配套新增图片时，`sheet{N}.xml` 不写 `<drawing>` 元素，工作表级关系随之悬空，Excel 判定该表无绘图，图表连同图形一并不再显示。改为「本次有新图片 **或** 保留的工作表关系已有绘图关联」时都写出 `<drawing>`；关系编号被重排时同步改写该元素引用的 Id。
 - **含透视表的文件打开再保存后 Excel 无法打开**：`workbook.xml` 丢失 `<pivotCaches>`，透视表缓存定义部件虽在包内但无从引用。改为原样回写并按 OOXML `CT_Workbook` 全序置于 `calcPr` 之后；关系编号重排时同步重映射 `r:id`。
 - **跨工作簿引用在打开再保存后失效**：`workbook.xml` 丢失 `<externalReferences>`，外部链接部件成孤儿，跨工作簿公式的缓存值与链接一起失效。改为原样回写并置于 `sheets` 之后、`definedNames` 之前，同步重映射 `r:id`。
@@ -13,6 +16,12 @@
 ### Changed
 
 - **读回的浮动图片属只保真层级**：`Worksheet.Images` 中经打开回填的项仅供查看（尺寸、锚点、字节），修改其属性不会影响保存结果，图片本身随绘图部件原样透传。调用方通过 `AddImage` 新增的图片不受影响。
+
+### Added
+
+- **`Workbook.AllowFeatureLossOnSave`**：源 XLS 文件包含透视表时默认阻止保存（抛 `LiteExcelException`），因为当前模型无法保真写回或转换 BIFF8 透视表，保存会永久删除透视表。设为 `true` 后允许保存，透视表等不可保真能力经降级回调（`OnDegradation`）上报。
+- **XLSB 原样保留**：打开含透视表/切片器的 .xlsb 并直接保存（未修改、结构未变）时，`workbook.bin` / `styles.bin` / `sheet{N}.bin` 原样写出而非重建，保留 BIFF12 透视表/切片器宿主记录与扩展样式。此前重建会丢失宿主记录导致 Excel 提示删除 `/xl/pivotTables/pivotTable1.bin`。
+- **XLSX/XLSM 扩展样式原样保留**：打开含 `slicerStyles` / `timelineStyles` / `pivotButton` XF 的 .xlsx/.xlsm 并直接保存时，`styles.xml` / `sharedStrings.xml` / `sheet{N}.xml` 原样写出而非重建，保留切片器/透视表视觉样式与稀疏单元格布局。此前重建会丢失 `extLst` 扩展样式并膨胀 `sheet{N}.xml`（空单元格全量写出）。
 
 ## [2.4.72]
 

@@ -29,17 +29,32 @@ internal sealed class OoxmlPreservedParts
     /// <summary>工作簿宿主的 VBA 代码名（workbookPr@codeName），保存时写回重建的 workbook.xml，保持与保留的 vbaProject 绑定 </summary>
     public string? WorkbookCodeName { get; set; }
 
-    /// <summary>P0-6: 打开时捕获的 workbook.xml 中 bookViews 元素原始 XML，保存时原样回写（schema 位于 sheets 之前） </summary>
+    /// <summary>打开时捕获的 workbook.xml 中 bookViews 元素原始 XML，保存时按 OOXML 顺序回写。</summary>
     public string? BookViewsXml { get; set; }
 
-    /// <summary>P0-6: 打开时捕获的 workbook.xml 中 definedNames 元素原始 XML，保存时原样回写（schema 位于 sheets 之后） </summary>
+    /// <summary>打开时捕获的 workbook.xml 中 definedNames 元素原始 XML，保存时按 OOXML 顺序回写。</summary>
     public string? DefinedNamesXml { get; set; }
 
-    /// <summary>P0-27: 打开时捕获的 workbook.xml 中 pivotCaches 元素原始 XML，保存时按新 rel Id 重映射后回写（schema 位于 calcPr 之后） </summary>
+    /// <summary>打开时捕获的 workbook.xml 中 pivotCaches 元素原始 XML，保存时同步重映射关系 ID 后回写。</summary>
     public string? PivotCachesXml { get; set; }
 
-    /// <summary>P0-29: 打开时捕获的 workbook.xml 中 externalReferences 元素原始 XML，保存时按新 rel Id 重映射后回写（schema 位于 sheets 之后、definedNames 之前） </summary>
+    /// <summary>打开时捕获的 workbook.xml 中 externalReferences 元素原始 XML，保存时同步重映射关系 ID 后回写。</summary>
     public string? ExternalReferencesXml { get; set; }
+
+    /// <summary>打开时捕获的 workbook.xml 中 extLst 元素原始 XML（含 x14/x15 slicerCaches / timelineCaches 等），
+    /// 保存时按新 rel Id 重映射后回写（schema 位于 calcPr 之后、</workbook> 之前）。切片器/日程表缓存引用住在其中。</summary>
+    public string? WorkbookExtLstXml { get; set; }
+
+    /// <summary>XLSB verbatim 保留：原始 workbook.bin / styles.bin / sharedStrings.bin / sheetN.bin 字节。
+    /// 当工作簿结构不变且无单元格修改时，XlsbWriter 原样写出这些字节而非重建，
+    /// 保留透视表/切片器等 BIFF12 宿主记录。key = 包内路径（如 "xl/workbook.bin"）</summary>
+    public Dictionary<string, byte[]>? VerbatimBinaries { get; set; }
+
+    /// <summary>XLSX verbatim 保留：原始 styles.xml / sharedStrings.xml / sheetN.xml 字节。
+    /// 当工作簿结构不变且无单元格修改时，XlsxWriter 原样写出这些字节而非重建，
+    /// 保留 slicerStyles / timelineStyles / pivotButton XF 等扩展样式。
+    /// key = 包内路径（如 "xl/styles.xml"）</summary>
+    public Dictionary<string, byte[]>? VerbatimXmlParts { get; set; }
 
     /// <summary>捕获 zip 中写入器不重建的部件与 rels。sheetCount 用于排除所有工作表/批注重建条目。
     /// <paramref name="binary"/> = true 时按 xlsb 容器布局排除（.bin 工作表/工作簿/styles 等）</summary>
@@ -47,6 +62,11 @@ internal sealed class OoxmlPreservedParts
     {
         var preserved = new OoxmlPreservedParts();
         var rebuilt = BuildRebuiltEntries(sheetCount, binary);
+
+        if (binary)
+            preserved.VerbatimBinaries = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        else
+            preserved.VerbatimXmlParts = new Dictionary<string, byte[]>(StringComparer.Ordinal);
 
         foreach (var entry in zip.Entries)
         {
@@ -58,10 +78,24 @@ internal sealed class OoxmlPreservedParts
                 continue;
             }
 
-            // 需要合并的 rels（含重建的根/工作簿/工作表 rels）先捕获，供保存时合并
+            // 捕获根、工作簿和工作表关系，供保存时合并。
             if (IsMergeRelsPath(name, binary))
             {
                 preserved.Rels[name] = ReadText(entry);
+                continue;
+            }
+
+            // 捕获写入器会重建的 XLSB 二进制部件。
+            if (binary && rebuilt.Contains(name))
+            {
+                preserved.VerbatimBinaries![name] = ReadBytes(entry);
+                continue;
+            }
+
+            // 捕获写入器会重建的 XLSX XML 部件。
+            if (!binary && rebuilt.Contains(name))
+            {
+                preserved.VerbatimXmlParts![name] = ReadBytes(entry);
                 continue;
             }
 
@@ -110,7 +144,7 @@ internal sealed class OoxmlPreservedParts
             "xl/_rels/workbook.xml.rels",
             "xl/sharedStrings.xml",
             "xl/styles.xml",
-            "xl/calcChain.xml",  // P0-12: 陈旧 calcChain 不透传，由 Excel 重建（配合 fullCalcOnLoad）
+            "xl/calcChain.xml",  // 陈旧计算链不透传，由 Excel 在打开时重建。
             "docProps/core.xml",
             "docProps/app.xml",
         };

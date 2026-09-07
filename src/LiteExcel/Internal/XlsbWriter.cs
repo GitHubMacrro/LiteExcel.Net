@@ -109,61 +109,85 @@ internal static class XlsbWriter
 
     /// <summary>写出 .xlsb 工作簿到流。vbaProject 为源工作簿捕获的宏工程字节（可为 null）；workbookCodeName 为宿主代码名（可为 null）。
     /// <paramref name="preserved"/> 为打开时捕获的未重建 OOXML 部件（图表/透视表/主题/绘图等），保存时透传；
-    /// <paramref name="properties"/> 为文档属性，非 null 时写出 docProps。</summary>
+    /// <paramref name="properties"/> 为文档属性，非 null 时写出 docProps。
+    /// <paramref name="verbatim"/> = true 时原样保留 workbook.bin / styles.bin / sharedStrings.bin / sheetN.bin 及其 rels，
+    /// 不重建（保留透视表/切片器等 BIFF12 宿主记录）。仅当工作簿结构不变且无单元格修改时由调用方启用。</summary>
     public static void Write(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject = null, string? workbookCodeName = null, bool date1904 = false,
         string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false,
         Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Xlsb,
         OoxmlPreservedParts? preserved = null, WorkbookProperties? properties = null,
-        IReadOnlyList<NamedRange>? names = null)
+        IReadOnlyList<NamedRange>? names = null, bool verbatim = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
 
+        // 原样模式需要完整的原始二进制部件。
+        verbatim = verbatim && preserved?.VerbatimBinaries is not null
+            && preserved.VerbatimBinaries.ContainsKey("xl/workbook.bin")
+            && preserved.VerbatimBinaries.ContainsKey("xl/styles.bin");
+
         ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
 
-        var sst = new List<string>();
-        var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        var cellXfs = new List<(int Ifmt, string? FmtCode)>();
-        var fmtCodeToXf = new Dictionary<string, int>(StringComparer.Ordinal);
-        cellXfs.Add((0, null)); // 索引 0 = General 默认样式
-
-        int GetXf(string? fmtCode)
+        if (!verbatim)
         {
-            if (string.IsNullOrEmpty(fmtCode)) return DefaultCellXf;
-            if (fmtCodeToXf.TryGetValue(fmtCode, out var idx)) return idx;
-            idx = cellXfs.Count;
-            fmtCodeToXf[fmtCode] = idx;
-            cellXfs.Add((ResolveFmtId(fmtCode), fmtCode));
-            return idx;
-        }
+            var sst = new List<string>();
+            var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+            var cellXfs = new List<(int Ifmt, string? FmtCode)>();
+            var fmtCodeToXf = new Dictionary<string, int>(StringComparer.Ordinal);
+            cellXfs.Add((0, null)); // 索引 0 = General 默认样式
 
-        void ScanCell(Cell cell)
-        {
-            if (cell.IsEmpty) return;
-            switch (cell.Type)
+            int GetXf(string? fmtCode)
             {
-                case CellType.Text:
-                    if (cell.Text is not null && !sstIndex.ContainsKey(cell.Text))
-                    {
-                        sstIndex[cell.Text] = sst.Count;
-                        sst.Add(cell.Text);
-                    }
-                    break;
-                case CellType.Number:
-                case CellType.Date:
-                    GetXf(cell.NumberFormat);
-                    break;
+                if (string.IsNullOrEmpty(fmtCode)) return DefaultCellXf;
+                if (fmtCodeToXf.TryGetValue(fmtCode, out var idx)) return idx;
+                idx = cellXfs.Count;
+                fmtCodeToXf[fmtCode] = idx;
+                cellXfs.Add((ResolveFmtId(fmtCode), fmtCode));
+                return idx;
             }
+
+            void ScanCell(Cell cell)
+            {
+                if (cell.IsEmpty) return;
+                switch (cell.Type)
+                {
+                    case CellType.Text:
+                        if (cell.Text is not null && !sstIndex.ContainsKey(cell.Text))
+                        {
+                            sstIndex[cell.Text] = sst.Count;
+                            sst.Add(cell.Text);
+                        }
+                        break;
+                    case CellType.Number:
+                    case CellType.Date:
+                        GetXf(cell.NumberFormat);
+                        break;
+                }
+            }
+
+            foreach (var sheet in sheets)
+                foreach (var row in sheet.Rows)
+                    foreach (var cell in row)
+                        ScanCell(cell);
+
+            WriteRebuilt(stream, sheets, vbaProject, workbookCodeName, date1904,
+                fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended,
+                preserved, properties, sst, sstIndex, cellXfs, GetXf);
         }
+        else
+        {
+            WriteVerbatim(stream, sheets, vbaProject, preserved, properties);
+        }
+    }
 
-        foreach (var sheet in sheets)
-            foreach (var row in sheet.Rows)
-                foreach (var cell in row)
-                    ScanCell(cell);
-
+    private static void WriteRebuilt(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject, string? workbookCodeName, bool date1904,
+        string? fileSharingHash, string? fileSharingSalt, int? fileSharingSpin, bool fileSharingReadOnlyRecommended,
+        OoxmlPreservedParts? preserved, WorkbookProperties? properties,
+        List<string> sst, Dictionary<string, int> sstIndex, List<(int Ifmt, string? FmtCode)> cellXfs, Func<string?, int> GetXf)
+    {
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
-        // P0-14(xlsb): 先写保留部件（blob），写入器重建的条目在 rebuilt 集合中，避免重名
+        // 写入保留部件，跳过由写入器重建的条目。
         if (preserved is not null)
         {
             var rebuilt = OoxmlPreservedParts.BuildRebuiltEntries(sheets.Count, binary: true);
@@ -200,6 +224,70 @@ internal static class XlsbWriter
         }
     }
 
+    /// <summary>XLSB 原样写出：直接保留 workbook.bin / styles.bin / sheetN.bin 等原始二进制部件。
+    /// 保留透视表/切片器等 BIFF12 宿主记录。仅当工作簿结构不变且无修改时调用。</summary>
+    private static void WriteVerbatim(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject,
+        OoxmlPreservedParts? preserved, WorkbookProperties? properties)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+        var vb = preserved!.VerbatimBinaries!;
+
+        // 写入非重建部件，例如透视表、切片器、缓存、绘图和主题。
+        var rebuilt = OoxmlPreservedParts.BuildRebuiltEntries(sheets.Count, binary: true);
+        if (preserved.Parts.Count > 0)
+        {
+            foreach (var kv in preserved.Parts)
+            {
+                if (rebuilt.Contains(kv.Key)) continue;
+                WriteEntry(zip, kv.Key, kv.Value);
+            }
+        }
+
+        // Content_Types / root rels（重建，但已合并保留类型声明）
+        bool hasSst = vb.ContainsKey("xl/sharedStrings.bin");
+        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, hasSst, vbaProject is not null, properties is not null, preserved));
+        WriteEntry(zip, "_rels/.rels", RootRelsXml(properties is not null));
+
+        // 原样写出 workbook.bin。
+        if (vb.TryGetValue("xl/workbook.bin", out var wbBin))
+            WriteEntry(zip, "xl/workbook.bin", wbBin);
+
+        // 原样写出 workbook.bin.rels，保留原关系 ID。
+        if (preserved.Rels.TryGetValue("xl/_rels/workbook.bin.rels", out var wbRels))
+            WriteEntry(zip, "xl/_rels/workbook.bin.rels", wbRels);
+
+        // 原样写出 styles.bin。
+        if (vb.TryGetValue("xl/styles.bin", out var styBin))
+            WriteEntry(zip, "xl/styles.bin", styBin);
+
+        // 写出 VBA 部件。
+        if (vbaProject is not null && vbaProject.Length > 0)
+            WriteEntry(zip, "xl/vbaProject.bin", vbaProject);
+
+        // 原样写出 sharedStrings.bin（若存在）。
+        if (vb.TryGetValue("xl/sharedStrings.bin", out var sstBin))
+            WriteEntry(zip, "xl/sharedStrings.bin", sstBin);
+
+        // docProps（重建，可能用户修改了属性）
+        if (properties is not null)
+        {
+            WriteEntry(zip, "docProps/core.xml", XlsxWriter.CorePropsXml(properties));
+            WriteEntry(zip, "docProps/app.xml", XlsxWriter.AppPropsXml(properties, sheets));
+        }
+
+        // 原样写出各工作表部件及其关系。
+        for (int i = 0; i < sheets.Count; i++)
+        {
+            var sheetPath = $"xl/worksheets/sheet{i + 1}.bin";
+            if (vb.TryGetValue(sheetPath, out var sheetBin))
+                WriteEntry(zip, sheetPath, sheetBin);
+
+            var relsPath = $"xl/worksheets/_rels/sheet{i + 1}.bin.rels";
+            if (preserved.Rels.TryGetValue(relsPath, out var sheetRels))
+                WriteEntry(zip, relsPath, sheetRels);
+        }
+    }
+
     /// <summary>合并工作表级保留 rels（图表/透视表等）与重建的超链接 rels </summary>
     private static string? BuildSheetRelsXml(int sheetNumber, List<string> extLinks, OoxmlPreservedParts? preserved)
     {
@@ -221,7 +309,7 @@ internal static class XlsbWriter
         return XlsxWriter.MergeRelsXml(original, "xl/worksheets", new HashSet<string>(StringComparer.Ordinal), rebuilt);
     }
 
-    /// <summary>写出 xlsb 时对静默丢失的能力逐项上报（P0-4/15/16 显式化 + NamedRanges/DocumentProperties）。
+    /// <summary>写出 xlsb 时逐项上报不支持的能力。
     /// namedRanges / documentProperties 为工作簿级，SheetName 为 null。</summary>
     private static void ReportDegradations(IReadOnlyList<SheetData> sheets,
         IReadOnlyList<NamedRange>? names, WorkbookProperties? properties,
@@ -322,7 +410,7 @@ internal static class XlsbWriter
             sb.Append("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
             sb.Append("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
         }
-        // P0-14(xlsb): 合并保留的 content types 声明（图表/透视表/主题等）
+        // 合并保留部件的 content types 声明。
         if (preserved is not null)
         {
             foreach (var (ext, ct) in preserved.DefaultTypes)
