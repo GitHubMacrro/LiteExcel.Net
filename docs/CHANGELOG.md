@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **统一读取门面扩展到 xls/xlsb**：`Excel.Read<T>`、`Excel.ReadSheet`、`Excel.ReadAsDataTable` 现支持按路径自动路由 xlsx/xlsm/xlsb/xls；从流读取时新增 `ExcelFormat` 显式重载。`Excel.StreamRows` 和 `Excel.EnumerateRows` 同样扩展到 xls/xlsb（path 和显式格式 Stream 重载）。CSV 仍不支持流式读取。
+- **XLSB BIFF12 记录级流式读取**：`XlsbRowStreamReader` 逐条读取 BIFF12 记录，遇到 `BrtRowHdr` 时 yield 前一行，支持所有单元格记录类型（Blank/Rk/Error/Bool/Real/St/Isst + Short 变体 + 公式缓存值）。工作表数据不再驻留内存。
+- **XLS BIFF8 记录级流式读取**：`XlsRowStreamReader` 预扫描全局段后从目标表 BOF 逐条读取 BIFF8 记录按行 yield，支持 Number/Rk/MulRk/LabelSst/Label/BoolErr/Formula 全部单元格记录。
+- **XLSB 自动筛选范围读写**：读取 `BrtBeginAFilter` 提取筛选范围到 `SheetData.Filter.Range`；写出时在 `EndSheetData` 后写出范围记录。复杂筛选条件降级上报。
+- **XLSB 批注读取**：解析 `BrtBeginComment` + `BrtCommentText` 提取批注到 `SheetData.Comments`。写出仍降级上报（未修改时 verbatim 保留）。
+- **XLSB 高级部件工作表级保护**：含透视表/切片器/时间线的 XLSB，仅当修改了高级部件所在工作表时默认阻止保存；修改无关工作表允许保存。此前为工作簿级判断，会误阻无关工作表。
+
+### Changed
+
+- **XLSB 降级消息更新**：批注降级消息明确说明读取已支持、写出未实现、未修改时 verbatim 保留；自动筛选降级仅对复杂条件触发，范围已正常写出。
+
 ## [2.4.73]
 
 ### Fixed

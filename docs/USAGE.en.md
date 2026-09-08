@@ -2652,7 +2652,9 @@ The table below lists the support status of each capability across formats. Capa
 | Merged cells | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Auto filter | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Row height / Column width | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Comments | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Auto filter | ☑️ | ☑️ | range read/write | ❌ | ❌ |
+| Row height / Column width | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Comments | ☑️ | ☑️ | read | ❌ | ❌ |
 | Data validation | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Hyperlinks | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Freeze panes | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
@@ -2665,7 +2667,7 @@ The table below lists the support status of each capability across formats. Capa
 | Formulas (write) | ☑️ | ☑️ | cached value | cached value | ❌ |
 | Formulas (read) | ☑️ | ☑️ | restored when parseable | restored when parseable | ❌ |
 | Charts / PivotTables | passthrough | passthrough | passthrough | ❌ | ❌ |
-| Streaming read (StreamRows) | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Streaming read (StreamRows / EnumerateRows) | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Streaming write (XlsxStreamWriter) | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Append | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Progress callback (ReadWithProgress) | ☑️ | ☑️ | ❌ | ❌ | ❌ |
@@ -3074,7 +3076,9 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 ```
 
 - **In-memory model**: the `Workbook` returned by `Excel.Open` / `Excel.Create` is an in-memory model; the entire workbook is loaded into memory. For very large files use the streaming APIs instead of `Excel.Open`.
-- **Streaming scope**: `Excel.CreateWriter` / `Excel.StreamRows` / `Excel.Append` support xlsx / xlsm only (see 21.1).
+- **Streaming write scope**: `Excel.CreateWriter` / `Excel.Append` support xlsx / xlsm only.
+- **Unified read facade**: `Excel.Read<T>`, `Excel.ReadSheet`, `Excel.ReadAsDataTable`, `Excel.StreamRows`, and `Excel.EnumerateRows` route xlsx/xlsm/xlsb/xls automatically for path inputs; stream inputs require an explicit `ExcelFormat`.
+- **Four-format streaming read**: xlsx/xlsm use XML reader per-row yield; xlsb uses BIFF12 record-level per-row yield; xls uses BIFF8 record-level per-row yield. All three support `Take(n)` / `First()` / `break` early termination without holding full row data in memory. SST and style tables are still pre-loaded (workbook-level shared).
 - **Hyperlink count**: when the number of hyperlinks is extremely large, the streaming writer's memory is no longer constant (all hyperlink references are buffered internally).
 - **Append**: `Excel.Append` reads the entire existing file before writing; suited to incremental appends of small/medium files.
 

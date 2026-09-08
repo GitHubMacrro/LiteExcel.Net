@@ -63,6 +63,12 @@ public static partial class XlsxReader
         return list;
     }
 
+    internal static List<T> MapSheetToList<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties
+            | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>(
+        SheetData sheet, Action<ReadOptions<T>>? configure = null) where T : new() =>
+        SheetToList<T>(sheet, configure);
+
     private static List<(PropertyInfo prop, int colIdx)> BuildReadPropertyMap<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         ReadOptions<T> options, List<string> headers)

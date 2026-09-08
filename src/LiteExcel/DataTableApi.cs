@@ -76,6 +76,8 @@ public static partial class XlsxReader
         return dt;
     }
 
+    internal static DataTable MapSheetToDataTable(SheetData sheet) => SheetToDataTable(sheet);
+
     private static object? CellToObject(Cell cell)
     {
         return cell.Type switch

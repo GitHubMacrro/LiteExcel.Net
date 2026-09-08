@@ -52,9 +52,14 @@ internal static class XlsbBackend
     private const int BrtShortSt = 0x0011;
     private const int BrtShortIsst = 0x0012;
     private const int BrtColInfo = 0x003C;
+    private const int BrtBeginComment = 0x003E;
+    private const int BrtCommentText = 0x003F;
+    private const int BrtEndComment = 0x0040;
     private const int BrtWsDim = 0x0094;
     private const int BrtPane = 0x0097;
     private const int BrtMergeCell = 0x00B0;
+    private const int BrtBeginAFilter = 0x00A1;
+    private const int BrtEndAFilter = 0x00A2;
     private const int BrtHLink = 0x01EE;
 
     public static List<SheetData> ReadAll(string path)
@@ -288,6 +293,33 @@ internal static class XlsbBackend
         return result;
     }
 
+    /// <summary>
+    /// 为流式读取预加载工作簿级共享数据：工作表清单、SST、样式、日期系统。
+    /// 返回 (sheets, sst, formats, cellXfs, date1904)。
+    /// </summary>
+    public static (List<(string Name, string RelId)> sheets, List<string> sst,
+        Dictionary<int, string> formats, List<int> cellXfs, bool date1904)
+        PrepareStreaming(ZipArchive zip)
+    {
+        var wbBytes = ReadEntry(zip, "xl/workbook.bin")
+            ?? throw new LiteExcelException(".xlsb 文件中缺少 xl/workbook.bin");
+        var (sheets, date1904) = ParseWorkbook(wbBytes);
+
+        var sstBytes = ReadEntry(zip, "xl/sharedStrings.bin");
+        var sst = sstBytes is not null ? ParseSharedStrings(sstBytes) : new List<string>();
+
+        var stylesBytes = ReadEntry(zip, "xl/styles.bin");
+        var (formats, cellXfs) = stylesBytes is not null
+            ? ParseStyles(stylesBytes)
+            : (new Dictionary<int, string>(), new List<int> { 0 });
+
+        return (sheets, sst, formats, cellXfs, date1904);
+    }
+
+    /// <summary>将工作簿清单中的 rId 映射到实际工作表部件路径（公开给流式读取器）。</summary>
+    public static List<string> MapSheetPathsPublic(ZipArchive zip, List<(string Name, string RelId)> sheets)
+        => MapSheetPaths(zip, sheets);
+
     // ── workbook.bin ──
 
     private static (List<(string Name, string RelId)> Sheets, bool Date1904) ParseWorkbook(byte[] wb)
@@ -430,6 +462,8 @@ internal static class XlsbBackend
         int maxCol = -1;
         var colWidths = new Dictionary<int, double>();
         var rowHeights = new Dictionary<int, double>();
+        int commentRow = -1;
+        int commentCol = -1;
         int freezeRows = 0;
         int freezeCols = 0;
         int currentRow = -1;
@@ -542,6 +576,30 @@ internal static class XlsbBackend
                             freezeCols = (int)Math.Round(colFrozen);
                         }
                     }
+                    break;
+                case BrtBeginAFilter:
+                    ParseBeginAFilter(d, sheet);
+                    break;
+                case BrtBeginComment:
+                    if (d.Length >= 8)
+                    {
+                        commentRow = ReadS32(d, 0);
+                        commentCol = ReadS32(d, 4);
+                    }
+                    break;
+                case BrtCommentText:
+                    if (commentRow >= 0 && commentCol >= 0 && d.Length >= 1)
+                    {
+                        int off = 1;
+                        var text = Biff12Records.ReadWideString(d, ref off);
+                        var a1Ref = CellRef.ToString(commentRow, commentCol);
+                        sheet.Comments ??= new Dictionary<string, string>();
+                        sheet.Comments[a1Ref] = text;
+                    }
+                    break;
+                case BrtEndComment:
+                    commentRow = -1;
+                    commentCol = -1;
                     break;
             }
         }
@@ -739,6 +797,20 @@ internal static class XlsbBackend
         int colFirst = ReadS32(d, 8);
         int colLast = ReadS32(d, 12);
         sheet.MergedRanges.Add(new CellRange(rwFirst, rwLast, colFirst, colLast));
+    }
+
+    /// <summary>BrtBeginAFilter：rfx = rwFirst(4) + rwLast(4) + colFirst(4) + colLast(4) = 16 字节。</summary>
+    private static void ParseBeginAFilter(byte[] d, SheetData sheet)
+    {
+        if (d.Length < 16) return;
+        int rwFirst = ReadS32(d, 0);
+        int rwLast = ReadS32(d, 4);
+        int colFirst = ReadS32(d, 8);
+        int colLast = ReadS32(d, 12);
+        sheet.Filter = new AutoFilter
+        {
+            Range = CellRef.ToString(rwFirst, colFirst) + ":" + CellRef.ToString(rwLast, colLast),
+        };
     }
 
     private static int ReadS32(byte[] d, int off) => Biff12Records.ReadS32(d, off);

@@ -182,6 +182,36 @@ public class FidelityWriteVerbatimTests
         }
     }
 
+    [Fact]
+    public void Xlsb_AdvancedParts_BlockOnlyModifiedHostSheet()
+    {
+        var safePath = GetTempFile(".xlsb");
+        var blockedPath = GetTempFile(".xlsb");
+        try
+        {
+            var safe = Excel.Create(ExcelFormat.Xlsb);
+            safe.Worksheets.Add("Other");
+            safe.SourceHasAdvancedXlsbParts = true;
+            safe.AdvancedXlsbSheetIndexes.Add(0);
+            safe.Worksheets[1].SetValue("A1", "safe");
+            safe.SaveAs(safePath);
+            Assert.True(File.Exists(safePath));
+
+            var blocked = Excel.Create(ExcelFormat.Xlsb);
+            blocked.Worksheets.Add("Other");
+            blocked.SourceHasAdvancedXlsbParts = true;
+            blocked.AdvancedXlsbSheetIndexes.Add(0);
+            blocked.Worksheets[0].SetValue("A1", "unsafe");
+            Assert.Throws<LiteExcelException>(() => blocked.SaveAs(blockedPath));
+            Assert.False(File.Exists(blockedPath));
+        }
+        finally
+        {
+            if (File.Exists(safePath)) File.Delete(safePath);
+            if (File.Exists(blockedPath)) File.Delete(blockedPath);
+        }
+    }
+
     // ── XLS 透视表有损保存保护 ──
 
     [Fact]

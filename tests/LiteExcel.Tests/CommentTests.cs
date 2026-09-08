@@ -169,4 +169,25 @@ public class CommentTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Fact]
+    public void Xlsb_Comments_WriteDegrades_ReadNoCrash()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"litexlsx_xlsb_comment_{Guid.NewGuid():N}.xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", "data");
+            ws.Comments = new Dictionary<string, string> { { "A1", "xlsb comment" } };
+
+            var reported = new List<DegradationInfo>();
+            Excel.Write(file, wb, new ExcelWriteOptions { OnDegradation = d => reported.Add(d) });
+
+            Assert.Contains(reported, d => d.Capability == DegradationCapability.Comments);
+            var opened = Excel.Open(file);
+            Assert.Null(opened.Worksheets[0].Comments);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

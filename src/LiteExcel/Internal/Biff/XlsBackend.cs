@@ -46,6 +46,23 @@ internal static class XlsBackend
         return ParseWorkbook(workbook);
     }
 
+    /// <summary>提取 .xls 工作簿的原始 Workbook 流字节，供流式读取器使用。</summary>
+    public static byte[] ExtractWorkbookStream(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return ExtractWorkbookStream(fs);
+    }
+
+    /// <summary>从流提取 .xls 工作簿的原始 Workbook 流字节。</summary>
+    public static byte[] ExtractWorkbookStream(Stream stream)
+    {
+        var cfb = CfbFile.Open(stream);
+        var workbook = cfb.GetStream("Workbook") ?? cfb.GetStream("Book");
+        if (workbook is null)
+            throw new LiteExcelException(".xls 文件中缺少 Workbook/Book 流");
+        return workbook;
+    }
+
     /// <summary>读取 .xls 工作簿的 1904 日期系统标志（DATE1904 记录，0x0022） </summary>
     public static bool ReadDate1904(string path)
     {

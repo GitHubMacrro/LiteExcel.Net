@@ -67,6 +67,10 @@ public sealed class Workbook
     /// 用户可通过 <see cref="AllowFeatureLossOnSave"/> 显式允许降级写出。 </summary>
     internal bool SourceHasPivotTables { get; set; }
 
+    internal bool SourceHasAdvancedXlsbParts { get; set; }
+
+    internal HashSet<int> AdvancedXlsbSheetIndexes { get; } = new();
+
     /// <summary>是否允许保存时丢失不支持的高级功能（如 BIFF8 透视表）。默认 false：含透视表的 XLS 保存被阻止。
     /// 用户显式设为 true 后允许保存，但透视表等不可保真能力会被丢弃，并通过降级回调上报。 </summary>
     public bool AllowFeatureLossOnSave { get; set; }
@@ -191,6 +195,7 @@ public sealed class Workbook
         ThrowIfMacroNotSupported(format);
         // 在创建目标文件前阻止无法保真的 XLS 透视表保存。
         ThrowIfPivotTablesNotPreservable(format);
+        ThrowIfAdvancedXlsbPartsNotPreservable(format);
 
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
         SaveCore(fs, format);
@@ -204,6 +209,7 @@ public sealed class Workbook
         ThrowIfPasswordNotSupported(format);
         // 阻止无法保真的 BIFF8 透视表保存。
         ThrowIfPivotTablesNotPreservable(format);
+        ThrowIfAdvancedXlsbPartsNotPreservable(format);
 
         switch (format)
         {
@@ -316,6 +322,30 @@ public sealed class Workbook
         }
         throw new LiteExcelException(
             $"源 XLS 文件包含透视表，当前版本无法保真写回或转换 BIFF8 透视表，保存会永久删除透视表。默认已阻止本次保存。\n" +
+            "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
+    }
+
+    private void ThrowIfAdvancedXlsbPartsNotPreservable(ExcelFormat format)
+    {
+        if (Format != ExcelFormat.Xlsb || !SourceHasAdvancedXlsbParts)
+            return;
+        bool modified = AdvancedXlsbSheetIndexes.Count == 0
+            ? Worksheets.Any(ws => ws.IsModified)
+            : AdvancedXlsbSheetIndexes.Any(index => index >= 0 && index < Worksheets.Count && Worksheets[index].IsModified);
+        if (!modified)
+            return;
+        if (AllowFeatureLossOnSave)
+        {
+            DegradationCallback?.Invoke(new DegradationInfo
+            {
+                Capability = DegradationCapability.PivotTables,
+                TargetFormat = format,
+                Message = $"源 XLSB 文件包含当前模型无法安全合并的高级部件，保存到 {format} 时这些部件可能丢失。"
+            });
+            return;
+        }
+        throw new LiteExcelException(
+            "源 XLSB 文件包含透视表、切片器、图表或其他高级部件，当前版本无法在编辑后安全合并这些部件。默认已阻止本次保存。\n" +
             "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
     }
 

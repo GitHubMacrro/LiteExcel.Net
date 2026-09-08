@@ -84,7 +84,8 @@ public static class Excel
                         decrypted.Position = 0;
                         using (var zipB = new ZipArchive(decrypted, ZipArchiveMode.Read, leaveOpen: true))
                         {
-                            wbB.PreservedParts = OoxmlPreservedParts.Capture(zipB, sheets.Count, binary: true);
+                         wbB.PreservedParts = OoxmlPreservedParts.Capture(zipB, sheets.Count, binary: true);
+                            SetAdvancedXlsbSheets(wbB, wbB.PreservedParts, sheets.Count);
                             wbB.Properties.CopyFrom(XlsxReader.ReadProperties(zipB));
                         }
                         decrypted.Position = 0;
@@ -115,6 +116,7 @@ public static class Excel
                 using (var capZip = new ZipArchive(capFs, ZipArchiveMode.Read))
                 {
                     wbXB.PreservedParts = OoxmlPreservedParts.Capture(capZip, sheetsX.Count, binary: true);
+                    SetAdvancedXlsbSheets(wbXB, wbXB.PreservedParts, sheetsX.Count);
                     wbXB.Properties.CopyFrom(XlsxReader.ReadProperties(capZip));
                 }
                 wbXB.VbaProjectBytes = XlsbBackend.ReadVbaProject(path);
@@ -523,9 +525,80 @@ public static class Excel
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
-        return sheetName is null
-            ? XlsxReader.Read<T>(path, 0, configure)
-            : XlsxReader.Read<T>(path, sheetName, configure);
+        var format = DetectFormat(path);
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return sheetName is null
+                ? XlsxReader.Read<T>(path, 0, configure)
+                : XlsxReader.Read<T>(path, sheetName, configure);
+        var sheet = sheetName is null
+            ? ReadSheet(path, 0, firstRowIsHeader: true)
+            : ReadSheet(path, sheetName, firstRowIsHeader: true);
+        return XlsxReader.MapSheetToList<T>(sheet, configure);
+    }
+
+    /// <summary>从流读取指定工作表为 List&lt;T&gt;。流必须显式指定格式。</summary>
+    public static List<T> Read<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties
+            | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] T>(
+        Stream stream, ExcelFormat format, string? sheetName = null, Action<ReadOptions<T>>? configure = null) where T : new()
+    {
+        var sheet = sheetName is null
+            ? ReadSheet(stream, format, 0, firstRowIsHeader: true)
+            : ReadSheet(stream, format, sheetName, firstRowIsHeader: true);
+        return XlsxReader.MapSheetToList<T>(sheet, configure);
+    }
+
+    /// <summary>读取指定工作表为低层 SheetData。默认第一张表，首行作为表头。</summary>
+    public static SheetData ReadSheet(string path, int sheetIndex = 0, bool firstRowIsHeader = true)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("路径不能为空", nameof(path));
+        var format = DetectFormat(path);
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return XlsxReader.Read(path, sheetIndex, firstRowIsHeader);
+        var wb = Open(path);
+        if (sheetIndex < 0 || sheetIndex >= wb.Worksheets.Count)
+            throw new ArgumentOutOfRangeException(nameof(sheetIndex));
+        return NormalizeSheetData(wb.Worksheets[sheetIndex].ToSheetData(), firstRowIsHeader);
+    }
+
+    /// <summary>按名称读取指定工作表为低层 SheetData。</summary>
+    public static SheetData ReadSheet(string path, string sheetName, bool firstRowIsHeader = true)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("路径不能为空", nameof(path));
+        if (string.IsNullOrWhiteSpace(sheetName))
+            throw new ArgumentException("工作表名不能为空", nameof(sheetName));
+        var format = DetectFormat(path);
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return XlsxReader.Read(path, sheetName, firstRowIsHeader);
+        var wb = Open(path);
+        var ws = wb.Worksheets[sheetName];
+        return NormalizeSheetData(ws.ToSheetData(), firstRowIsHeader);
+    }
+
+    /// <summary>从流读取指定工作表为低层 SheetData。流必须显式指定格式。</summary>
+    public static SheetData ReadSheet(Stream stream, ExcelFormat format, int sheetIndex = 0, bool firstRowIsHeader = true)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return XlsxReader.Read(stream, sheetIndex, firstRowIsHeader);
+        var wb = Open(stream, format);
+        if (sheetIndex < 0 || sheetIndex >= wb.Worksheets.Count)
+            throw new ArgumentOutOfRangeException(nameof(sheetIndex));
+        return NormalizeSheetData(wb.Worksheets[sheetIndex].ToSheetData(), firstRowIsHeader);
+    }
+
+    /// <summary>从流按名称读取指定工作表为低层 SheetData。流必须显式指定格式。</summary>
+    public static SheetData ReadSheet(Stream stream, ExcelFormat format, string sheetName, bool firstRowIsHeader = true)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        if (string.IsNullOrWhiteSpace(sheetName))
+            throw new ArgumentException("工作表名不能为空", nameof(sheetName));
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return XlsxReader.Read(stream, sheetName, firstRowIsHeader);
+        var wb = Open(stream, format);
+        return NormalizeSheetData(wb.Worksheets[sheetName].ToSheetData(), firstRowIsHeader);
     }
 
     /// <summary>读取指定工作表为 DataTable（AOT 安全）。默认第一张表 </summary>
@@ -533,9 +606,19 @@ public static class Excel
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
-        return sheetName is null
-            ? XlsxReader.ReadAsDataTable(path, 0, firstRowIsHeader)
-            : XlsxReader.ReadAsDataTable(path, sheetName, firstRowIsHeader);
+        var sheet = sheetName is null
+            ? ReadSheet(path, 0, firstRowIsHeader)
+            : ReadSheet(path, sheetName, firstRowIsHeader);
+        return XlsxReader.MapSheetToDataTable(sheet);
+    }
+
+    /// <summary>从流读取指定工作表为 DataTable。流必须显式指定格式。</summary>
+    public static DataTable ReadAsDataTable(Stream stream, ExcelFormat format, string? sheetName = null, bool firstRowIsHeader = true)
+    {
+        var sheet = sheetName is null
+            ? ReadSheet(stream, format, 0, firstRowIsHeader)
+            : ReadSheet(stream, format, sheetName, firstRowIsHeader);
+        return XlsxReader.MapSheetToDataTable(sheet);
     }
 
     /// <summary>列出所有工作表名 </summary>
@@ -565,8 +648,73 @@ public static class Excel
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
         if (onRow is null) throw new ArgumentNullException(nameof(onRow));
-        EnsureXlsxStreamingFormat(path, "流式读取");
-        XlsxReader.StreamRows(path, sheetName, onRow);
+        var format = DetectFormat(path);
+        if (format == ExcelFormat.Csv)
+            throw new LiteExcelException($"该格式不支持流式读取：{format}。请使用 Excel.Open 或 ReadAsDataTable。 ");
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+        {
+            XlsxReader.StreamRows(path, sheetName, onRow);
+            return;
+        }
+        if (format == ExcelFormat.Xlsb)
+        {
+            bool first = true;
+            foreach (var row in EnumerateXlsbRows(path, sheetName))
+            {
+                if (first) { first = false; continue; }
+                onRow(row);
+            }
+            return;
+        }
+        if (format == ExcelFormat.Xls)
+        {
+            bool first = true;
+            foreach (var row in EnumerateXlsRows(path, sheetName))
+            {
+                if (first) { first = false; continue; }
+                onRow(row);
+            }
+            return;
+        }
+        StreamRowsFromWorkbook(Open(path), sheetName, onRow);
+    }
+
+    /// <summary>从流逐行回调读取指定工作表。流必须显式指定格式。</summary>
+    public static void StreamRows(Stream stream, ExcelFormat format, string? sheetName, Action<IReadOnlyList<Cell>> onRow)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        if (onRow is null) throw new ArgumentNullException(nameof(onRow));
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+        {
+            bool first = true;
+            foreach (var row in XlsxReader.EnumerateRows(stream, sheetName))
+            {
+                if (first) { first = false; continue; }
+                onRow(row);
+            }
+            return;
+        }
+        if (format == ExcelFormat.Xlsb)
+        {
+            bool first = true;
+            foreach (var row in EnumerateXlsbRows(stream, sheetName))
+            {
+                if (first) { first = false; continue; }
+                onRow(row);
+            }
+            return;
+        }
+        if (format == ExcelFormat.Xls)
+        {
+            bool first = true;
+            foreach (var row in EnumerateXlsRows(stream, sheetName))
+            {
+                if (first) { first = false; continue; }
+                onRow(row);
+            }
+            return;
+        }
+        StreamRowsFromWorkbook(Open(stream, format), sheetName, onRow);
     }
 
     /// <summary>
@@ -578,8 +726,16 @@ public static class Excel
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("路径不能为空", nameof(path));
-        EnsureXlsxStreamingFormat(path, "流式读取");
-        return XlsxReader.EnumerateRows(path, sheetName);
+        var format = DetectFormat(path);
+        if (format == ExcelFormat.Csv)
+            throw new LiteExcelException($"该格式不支持流式读取：{format}。请使用 Excel.Open 或 ReadAsDataTable。 ");
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return XlsxReader.EnumerateRows(path, sheetName);
+        if (format == ExcelFormat.Xlsb)
+            return EnumerateXlsbRows(path, sheetName);
+        if (format == ExcelFormat.Xls)
+            return EnumerateXlsRows(path, sheetName);
+        return EnumerateRowsFromWorkbook(Open(path), sheetName);
     }
 
     /// <summary>拉取式流式读取（Stream 重载），逐行 yield，支持 LINQ 与提前中断 </summary>
@@ -587,6 +743,19 @@ public static class Excel
     {
         if (stream is null) throw new ArgumentNullException(nameof(stream));
         return XlsxReader.EnumerateRows(stream, sheetName);
+    }
+
+    /// <summary>从流拉取式读取指定工作表。流必须显式指定格式。</summary>
+    public static IEnumerable<IReadOnlyList<Cell>> EnumerateRows(Stream stream, ExcelFormat format, string? sheetName = null)
+    {
+        if (stream is null) throw new ArgumentNullException(nameof(stream));
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+            return XlsxReader.EnumerateRows(stream, sheetName);
+        if (format == ExcelFormat.Xlsb)
+            return EnumerateXlsbRows(stream, sheetName);
+        if (format == ExcelFormat.Xls)
+            return EnumerateXlsRows(stream, sheetName);
+        return EnumerateRowsFromWorkbook(Open(stream, format), sheetName);
     }
 
     /// <summary>创建流式写入器（逐行写大文件，不驻留内存）。使用后调用 Dispose/Close 完成文件。超出单表行数上限时按 <paramref name="onRowLimitExceeded"/> 处理（默认抛异常）。<paramref name="spillHeader"/> 仅在 SpillToNewSheet 下生效，作为每张表首行表头 </summary>
@@ -619,13 +788,6 @@ public static class Excel
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("路径不能为空", nameof(path));
         XlsxReader.ReadWithProgress(path, sheetIndex, onProgress);
-    }
-
-    private static void EnsureXlsxStreamingFormat(string path, string operation)
-    {
-        var format = DetectFormat(path);
-        if (format != ExcelFormat.Xlsx && format != ExcelFormat.Xlsm)
-            throw new LiteExcelException($"该格式不支持{operation}：{format}。仅支持 xlsx/xlsm。");
     }
 
     /// <summary>把 XlsBackend 快照到的命名区域挂到工作簿（xls 打开后 Names 自动填充）。</summary>
@@ -668,5 +830,141 @@ public static class Excel
             if (options.Properties.Created is not null) workbook.Properties.Created = options.Properties.Created;
             if (options.Properties.Modified is not null) workbook.Properties.Modified = options.Properties.Modified;
         }
+    }
+
+    private static void SetAdvancedXlsbSheets(Workbook workbook, OoxmlPreservedParts? preserved, int sheetCount)
+    {
+        if (preserved is null) return;
+        for (int i = 1; i <= sheetCount; i++)
+        {
+            if (!preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{i}.bin.rels", out var rels))
+                continue;
+            try
+            {
+                var doc = System.Xml.Linq.XDocument.Parse(rels);
+                var ns = doc.Root?.GetDefaultNamespace() ?? System.Xml.Linq.XNamespace.None;
+                foreach (var relationship in doc.Descendants(ns + "Relationship"))
+                {
+                    var type = (string?)relationship.Attribute("Type") ?? "";
+                    if (type.IndexOf("pivot", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        type.IndexOf("slicer", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        type.IndexOf("timeline", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        workbook.AdvancedXlsbSheetIndexes.Add(i - 1);
+                        break;
+                    }
+                }
+            }
+            catch (System.Xml.XmlException)
+            {
+                workbook.SourceHasAdvancedXlsbParts = true;
+            }
+        }
+        workbook.SourceHasAdvancedXlsbParts = workbook.AdvancedXlsbSheetIndexes.Count > 0;
+    }
+
+    private static SheetData NormalizeSheetData(SheetData sheet, bool firstRowIsHeader)
+    {
+        if (!firstRowIsHeader || sheet.Rows.Count == 0)
+            return sheet;
+        var first = sheet.Rows[0];
+        sheet.Headers = new List<string>(first.Count);
+        foreach (var cell in first)
+            sheet.Headers.Add(cell.GetString() ?? "");
+        sheet.Rows.RemoveAt(0);
+        return sheet;
+    }
+
+    private static void StreamRowsFromWorkbook(Workbook workbook, string? sheetName, Action<IReadOnlyList<Cell>> onRow)
+    {
+        bool first = true;
+        foreach (var row in EnumerateRowsFromWorkbook(workbook, sheetName))
+        {
+            if (first) { first = false; continue; }
+            onRow(row);
+        }
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateXlsRows(string path, string? sheetName)
+    {
+        var wbBytes = Internal.Biff.XlsBackend.ExtractWorkbookStream(path);
+        foreach (var row in EnumerateXlsRowsFromBytes(wbBytes, sheetName))
+            yield return row;
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateXlsRows(Stream stream, string? sheetName)
+    {
+        var wbBytes = Internal.Biff.XlsBackend.ExtractWorkbookStream(stream);
+        foreach (var row in EnumerateXlsRowsFromBytes(wbBytes, sheetName))
+            yield return row;
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateXlsRowsFromBytes(byte[] wbBytes, string? sheetName)
+    {
+        var (boundSheets, sst, formats, xfIfmt, date1904, sheetStarts) =
+            Internal.Biff.XlsRowStreamReader.PrepareStreaming(wbBytes);
+
+        int sheetIndex;
+        if (sheetName is null)
+            sheetIndex = 0;
+        else
+        {
+            sheetIndex = boundSheets.FindIndex(s => string.Equals(s, sheetName, StringComparison.Ordinal));
+            if (sheetIndex < 0)
+                throw new LiteExcelException($"找不到工作表：{sheetName}（共有 {boundSheets.Count} 张表）");
+        }
+
+        if (sheetIndex >= sheetStarts.Count)
+            throw new LiteExcelException($"工作表索引超出范围：{sheetIndex}（找到 {sheetStarts.Count} 个工作表段）");
+
+        foreach (var row in Internal.Biff.XlsRowStreamReader.EnumerateRows(
+            wbBytes, sheetStarts[sheetIndex], sst, formats, xfIfmt, date1904))
+            yield return row;
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateRowsFromWorkbook(Workbook workbook, string? sheetName)
+    {
+        var worksheet = sheetName is null ? workbook.Worksheets[0] : workbook.Worksheets[sheetName];
+        foreach (var row in worksheet.ToSheetData().Rows)
+            yield return row;
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateXlsbRows(string path, string? sheetName)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        foreach (var row in EnumerateXlsbRows(fs, sheetName))
+            yield return row;
+    }
+
+    private static IEnumerable<IReadOnlyList<Cell>> EnumerateXlsbRows(Stream stream, string? sheetName)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        var (sheets, sst, formats, cellXfs, date1904) = Internal.XlsbBackend.PrepareStreaming(zip);
+        var sheetPaths = Internal.XlsbBackend.MapSheetPathsPublic(zip, sheets);
+
+        int sheetIndex;
+        if (sheetName is null)
+            sheetIndex = 0;
+        else
+        {
+            sheetIndex = sheets.FindIndex(s => string.Equals(s.Name, sheetName, StringComparison.Ordinal));
+            if (sheetIndex < 0)
+                throw new LiteExcelException($"找不到工作表：{sheetName}（共有 {sheets.Count} 张表）");
+        }
+
+        var sheetPath = sheetPaths[sheetIndex];
+        var entry = zip.GetEntry(sheetPath)
+            ?? throw new LiteExcelException($"缺少工作表文件: {sheetPath}");
+        byte[] sheetBytes;
+        using (var es = entry.Open())
+        {
+            using var ms = new MemoryStream();
+            es.CopyTo(ms);
+            sheetBytes = ms.ToArray();
+        }
+
+        foreach (var row in Internal.XlsbRowStreamReader.EnumerateRows(
+            sheetBytes, sst, formats, cellXfs, date1904))
+            yield return row;
     }
 }

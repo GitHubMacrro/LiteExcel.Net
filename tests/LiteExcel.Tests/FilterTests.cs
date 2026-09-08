@@ -405,4 +405,58 @@ public class FilterTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Fact]
+    public void Xlsb_AutoFilterRange_RoundTrip()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"litexlsx_xlsb_af_{Guid.NewGuid():N}.xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", "Name");
+            ws.SetValue("B1", "City");
+            ws.SetValue("A2", "Zhang");
+            ws.SetValue("B2", "Beijing");
+            ws.SetValue("A3", "Li");
+            ws.SetValue("B3", "Shanghai");
+            ws.Filter = new AutoFilter { Range = "A1:B3" };
+            wb.SaveAs(file);
+
+            var opened = Excel.Open(file);
+            Assert.NotNull(opened.Worksheets[0].Filter);
+            Assert.Equal("A1:B3", opened.Worksheets[0].Filter!.Range);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Xlsb_AutoFilterComplexConditions_Degrades()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"litexlsx_xlsb_af2_{Guid.NewGuid():N}.xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", "Name");
+            ws.SetValue("A2", "Zhang");
+            ws.Filter = new AutoFilter
+            {
+                Range = "A1:A2",
+                Columns = new()
+                {
+                    new FilterColumn { ColumnIndex = 0, Type = FilterType.Equals, Values = new() { "Zhang" } },
+                },
+            };
+
+            var reported = new List<DegradationInfo>();
+            Excel.Write(file, wb, new ExcelWriteOptions { OnDegradation = d => reported.Add(d) });
+
+            Assert.Contains(reported, d => d.Capability == DegradationCapability.AutoFilter);
+            var opened = Excel.Open(file);
+            Assert.NotNull(opened.Worksheets[0].Filter);
+            Assert.Equal("A1:A2", opened.Worksheets[0].Filter!.Range);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

@@ -96,6 +96,8 @@ internal static class XlsbWriter
     private const int BrtBeginMergeCells = 0x00B1;
     private const int BrtMergeCell = 0x00B0;
     private const int BrtEndMergeCells = 0x00B2;
+    private const int BrtBeginAFilter = 0x00A1;
+    private const int BrtEndAFilter = 0x00A2;
     private const int BrtHLink = 0x01EE;
     private const int BrtEndSheet = 0x0082;
 
@@ -328,11 +330,11 @@ internal static class XlsbWriter
                     Message = msg,
                 });
             if (sheet.Comments is { Count: > 0 })
-                Report(DegradationCapability.Comments, $"xlsb 不支持批注，工作表 '{sheet.SheetName}' 的批注已丢弃。");
+                Report(DegradationCapability.Comments, $"xlsb 批注读取已支持但写出尚未实现，工作表 '{sheet.SheetName}' 的 {sheet.Comments.Count} 个批注在重建路径中已丢弃。未修改时 verbatim 保留。");
             if (sheet.Validations is { Count: > 0 })
                 Report(DegradationCapability.DataValidation, $"xlsb 不支持数据验证，工作表 '{sheet.SheetName}' 的数据验证已丢弃。");
-            if (sheet.Filter is not null)
-                Report(DegradationCapability.AutoFilter, $"xlsb 不支持自动筛选，工作表 '{sheet.SheetName}' 的筛选已丢弃。");
+            if (sheet.Filter is not null && sheet.Filter.Columns.Count > 0)
+                Report(DegradationCapability.AutoFilter, $"xlsb 自动筛选仅支持范围写出，工作表 '{sheet.SheetName}' 的筛选条件已丢弃。");
             if (sheet.Images is { Count: > 0 })
                 Report(DegradationCapability.Images, $"xlsb 不支持图片，工作表 '{sheet.SheetName}' 的图片已丢弃。");
             if (DegradationDetector.HasNonNumberFormatStyles(sheet))
@@ -889,6 +891,14 @@ internal static class XlsbWriter
             }
         }
         WriteRecord(ms, BrtEndSheetData, Array.Empty<byte>());
+
+        // 自动筛选（范围写出；复杂条件降级上报）
+        if (sheet.Filter is not null && !string.IsNullOrEmpty(sheet.Filter.Range))
+        {
+            var (afRwFirst, afColFirst, afRwLast, afColLast) = CellRef.ParseRange(sheet.Filter.Range);
+            WriteRecord(ms, BrtBeginAFilter, RfX(afRwFirst, afRwLast, afColFirst, afColLast));
+            WriteRecord(ms, BrtEndAFilter, Array.Empty<byte>());
+        }
 
         // 合并单元格
         if (sheet.MergedRanges.Count > 0)

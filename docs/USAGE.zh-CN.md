@@ -2717,9 +2717,9 @@ True structure=True hasPwd=False
 | 样式（字体 / 颜色 / 边框 / 对齐 / 换行） | ☑️ | ☑️ | 仅数字格式 | 仅数字格式 | ❌ |
 | 数字格式 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 合并单元格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| 自动筛选 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| 自动筛选 | ☑️ | ☑️ | 范围读写 | ❌ | ❌ |
 | 行高 / 列宽 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| 批注 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| 批注 | ☑️ | ☑️ | 读取 | ❌ | ❌ |
 | 数据验证 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 超链接 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 冻结窗格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
@@ -2732,7 +2732,7 @@ True structure=True hasPwd=False
 | 公式（写） | ☑️ | ☑️ | 按缓存值写 | 按缓存值写 | ❌ |
 | 公式（读） | ☑️ | ☑️ | 可解析时还原 | 可解析时还原 | ❌ |
 | 图表 / 透视表 | 只保真 | 只保真 | 只保真 | ❌ | ❌ |
-| 流式读（StreamRows） | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| 流式读（StreamRows / EnumerateRows） | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 流式写（XlsxStreamWriter） | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 追加（Append） | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 进度回调（ReadWithProgress） | ☑️ | ☑️ | ❌ | ❌ | ❌ |
@@ -3142,7 +3142,9 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 ```
 
 - **内存模型**：`Excel.Open` / `Excel.Create` 返回的 `Workbook` 是内存模型，整簿加载到内存。超大文件请用流式 API 而非 `Excel.Open`。
-- **流式范围**：`Excel.CreateWriter` / `Excel.StreamRows` / `Excel.Append` 仅支持 xlsx / xlsm（见 21.1）。
+- **流式写入范围**：`Excel.CreateWriter` / `Excel.Append` 仅支持 xlsx / xlsm。
+- **统一读取门面**：`Excel.Read<T>`、`Excel.ReadSheet`、`Excel.ReadAsDataTable`、`Excel.StreamRows` 和 `Excel.EnumerateRows` 支持按路径自动路由 xlsx/xlsm/xlsb/xls；从流读取时须显式传入 `ExcelFormat`。
+- **四格式流式读取**：xlsx/xlsm 使用 XML reader 逐行 yield；xlsb 使用 BIFF12 记录级逐行 yield；xls 使用 BIFF8 记录级逐行 yield。三种格式均支持 `Take(n)` / `First()` / `break` 提前终止，不驻留完整行数据。SST 和样式表仍预加载（工作簿级共享）。
 - **超链接数量**：流式写入器在超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
 - **追加**：`Excel.Append` 会读取整个既有文件再写出，适合中小文件增量追加。
 
