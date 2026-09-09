@@ -788,7 +788,7 @@ SUM(A1:B1)
 A1*2
 ```
 
-List\&lt;T\> 映射中可用 `[LiteColumn(IsFormula = true)]` 把字符串属性当作公式列（见 5.9）。
+List\<T\> 映射中可用 `[LiteColumn(IsFormula = true)]` 把字符串属性当作公式列（见 5.9）。
 
 **公式写回（xls/xlsb）**：自 2.4.74 起，xls 与 xlsb 支持基础公式写回。`Cell.FromFormula("SUM(A1:B1)")` 会在写出时经内置 `FormulaEncoder` 将 A1 文本编码为 BIFF8/BIFF12 RPN。支持常量（数字/字符串/布尔）、单元格引用（含绝对 `$A$1`）、区域引用、基础运算符（`+ - * / ^ & = < > <= >=`）和内置函数。不支持的公式（数组、跨表引用、名称等）降级为缓存值写出，不影响文件读取。
 
