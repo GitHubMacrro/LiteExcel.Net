@@ -18,6 +18,7 @@
 | 5 | [Data Types and Conversion](#5-data-types-and-conversion) |
 | 6 | [Styles](#6-styles) |
 | 7 | [Merged Cells](#7-merged-cells) |
+| 7.5 | [Insert / Delete Rows and Columns](#75-insert--delete-rows-and-columns) |
 | 8 | [AutoFilter](#8-autofilter) |
 | 9 | [Row Height and Column Width](#9-row-height-and-column-width) |
 | 10 | [Comments](#10-comments) |
@@ -737,6 +738,8 @@ A1*2
 
 In List\<T\> mapping, `[LiteColumn(IsFormula = true)]` treats a string property as a formula column (see section 5.9).
 
+**Formula writeback (xls/xlsb)**: Since 2.4.74, xls and xlsb support basic formula writeback. `Cell.FromFormula("SUM(A1:B1)")` is encoded to BIFF8/BIFF12 RPN by the built-in `FormulaEncoder` on write. Constants (numbers/strings/booleans), cell references (including absolute `$A$1`), area references, basic operators (`+ - * / ^ & = < > <= >=`), and built-in functions are supported. Unsupported formulas (arrays, cross-sheet references, names) fall back to writing the cached value.
+
 ## 5.8 Byte[]
 
 `SetValue` treats any non-numeric type as `Text` (`value.ToString()`). **For binary data, use the image API** (`Worksheet.AddImage`, see chapter 13) or encode it to text yourself. The library itself does not map `byte[]` to a binary cell type.
@@ -1192,6 +1195,34 @@ Output: (this example has no console output)
 *Produced by the example code in this chapter, opened in Excel: merged cells, external and internal links, a formula column.*
 ---
 
+# 7.5 Insert / Delete Rows and Columns
+
+Since 2.4.74, `Worksheet` supports inserting or deleting rows/columns at any position, with automatic offset adjustment for merged ranges, row heights, column widths, row/column styles, comments, data validations, AutoFilter range, and image anchors.
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "h");
+ws.SetValue("A2", "v1");
+ws.SetValue("A3", "v2");
+
+ws.InsertRows(2, 1);   // insert 1 empty row before row 2; original row 2+ shift down
+ws.DeleteRows(3, 1);   // delete 1 row starting from row 3; following rows shift up
+
+ws.InsertColumns(2, 2); // insert 2 empty columns before column 2
+ws.DeleteColumns(1, 1); // delete 1 column starting from column 1
+```
+
+| Method | Description |
+|---|---|
+| `InsertRows(rowIndex, count)` | Insert `count` rows before row `rowIndex` (1-based) |
+| `DeleteRows(rowIndex, count)` | Delete `count` rows starting from row `rowIndex` |
+| `InsertColumns(colIndex, count)` | Insert `count` columns before column `colIndex` |
+| `DeleteColumns(colIndex, count)` | Delete `count` columns starting from column `colIndex` |
+
+On delete: objects fully inside the deleted range are removed; objects spanning the range are shrunk; objects after the range shift left/up. On insert: objects at/after the insertion point shift right/down.
+
+---
+
 # 8. AutoFilter
 
 ## 📑 Contents
@@ -1453,6 +1484,8 @@ Output: written to out.xlsx
 
 ---
 # 10. Comments
+
+Comments can be written and read back. Format support: xlsx / xlsm / xls / xlsb (since 2.4.74) are all readable and writable; csv does not support comments and reports a degradation via `OnDegradation` on write (see chapter 22). xlsx/xlsm comments are written via an OOXML legacyDrawing; xlsb comments live in a separate `commentsN.bin` part plus VML; xls comments use the BIFF8 record group (MSODRAWING + OBJ + TXO + CONTINUE + NOTE). Always verify by opening with real Excel.
 
 ## 📑 Contents
 
