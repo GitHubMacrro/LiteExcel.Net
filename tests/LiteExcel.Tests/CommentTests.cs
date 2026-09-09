@@ -171,7 +171,7 @@ public class CommentTests
     }
 
     [Fact]
-    public void Xlsb_Comments_WriteDegrades_ReadNoCrash()
+    public void Xlsb_Comments_RoundTrip()
     {
         var file = Path.Combine(Path.GetTempPath(), $"litexlsx_xlsb_comment_{Guid.NewGuid():N}.xlsb");
         try
@@ -179,15 +179,74 @@ public class CommentTests
             var wb = Excel.Create(ExcelFormat.Xlsb);
             var ws = wb.Worksheets[0];
             ws.SetValue("A1", "data");
-            ws.Comments = new Dictionary<string, string> { { "A1", "xlsb comment" } };
+            ws.Comments = new Dictionary<string, string> { { "A1", "xlsb comment text" } };
 
             var reported = new List<DegradationInfo>();
             Excel.Write(file, wb, new ExcelWriteOptions { OnDegradation = d => reported.Add(d) });
 
-            Assert.Contains(reported, d => d.Capability == DegradationCapability.Comments);
+            Assert.DoesNotContain(reported, d => d.Capability == DegradationCapability.Comments);
             var opened = Excel.Open(file);
-            Assert.Null(opened.Worksheets[0].Comments);
+            Assert.NotNull(opened.Worksheets[0].Comments);
+            Assert.True(opened.Worksheets[0].Comments!.ContainsKey("A1"));
+            Assert.Equal("xlsb comment text", opened.Worksheets[0].Comments!["A1"]);
         }
         finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Xlsb_RealSample_ReadsComments()
+    {
+        var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "files", "批注", "批注+筛选.xlsb");
+        if (!File.Exists(src))
+        {
+            var alt = Path.Combine("D:", "Visual Studio Project", "CC", "dotnet", "Customwin.Utils.Xlsx", "LiteXlsx", "files", "批注", "批注+筛选.xlsb");
+            if (!File.Exists(alt)) { Assert.True(false, "Test sample not found"); return; }
+            src = alt;
+        }
+
+        var wb = Excel.Open(src);
+        var ws = wb.Worksheets[0];
+        Assert.NotNull(ws.Comments);
+        Assert.True(ws.Comments!.Count > 0);
+        foreach (var kv in ws.Comments)
+        {
+            Assert.False(string.IsNullOrEmpty(kv.Value), $"Comment at {kv.Key} should have text");
+        }
+    }
+
+    [Fact]
+    public void Xlsx_RealSample_ReadsComments()
+    {
+        var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "files", "批注", "批注+筛选.xlsx");
+        if (!File.Exists(src))
+        {
+            var alt = Path.Combine("D:", "Visual Studio Project", "CC", "dotnet", "Customwin.Utils.Xlsx", "LiteXlsx", "files", "批注", "批注+筛选.xlsx");
+            if (!File.Exists(alt)) { Assert.Fail("Test sample not found"); return; }
+            src = alt;
+        }
+
+        var wb = Excel.Open(src);
+        var ws = wb.Worksheets[0];
+        Assert.NotNull(ws.Comments);
+        Assert.True(ws.Comments!.Count > 0);
+    }
+
+    [Fact]
+    public void Xls_RealSample_ReadsComments()
+    {
+        var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "files", "批注", "批注+筛选.xls");
+        if (!File.Exists(src))
+        {
+            var alt = Path.Combine("D:", "Visual Studio Project", "CC", "dotnet", "Customwin.Utils.Xlsx", "LiteXlsx", "files", "批注", "批注+筛选.xls");
+            if (!File.Exists(alt)) { Assert.Fail("Test sample not found"); return; }
+            src = alt;
+        }
+
+        var wb = Excel.Open(src);
+        var ws = wb.Worksheets[0];
+        Assert.NotNull(ws.Comments);
+        Assert.True(ws.Comments!.Count > 0);
+        foreach (var kv in ws.Comments!)
+            Assert.False(string.IsNullOrEmpty(kv.Value), $"Comment at {kv.Key} should have text");
     }
 }

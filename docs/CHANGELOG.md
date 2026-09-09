@@ -10,10 +10,15 @@
 - **XLSB 自动筛选范围读写**：读取 `BrtBeginAFilter` 提取筛选范围到 `SheetData.Filter.Range`；写出时在 `EndSheetData` 后写出范围记录。复杂筛选条件降级上报。
 - **XLSB 批注读取**：解析 `BrtBeginComment` + `BrtCommentText` 提取批注到 `SheetData.Comments`。写出仍降级上报（未修改时 verbatim 保留）。
 - **XLSB 高级部件工作表级保护**：含透视表/切片器/时间线的 XLSB，仅当修改了高级部件所在工作表时默认阻止保存；修改无关工作表允许保存。此前为工作簿级判断，会误阻无关工作表。
+- **XLSB 批注读写闭环**：根据真实 Excel 样本校准，批注存储在独立 `commentsN.bin` 部件（BIFF12 记录 `0x0274`-`0x027D`）而非 `sheetN.bin` 内；VML 与 XLSX 相同。读取解析 `BrtCommentText` + VML `<x:Row>/<x:Column>` 定位；写出生成完整记录链。此前推测的记录号（`0x003E` 等）已被证伪并修正。
+- **XLS 批注读写闭环**：BIFF8 批注记录组（`MSODRAWING` + `OBJ` + `TXO` + `CONTINUE` + `NOTE`）完整读写。读取从 NOTE 记录解析坐标、从 TXO 后续 CONTINUE 解析文本；写出构建最小化 Office Drawing 形状容器。
+- **插入/删除行列**：`Worksheet.InsertRows/DeleteRows/InsertColumns/DeleteColumns`（1-based 坐标），同步偏移合并区域、行高列宽、行/列样式、批注、数据验证、自动筛选、图片锚点；删除区域内对象删除、跨越对象收缩。
+- **xls/xlsb 公式写回**：新增 `FormulaEncoder`（A1 → RPN），支持常量、单元格引用（含绝对）、区域引用、基础运算符和内置函数；`XlsbWriter` 写 `BrtFmla*` 记录、`XlsWriter` 写 `FORMULA` 记录。不支持的公式降级为缓存值写出。
 
 ### Changed
 
 - **XLSB 降级消息更新**：批注降级消息明确说明读取已支持、写出未实现、未修改时 verbatim 保留；自动筛选降级仅对复杂条件触发，范围已正常写出。
+- **批注/公式不再触发降级上报**：xls/xlsb 的批注与基础公式现已支持读写，写出时不再上报 `Comments` / `Formulas` 降级。
 
 ## [2.4.73]
 

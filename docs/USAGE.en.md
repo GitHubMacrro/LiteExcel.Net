@@ -2650,11 +2650,9 @@ The table below lists the support status of each capability across formats. Capa
 | Style (font/color/border/alignment/wrap) | ☑️ | ☑️ | NumberFormat only | NumberFormat only | ❌ |
 | Number format | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Merged cells | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Auto filter | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Row height / Column width | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Auto filter | ☑️ | ☑️ | range read/write | ❌ | ❌ |
 | Row height / Column width | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Comments | ☑️ | ☑️ | read | ❌ | ❌ |
+| Comments | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Data validation | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Hyperlinks | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Freeze panes | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
@@ -2664,7 +2662,8 @@ The table below lists the support status of each capability across formats. Capa
 | Named ranges | ☑️ | ☑️ | ❌ | read only | ❌ |
 | Document properties | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Open / Modify password | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
-| Formulas (write) | ☑️ | ☑️ | cached value | cached value | ❌ |
+| Insert / Delete rows & columns | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Formulas (write) | ☑️ | ☑️ | basic writeback | basic writeback | ❌ |
 | Formulas (read) | ☑️ | ☑️ | restored when parseable | restored when parseable | ❌ |
 | Charts / PivotTables | passthrough | passthrough | passthrough | ❌ | ❌ |
 | Streaming read (StreamRows / EnumerateRows) | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |

@@ -60,4 +60,91 @@ public class FormulaTests
         if (cached is { } v)
             Assert.Equal(v, cell.GetDouble(), 9);
     }
+
+    [Fact]
+    public void Xlsx_FormulaWriteBack_RoundTrip()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"formula_xlsx_{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            var wb = Excel.Create();
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", 10);
+            ws.SetValue("B1", 20);
+            ws.Cell("C1").SetValue(Cell.FromFormula("=A1+B1"));
+            wb.SaveAs(file);
+
+            var read = Excel.Open(file);
+            Assert.True(read.Worksheets[0].Cell("C1").IsFormula);
+            Assert.Equal("A1+B1", read.Worksheets[0].Cell("C1").Formula);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Xlsb_FormulaWriteBack_RoundTrip()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"formula_xlsb_{Guid.NewGuid():N}.xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", 10);
+            ws.SetValue("B1", 20);
+            ws.Cell("C1").SetValue(Cell.FromFormula("=SUM(A1:B1)"));
+
+            var sd = ws.ToSheetData();
+            var c1cell = sd.Rows[0][2];
+            Assert.True(c1cell.IsFormula, $"IsFormula should be true, Type={c1cell.Type}");
+            Assert.Equal("=SUM(A1:B1)", c1cell.Formula);
+
+            wb.SaveAs(file);
+
+            var read = Excel.Open(file);
+            var c = read.Worksheets[0].Cell("C1");
+            Assert.True(c.IsFormula, $"C1 should be formula, Type={c.Type}, Number={c.Number}");
+            Assert.Equal("SUM(A1:B1)", c.Formula);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Xls_FormulaWriteBack_RoundTrip()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"formula_xls_{Guid.NewGuid():N}.xls");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xls);
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", 10);
+            ws.SetValue("B1", 20);
+            ws.Cell("C1").SetValue(Cell.FromFormula("=A1+B1"));
+            wb.SaveAs(file);
+
+            var read = Excel.Open(file);
+            Assert.True(read.Worksheets[0].Cell("C1").IsFormula);
+            Assert.Equal("A1+B1", read.Worksheets[0].Cell("C1").Formula);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Xlsb_FormulaWithFunction_RoundTrip()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"formula_fn_xlsb_{Guid.NewGuid():N}.xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", 5);
+            ws.SetValue("A2", 15);
+            ws.Cell("A3").SetValue(Cell.FromFormula("=MAX(A1:A2)"));
+            wb.SaveAs(file);
+
+            var read = Excel.Open(file);
+            Assert.True(read.Worksheets[0].Cell("A3").IsFormula);
+            Assert.Equal("MAX(A1:A2)", read.Worksheets[0].Cell("A3").Formula);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

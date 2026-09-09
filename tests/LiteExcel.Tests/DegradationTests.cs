@@ -32,9 +32,9 @@ public class DegradationTests
             var options = new ExcelWriteOptions { OnDegradation = d => reported.Add(d.Capability) };
             Excel.Write(file, wb, options);
 
-            Assert.Contains(DegradationCapability.Comments, reported);
             Assert.Contains(DegradationCapability.DataValidation, reported);
             Assert.Contains(DegradationCapability.AutoFilter, reported);
+            Assert.DoesNotContain(DegradationCapability.Comments, reported);
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }

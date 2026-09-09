@@ -37,6 +37,9 @@ internal static class BiffRecords
     public const ushort OpHlinkTooltip = 0x0800;
     public const ushort OpExternSheet = 0x0017;
     public const ushort OpDefinedName = 0x0018;
+    public const ushort OpNote = 0x001C;
+    public const ushort OpTxo = 0x01B6;
+    public const ushort OpAutoFilter = 0x009E;
 
     /// <summary>BIFF8 透视表视图记录（SXVIEW）。出现此记录表示工作簿含透视表 </summary>
     public const ushort OpSxView = 0x00B0;

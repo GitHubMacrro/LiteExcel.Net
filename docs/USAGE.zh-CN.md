@@ -18,6 +18,7 @@
 | 5 | [数据类型与转换](#5-数据类型与转换) |
 | 6 | [样式](#6-样式) |
 | 7 | [合并单元格](#7-合并单元格) |
+| 7.5 | [插入 / 删除行列](#75-插入--删除行列) |
 | 8 | [自动筛选](#8-自动筛选) |
 | 9 | [行高与列宽](#9-行高与列宽) |
 | 10 | [批注](#10-批注) |
@@ -787,7 +788,9 @@ SUM(A1:B1)
 A1*2
 ```
 
-List\<T\> 映射中可用 `[LiteColumn(IsFormula = true)]` 把字符串属性当作公式列（见 5.9）。
+List\&lt;T\> 映射中可用 `[LiteColumn(IsFormula = true)]` 把字符串属性当作公式列（见 5.9）。
+
+**公式写回（xls/xlsb）**：自 2.4.74 起，xls 与 xlsb 支持基础公式写回。`Cell.FromFormula("SUM(A1:B1)")` 会在写出时经内置 `FormulaEncoder` 将 A1 文本编码为 BIFF8/BIFF12 RPN。支持常量（数字/字符串/布尔）、单元格引用（含绝对 `$A$1`）、区域引用、基础运算符（`+ - * / ^ & = < > <= >=`）和内置函数。不支持的公式（数组、跨表引用、名称等）降级为缓存值写出，不影响文件读取。
 
 ## 5.8 Byte[]
 
@@ -1279,6 +1282,34 @@ var wb = Excel.Open("report.xlsx", new ExcelReadOptions { FillMergedCells = true
 *上图由本章示例代码写出，在 Excel 中打开的效果：合并单元格、外部链接与内部跳转、公式列。*
 ---
 
+# 7.5 插入 / 删除行列
+
+自 2.4.74 起，`Worksheet` 支持在任意位置插入或删除行/列，并自动同步偏移相关的合并区域、行高、列宽、行/列样式、批注、数据验证、自动筛选范围与图片锚点。
+
+```csharp
+var ws = Excel.Create().Worksheets["Sheet1"];
+ws.SetValue("A1", "h");
+ws.SetValue("A2", "v1");
+ws.SetValue("A3", "v2");
+
+ws.InsertRows(2, 1);   // 在第 2 行之前插入 1 行空行，原第 2 行及之后下移
+ws.DeleteRows(3, 1);   // 从第 3 行开始删除 1 行，其后行上移
+
+ws.InsertColumns(2, 2); // 在第 2 列之前插入 2 列空列
+ws.DeleteColumns(1, 1); // 从第 1 列开始删除 1 列
+```
+
+| 方法 | 说明 |
+|---|---|
+| `InsertRows(rowIndex, count)` | 在第 `rowIndex` 行前插入 `count` 行（1-based） |
+| `DeleteRows(rowIndex, count)` | 从第 `rowIndex` 行起删除 `count` 行 |
+| `InsertColumns(colIndex, count)` | 在第 `colIndex` 列前插入 `count` 列 |
+| `DeleteColumns(colIndex, count)` | 从第 `colIndex` 列起删除 `count` 列 |
+
+删除时：完全位于删除区域内的合并/批注等会被删除；跨越删除区域的对象会收缩；之后的对象整体偏移。插入时：插入点之后的对象整体偏移。
+
+---
+
 # 8. 自动筛选
 
 本章介绍自动筛选：写出筛选区域与列条件、条件类型与比较操作符、手动隐藏行，以及读回筛选。
@@ -1538,8 +1569,8 @@ Excel.Write("out.xlsx", wb, new ExcelWriteOptions { AutoFitColumns = true });
 
 本章介绍批注的写出与读回。
 
-> ⚠️ **重要限制**
-> 批注仅支持 xlsx / xlsm。写出的 xls / xlsb / csv 批注被丢弃，经 `OnDegradation` 上报（见第 22 章）。批注写回依赖 OOXML VML legacyDrawing，需用真实 Excel 打开验证。
+> ⚠️ **格式支持**
+> 批注支持 xlsx / xlsm / xls / xlsb 读写；csv 不支持批注，写出时经 `OnDegradation` 上报（见第 22 章）。xlsx/xlsm 批注写回依赖 OOXML VML legacyDrawing；xlsb 批注存储于独立 `commentsN.bin` 部件 + VML；xls 批注使用 BIFF8 记录组（MSODRAWING + OBJ + TXO + CONTINUE + NOTE）。批注均需用真实 Excel 打开验证。
 
 ## 📑 目录
 
@@ -2719,7 +2750,7 @@ True structure=True hasPwd=False
 | 合并单元格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 自动筛选 | ☑️ | ☑️ | 范围读写 | ❌ | ❌ |
 | 行高 / 列宽 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| 批注 | ☑️ | ☑️ | 读取 | ❌ | ❌ |
+| 批注 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 数据验证 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 超链接 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 冻结窗格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
@@ -2729,7 +2760,8 @@ True structure=True hasPwd=False
 | 命名区域 | ☑️ | ☑️ | ❌ | 仅读取 | ❌ |
 | 文档属性 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | 打开 / 修改密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
-| 公式（写） | ☑️ | ☑️ | 按缓存值写 | 按缓存值写 | ❌ |
+| 插入 / 删除行列 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| 公式（写） | ☑️ | ☑️ | 基础写回 | 基础写回 | ❌ |
 | 公式（读） | ☑️ | ☑️ | 可解析时还原 | 可解析时还原 | ❌ |
 | 图表 / 透视表 | 只保真 | 只保真 | 只保真 | ❌ | ❌ |
 | 流式读（StreamRows / EnumerateRows） | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |

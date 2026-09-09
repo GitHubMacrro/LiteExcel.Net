@@ -52,9 +52,6 @@ internal static class XlsbBackend
     private const int BrtShortSt = 0x0011;
     private const int BrtShortIsst = 0x0012;
     private const int BrtColInfo = 0x003C;
-    private const int BrtBeginComment = 0x003E;
-    private const int BrtCommentText = 0x003F;
-    private const int BrtEndComment = 0x0040;
     private const int BrtWsDim = 0x0094;
     private const int BrtPane = 0x0097;
     private const int BrtMergeCell = 0x00B0;
@@ -230,7 +227,9 @@ internal static class XlsbBackend
             if (data is null)
                 throw new LiteExcelException($"缺少工作表文件: {sheetPaths[i]}");
             var rels = ReadSheetHyperlinkRels(zip, sheetPaths[i]);
-            result.Add(ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, date1904, rels));
+            var sd = ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, date1904, rels);
+            ReadCommentsForSheet(zip, sheetPaths[i], sd);
+            result.Add(sd);
         }
 
         if (result.Count == 0)
@@ -462,8 +461,6 @@ internal static class XlsbBackend
         int maxCol = -1;
         var colWidths = new Dictionary<int, double>();
         var rowHeights = new Dictionary<int, double>();
-        int commentRow = -1;
-        int commentCol = -1;
         int freezeRows = 0;
         int freezeCols = 0;
         int currentRow = -1;
@@ -579,27 +576,6 @@ internal static class XlsbBackend
                     break;
                 case BrtBeginAFilter:
                     ParseBeginAFilter(d, sheet);
-                    break;
-                case BrtBeginComment:
-                    if (d.Length >= 8)
-                    {
-                        commentRow = ReadS32(d, 0);
-                        commentCol = ReadS32(d, 4);
-                    }
-                    break;
-                case BrtCommentText:
-                    if (commentRow >= 0 && commentCol >= 0 && d.Length >= 1)
-                    {
-                        int off = 1;
-                        var text = Biff12Records.ReadWideString(d, ref off);
-                        var a1Ref = CellRef.ToString(commentRow, commentCol);
-                        sheet.Comments ??= new Dictionary<string, string>();
-                        sheet.Comments[a1Ref] = text;
-                    }
-                    break;
-                case BrtEndComment:
-                    commentRow = -1;
-                    commentCol = -1;
                     break;
             }
         }
@@ -814,4 +790,143 @@ internal static class XlsbBackend
     }
 
     private static int ReadS32(byte[] d, int off) => Biff12Records.ReadS32(d, off);
+
+    // ── comments1.bin (BIFF12) ──
+    private const int BrtBeginComments = 0x0274;
+    private const int BrtEndComments = 0x0275;
+    private const int BrtBeginCommentAuthors = 0x0276;
+    private const int BrtEndCommentAuthors = 0x0277;
+    private const int BrtCommentAuthor = 0x0278;
+    private const int BrtBeginCommentList = 0x0279;
+    private const int BrtCommentText = 0x027D;
+
+    /// <summary>
+    /// 从 commentsN.bin 和 VML 读取批注。
+    /// commentsN.bin 是独立 BIFF12 部件（不在 sheetN.bin 内），包含作者表和批注文本。
+    /// 单元格位置从 VML 的 <x:Row><x:Column> 获取（与 XLSX 相同的 VML 格式）。
+    /// </summary>
+    private static void ReadCommentsForSheet(ZipArchive zip, string sheetPath, SheetData sheet)
+    {
+        var (dir, file) = SplitSheetPath(sheetPath);
+        var relsPath = $"{dir}/_rels/{file}.rels";
+        var relsEntry = zip.GetEntry(relsPath);
+        if (relsEntry is null) return;
+
+        string? commentsTarget = null;
+        string? vmlTarget = null;
+        try
+        {
+            var rels = XElement.Load(relsEntry.Open());
+            var relNs = rels.Name.Namespace;
+            foreach (var rel in rels.Elements(relNs + "Relationship"))
+            {
+                var type = rel.Attribute("Type")?.Value ?? "";
+                if (type.EndsWith("/comments", StringComparison.OrdinalIgnoreCase))
+                    commentsTarget = rel.Attribute("Target")?.Value;
+                else if (type.EndsWith("/vmlDrawing", StringComparison.OrdinalIgnoreCase))
+                    vmlTarget = rel.Attribute("Target")?.Value;
+            }
+        }
+        catch { return; }
+
+        if (commentsTarget is null) return;
+
+        var commentsPath = ResolveRelativePath(sheetPath, commentsTarget);
+        var commentsEntry = zip.GetEntry(commentsPath);
+        if (commentsEntry is null) return;
+
+        var commentsData = ReadEntry(zip, commentsPath);
+        if (commentsData is null) return;
+
+        var texts = ParseCommentsBin(commentsData);
+
+        if (vmlTarget is not null)
+        {
+            var vmlPath = ResolveRelativePath(sheetPath, vmlTarget);
+            var vmlEntry = zip.GetEntry(vmlPath);
+            if (vmlEntry is not null)
+            {
+                var vmlBytes = ReadEntry(zip, vmlPath);
+                if (vmlBytes is not null)
+                {
+                    var vmlText = System.Text.Encoding.UTF8.GetString(vmlBytes);
+                    var positions = ParseVmlPositions(vmlText);
+                    for (int i = 0; i < texts.Count && i < positions.Count; i++)
+                    {
+                        var (row, col) = positions[i];
+                        var a1Ref = CellRef.ToString(row, col);
+                        sheet.Comments ??= new Dictionary<string, string>();
+                        sheet.Comments[a1Ref] = texts[i];
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>解析 comments1.bin 的 BIFF12 记录，提取批注文本列表（按出现顺序）。</summary>
+    private static List<string> ParseCommentsBin(byte[] data)
+    {
+        var texts = new List<string>();
+        var records = Biff12Records.ReadAll(data);
+        foreach (var rec in records)
+        {
+            if (rec.Rt == BrtCommentText && rec.Data.Length >= 1)
+            {
+                int off = 1;
+                var text = Biff12Records.ReadWideString(rec.Data, ref off);
+                texts.Add(text);
+            }
+        }
+        return texts;
+    }
+
+    /// <summary>解析 VML 中 <x:Row> 和 <x:Column> 的值，返回 (row, col) 列表（0-based）。</summary>
+    private static List<(int row, int col)> ParseVmlPositions(string vmlText)
+    {
+        var positions = new List<(int row, int col)>();
+        try
+        {
+            var doc = XElement.Parse(vmlText);
+            var ns = doc.Name.Namespace;
+            var xNs = ns.GetName("x");
+            foreach (var shape in doc.Descendants())
+            {
+                if (!shape.Name.LocalName.Equals("ClientData", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                int row = -1, col = -1;
+                foreach (var child in shape.Elements())
+                {
+                    if (child.Name.LocalName == "Row" && int.TryParse(child.Value, out var r))
+                        row = r;
+                    if (child.Name.LocalName == "Column" && int.TryParse(child.Value, out var c))
+                        col = c;
+                }
+                if (row >= 0 && col >= 0)
+                    positions.Add((row, col));
+            }
+        }
+        catch { }
+        return positions;
+    }
+
+    private static (string dir, string file) SplitSheetPath(string sheetPath)
+    {
+        var slash = sheetPath.LastIndexOf('/');
+        if (slash < 0) return ("", sheetPath);
+        return (sheetPath.Substring(0, slash), sheetPath.Substring(slash + 1));
+    }
+
+    private static string ResolveRelativePath(string basePath, string relative)
+    {
+        if (relative.StartsWith("/", StringComparison.Ordinal))
+            return relative.TrimStart('/');
+        var baseDir = System.IO.Path.GetDirectoryName(basePath)?.Replace('\\', '/') ?? "";
+        while (relative.StartsWith("../", StringComparison.Ordinal))
+        {
+            relative = relative.Substring(3);
+            var lastSlash = baseDir.LastIndexOf('/');
+            if (lastSlash >= 0) baseDir = baseDir.Substring(0, lastSlash);
+        }
+        return string.IsNullOrEmpty(baseDir) ? relative : baseDir + "/" + relative;
+    }
 }

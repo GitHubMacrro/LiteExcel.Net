@@ -42,6 +42,8 @@ Demo28_IconSet(outDir);
         Demo29_FacadeAppend(outDir);
         Demo30_AutoColumnWidths(outDir);
         Demo31_ReadWithProgress(outDir);
+        Demo32_InsertDeleteRows(outDir);
+        Demo33_FormulaWritebackAndComment(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -1200,6 +1202,56 @@ Demo28_IconSet(outDir);
                 Console.WriteLine($"  Progress: {current}/{total} ({current * 100 / total}%)");
         });
         Console.WriteLine($"  Done! Total rows read: {lastReported}");
+        Console.WriteLine();
+    }
+
+    // 32. Insert/Delete rows & columns
+    private static void Demo32_InsertDeleteRows(string dir)
+    {
+        Console.WriteLine("[32] Insert/Delete Rows & Columns");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        ws.SetValue("A1", "Name");
+        ws.SetValue("A2", "Alice");
+        ws.SetValue("A3", "Bob");
+        ws.SetValue("A4", "Carol");
+        ws.SetValue("B1", "Score");
+        ws.Merge("A1:B1");
+        ws.Comments = new Dictionary<string, string> { { "B2", "top" } };
+
+        ws.InsertRows(2, 1);        // 在第 2 行前插入空行
+        ws.SetValue("A2", "Inserted");
+
+        var file = Path.Combine(dir, "demo32_insert_delete_rows.xlsx");
+        wb.SaveAs(file);
+
+        var reopened = Excel.Open(file);
+        Console.WriteLine($"  A1={reopened.Worksheets[0].Cell("A1").GetString()}, A2={reopened.Worksheets[0].Cell("A2").GetString()}, A4={reopened.Worksheets[0].Cell("A4").GetString()}");
+        Console.WriteLine();
+    }
+
+    // 33. Formula writeback + comments (xlsb)
+    private static void Demo33_FormulaWritebackAndComment(string dir)
+    {
+        Console.WriteLine("[33] Formula Writeback + Comments");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        ws.SetValue("A1", 10);
+        ws.SetValue("A2", 20);
+        ws.SetValue("A3", 30);
+        ws.Cell("B1").SetValue(Cell.FromFormula("SUM(A1:A3)"));
+        ws.Cell("B2").SetValue(Cell.FromFormula("A1+A2"));
+        ws.Comments = new Dictionary<string, string> { { "B1", "=SUM formula result" } };
+
+        var file = Path.Combine(dir, "demo33_formula_comment.xlsb");
+        wb.SaveAs(file, ExcelFormat.Xlsb);
+
+        var reopened = Excel.Open(file);
+        var b1 = reopened.Worksheets[0].Cell("B1");
+        var noteText = reopened.Worksheets[0].Comments?.TryGetValue("B1", out var note) == true ? note : "none";
+        Console.WriteLine($"  B1.IsFormula={b1.IsFormula}, Formula={b1.Formula}, Comment={noteText}");
         Console.WriteLine();
     }
 }

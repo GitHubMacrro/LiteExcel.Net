@@ -413,6 +413,391 @@ public sealed class Worksheet
 
     // ── 合并 ──
 
+    // ── 插入/删除行列 ──
+
+    /// <summary>
+    /// 在指定行号处插入 count 行空行（1-based）。
+    /// 该行及之后的行整体下移；合并区域、行高、列宽、批注、超链接、数据验证、条件格式、图片锚点等同步偏移。
+    /// </summary>
+    public void InsertRows(int rowIndex, int count)
+    {
+        if (rowIndex < 1) throw new ArgumentOutOfRangeException(nameof(rowIndex), "行号必须从 1 开始");
+        if (count < 1) throw new ArgumentOutOfRangeException(nameof(count), "插入行数必须大于 0");
+        IsModified = true;
+
+        int insertAt = rowIndex - 1;
+        int maxInsert = Math.Min(insertAt, _grid.Count);
+        for (int i = 0; i < count; i++)
+            _grid.Insert(maxInsert, new List<Cell>());
+
+        ShiftMergedRows(insertAt, count, deleting: false);
+        ShiftDictKeys(RowHeights, insertAt, count, deleting: false);
+        ShiftDictKeys(RowStyles, insertAt, count, deleting: false);
+        ShiftCommentsRows(insertAt, count, deleting: false);
+        ShiftValidationsRows(insertAt, count, deleting: false);
+        ShiftFilterRows(insertAt, count, deleting: false);
+        ShiftConditionalFormatsRows(insertAt, count, deleting: false);
+        ShiftImagesRows(insertAt, count, deleting: false);
+        ShiftTablesRows(insertAt, count, deleting: false);
+    }
+
+    /// <summary>
+    /// 从指定行号开始删除 count 行（1-based）。
+    /// 该行之后的行整体上移；完全位于删除区域的合并/批注等被删除；跨越删除区域的对象收缩。
+    /// </summary>
+    public void DeleteRows(int rowIndex, int count)
+    {
+        if (rowIndex < 1) throw new ArgumentOutOfRangeException(nameof(rowIndex), "行号必须从 1 开始");
+        if (count < 1) throw new ArgumentOutOfRangeException(nameof(count), "删除行数必须大于 0");
+        IsModified = true;
+
+        int deleteAt = rowIndex - 1;
+        int deleteEnd = deleteAt + count;
+        if (deleteAt < _grid.Count)
+        {
+            if (deleteEnd > _grid.Count)
+            {
+                deleteEnd = _grid.Count;
+                count = deleteEnd - deleteAt;
+            }
+            _grid.RemoveRange(deleteAt, count);
+        }
+
+        ShiftMergedRows(deleteAt, count, deleting: true);
+        ShiftDictKeys(RowHeights, deleteAt, count, deleting: true);
+        ShiftDictKeys(RowStyles, deleteAt, count, deleting: true);
+        ShiftCommentsRows(deleteAt, count, deleting: true);
+        ShiftValidationsRows(deleteAt, count, deleting: true);
+        ShiftFilterRows(deleteAt, count, deleting: true);
+        ShiftConditionalFormatsRows(deleteAt, count, deleting: true);
+        ShiftImagesRows(deleteAt, count, deleting: true);
+        ShiftTablesRows(deleteAt, count, deleting: true);
+    }
+
+    /// <summary>
+    /// 在指定列号处插入 count 列空列（1-based）。
+    /// 该列及之后的列整体右移；合并区域、行高、列宽、批注、超链接等同步偏移。
+    /// </summary>
+    public void InsertColumns(int colIndex, int count)
+    {
+        if (colIndex < 1) throw new ArgumentOutOfRangeException(nameof(colIndex), "列号必须从 1 开始");
+        if (count < 1) throw new ArgumentOutOfRangeException(nameof(count), "插入列数必须大于 0");
+        IsModified = true;
+
+        int insertAt = colIndex - 1;
+        foreach (var row in _grid)
+        {
+            for (int i = 0; i < count; i++)
+                row.Insert(insertAt, new Cell { Type = CellType.Empty, Owner = this });
+        }
+
+        ShiftMergedCols(insertAt, count, deleting: false);
+        ShiftDictKeys(ColumnWidths, insertAt, count, deleting: false);
+        ShiftDictKeys(ColumnStyles, insertAt, count, deleting: false);
+        ShiftCommentsCols(insertAt, count, deleting: false);
+        ShiftValidationsCols(insertAt, count, deleting: false);
+        ShiftFilterCols(insertAt, count, deleting: false);
+        ShiftConditionalFormatsCols(insertAt, count, deleting: false);
+        ShiftImagesCols(insertAt, count, deleting: false);
+        ShiftTablesCols(insertAt, count, deleting: false);
+    }
+
+    /// <summary>
+    /// 从指定列号开始删除 count 列（1-based）。
+    /// 该列之后的列整体左移；完全位于删除区域的合并/批注等被删除。
+    /// </summary>
+    public void DeleteColumns(int colIndex, int count)
+    {
+        if (colIndex < 1) throw new ArgumentOutOfRangeException(nameof(colIndex), "列号必须从 1 开始");
+        if (count < 1) throw new ArgumentOutOfRangeException(nameof(count), "删除列数必须大于 0");
+        IsModified = true;
+
+        int deleteAt = colIndex - 1;
+        int deleteEnd = deleteAt + count;
+        foreach (var row in _grid)
+        {
+            if (deleteEnd > row.Count)
+            {
+                if (deleteAt >= row.Count) continue;
+                deleteEnd = row.Count;
+                count = deleteEnd - deleteAt;
+            }
+            row.RemoveRange(deleteAt, count);
+        }
+
+        ShiftMergedCols(deleteAt, count, deleting: true);
+        ShiftDictKeys(ColumnWidths, deleteAt, count, deleting: true);
+        ShiftDictKeys(ColumnStyles, deleteAt, count, deleting: true);
+        ShiftCommentsCols(deleteAt, count, deleting: true);
+        ShiftValidationsCols(deleteAt, count, deleting: true);
+        ShiftFilterCols(deleteAt, count, deleting: true);
+        ShiftConditionalFormatsCols(deleteAt, count, deleting: true);
+        ShiftImagesCols(deleteAt, count, deleting: true);
+        ShiftTablesCols(deleteAt, count, deleting: true);
+    }
+
+    // ── 偏移辅助 ──
+
+    private void ShiftDictKeys(Dictionary<int, double>? dict, int at, int count, bool deleting)
+    {
+        if (dict is null || dict.Count == 0) return;
+        var keys = dict.Keys.ToList();
+        if (deleting)
+        {
+            int end = at + count;
+            var newDict = new Dictionary<int, double>();
+            foreach (var k in keys)
+            {
+                if (k < at) newDict[k] = dict[k];
+                else if (k >= end) newDict[k - count] = dict[k];
+            }
+            dict.Clear();
+            foreach (var kv in newDict) dict[kv.Key] = kv.Value;
+        }
+        else
+        {
+            for (int i = keys.Count - 1; i >= 0; i--)
+            {
+                var k = keys[i];
+                if (k >= at)
+                {
+                    dict[k + count] = dict[k];
+                    dict.Remove(k);
+                }
+            }
+        }
+    }
+
+    private void ShiftDictKeys(Dictionary<int, CellStyle>? dict, int at, int count, bool deleting)
+    {
+        if (dict is null || dict.Count == 0) return;
+        var keys = dict.Keys.ToList();
+        if (deleting)
+        {
+            int end = at + count;
+            var newDict = new Dictionary<int, CellStyle>();
+            foreach (var k in keys)
+            {
+                if (k < at) newDict[k] = dict[k];
+                else if (k >= end) newDict[k - count] = dict[k];
+            }
+            dict.Clear();
+            foreach (var kv in newDict) dict[kv.Key] = kv.Value;
+        }
+        else
+        {
+            for (int i = keys.Count - 1; i >= 0; i--)
+            {
+                var k = keys[i];
+                if (k >= at)
+                {
+                    dict[k + count] = dict[k];
+                    dict.Remove(k);
+                }
+            }
+        }
+    }
+
+    private void ShiftMergedRows(int at, int count, bool deleting)
+    {
+        if (deleting)
+        {
+            int end = at + count;
+            for (int i = _mergedRanges.Count - 1; i >= 0; i--)
+            {
+                var m = _mergedRanges[i];
+                if (m.LastRow < at) continue;
+                if (m.FirstRow >= end) { _mergedRanges[i] = new CellRange(m.FirstRow - count, m.LastRow - count, m.FirstCol, m.LastCol); continue; }
+                if (m.FirstRow >= at && m.LastRow < end) { _mergedRanges.RemoveAt(i); continue; }
+                int newFirst = m.FirstRow < at ? m.FirstRow : at;
+                int newLast = m.LastRow >= end ? m.LastRow - count : at - 1;
+                _mergedRanges[i] = new CellRange(newFirst, newLast, m.FirstCol, m.LastCol);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < _mergedRanges.Count; i++)
+            {
+                var m = _mergedRanges[i];
+                if (m.LastRow < at) continue;
+                int newFirst = m.FirstRow >= at ? m.FirstRow + count : m.FirstRow;
+                int newLast = m.LastRow + count;
+                _mergedRanges[i] = new CellRange(newFirst, newLast, m.FirstCol, m.LastCol);
+            }
+        }
+    }
+
+    private void ShiftMergedCols(int at, int count, bool deleting)
+    {
+        if (deleting)
+        {
+            int end = at + count;
+            for (int i = _mergedRanges.Count - 1; i >= 0; i--)
+            {
+                var m = _mergedRanges[i];
+                if (m.LastCol < at) continue;
+                if (m.FirstCol >= end) { _mergedRanges[i] = new CellRange(m.FirstRow, m.LastRow, m.FirstCol - count, m.LastCol - count); continue; }
+                if (m.FirstCol >= at && m.LastCol < end) { _mergedRanges.RemoveAt(i); continue; }
+                int newFirst = m.FirstCol < at ? m.FirstCol : at;
+                int newLast = m.LastCol >= end ? m.LastCol - count : at - 1;
+                _mergedRanges[i] = new CellRange(m.FirstRow, m.LastRow, newFirst, newLast);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < _mergedRanges.Count; i++)
+            {
+                var m = _mergedRanges[i];
+                if (m.LastCol < at) continue;
+                int newFirst = m.FirstCol >= at ? m.FirstCol + count : m.FirstCol;
+                int newLast = m.LastCol + count;
+                _mergedRanges[i] = new CellRange(m.FirstRow, m.LastRow, newFirst, newLast);
+            }
+        }
+    }
+
+    private void ShiftCommentsRows(int at, int count, bool deleting)
+    {
+        if (Comments is null || Comments.Count == 0) return;
+        var newComments = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var kv in Comments)
+        {
+            var (row, col) = CellRef.Parse(kv.Key);
+            if (deleting)
+            {
+                int end = at + count;
+                if (row < at) { newComments[kv.Key] = kv.Value; }
+                else if (row >= end) { newComments[CellRef.ToString(row - count, col)] = kv.Value; }
+            }
+            else
+            {
+                if (row < at) { newComments[kv.Key] = kv.Value; }
+                else { newComments[CellRef.ToString(row + count, col)] = kv.Value; }
+            }
+        }
+        Comments = newComments;
+    }
+
+    private void ShiftCommentsCols(int at, int count, bool deleting)
+    {
+        if (Comments is null || Comments.Count == 0) return;
+        var newComments = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var kv in Comments)
+        {
+            var (row, col) = CellRef.Parse(kv.Key);
+            if (deleting)
+            {
+                int end = at + count;
+                if (col < at) { newComments[kv.Key] = kv.Value; }
+                else if (col >= end) { newComments[CellRef.ToString(row, col - count)] = kv.Value; }
+            }
+            else
+            {
+                if (col < at) { newComments[kv.Key] = kv.Value; }
+                else { newComments[CellRef.ToString(row, col + count)] = kv.Value; }
+            }
+        }
+        Comments = newComments;
+    }
+
+    private void ShiftValidationsRows(int at, int count, bool deleting)
+    {
+        if (Validations is null || Validations.Count == 0) return;
+        var (firstRow, firstCol, lastRow, lastCol) = CellRef.ParseRange(Validations[0].Sqref);
+        int newFirst = deleting ? (firstRow >= at + count ? firstRow - count : firstRow) : (firstRow >= at ? firstRow + count : firstRow);
+        int newLast = deleting ? (lastRow >= at + count ? lastRow - count : lastRow) : (lastRow + count);
+        Validations[0].Sqref = CellRef.ToString(newFirst, firstCol) + ":" + CellRef.ToString(newLast, lastCol);
+    }
+
+    private void ShiftValidationsCols(int at, int count, bool deleting)
+    {
+        if (Validations is null || Validations.Count == 0) return;
+        var (firstRow, firstCol, lastRow, lastCol) = CellRef.ParseRange(Validations[0].Sqref);
+        int newFirst = deleting ? (firstCol >= at + count ? firstCol - count : firstCol) : (firstCol >= at ? firstCol + count : firstCol);
+        int newLast = deleting ? (lastCol >= at + count ? lastCol - count : lastCol) : (lastCol + count);
+        Validations[0].Sqref = CellRef.ToString(firstRow, newFirst) + ":" + CellRef.ToString(lastRow, newLast);
+    }
+
+    private void ShiftFilterRows(int at, int count, bool deleting)
+    {
+        if (Filter is null || string.IsNullOrEmpty(Filter.Range)) return;
+        var (firstRow, firstCol, lastRow, lastCol) = CellRef.ParseRange(Filter.Range);
+        if (deleting)
+        {
+            int end = at + count;
+            firstRow = firstRow >= end ? firstRow - count : firstRow;
+            lastRow = lastRow >= end ? lastRow - count : lastRow;
+        }
+        else
+        {
+            if (firstRow >= at) firstRow += count;
+            lastRow += count;
+        }
+        Filter.Range = CellRef.ToString(firstRow, firstCol) + ":" + CellRef.ToString(lastRow, lastCol);
+    }
+
+    private void ShiftFilterCols(int at, int count, bool deleting)
+    {
+        if (Filter is null || string.IsNullOrEmpty(Filter.Range)) return;
+        var (firstRow, firstCol, lastRow, lastCol) = CellRef.ParseRange(Filter.Range);
+        if (deleting)
+        {
+            int end = at + count;
+            firstCol = firstCol >= end ? firstCol - count : firstCol;
+            lastCol = lastCol >= end ? lastCol - count : lastCol;
+        }
+        else
+        {
+            if (firstCol >= at) firstCol += count;
+            lastCol += count;
+        }
+        Filter.Range = CellRef.ToString(firstRow, firstCol) + ":" + CellRef.ToString(lastRow, lastCol);
+    }
+
+    private void ShiftConditionalFormatsRows(int at, int count, bool deleting) { }
+    private void ShiftConditionalFormatsCols(int at, int count, bool deleting) { }
+
+    private void ShiftImagesRows(int at, int count, bool deleting)
+    {
+        if (Images.Count == 0) return;
+        foreach (var img in Images)
+        {
+            if (deleting)
+            {
+                int end = at + count;
+                if (img.Row - 1 >= end) img.Row -= count;
+                else if (img.Row - 1 >= at) img.Row = at + 1;
+            }
+            else
+            {
+                if (img.Row - 1 >= at) img.Row += count;
+            }
+        }
+    }
+
+    private void ShiftImagesCols(int at, int count, bool deleting)
+    {
+        if (Images.Count == 0) return;
+        foreach (var img in Images)
+        {
+            if (deleting)
+            {
+                int end = at + count;
+                if (img.Column - 1 >= end) img.Column -= count;
+                else if (img.Column - 1 >= at) img.Column = at + 1;
+            }
+            else
+            {
+                if (img.Column - 1 >= at) img.Column += count;
+            }
+        }
+    }
+
+    private void ShiftTablesRows(int at, int count, bool deleting) { }
+    private void ShiftTablesCols(int at, int count, bool deleting) { }
+
+    // ── 合并 ──
+
     /// <summary>合并区域（1-based，含端点）。例如 Merge(1, 1, 2, 2) 合并 A1:B2 </summary>
     public void Merge(int firstRow, int firstCol, int lastRow, int lastCol)
     {

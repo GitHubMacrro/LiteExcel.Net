@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
+using LiteExcel.Internal.Biff;
 using LiteExcel.Internal.Biff12;
 
 namespace LiteExcel.Internal;
@@ -85,6 +86,10 @@ internal static class XlsbWriter
     private const int BrtCellBool = 0x0004;
     private const int BrtCellReal = 0x0005;
     private const int BrtCellSt = 0x0006;
+    private const int BrtFmlaString = 0x0008;
+    private const int BrtFmlaNum = 0x0009;
+    private const int BrtFmlaBool = 0x000A;
+    private const int BrtFmlaError = 0x000B;
     private const int BrtCellIsst = 0x0007;
     private const int BrtShortBlank = 0x000C;
     private const int BrtShortRk = 0x000D;
@@ -201,7 +206,14 @@ internal static class XlsbWriter
         }
 
         // 包结构
-        WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null, properties is not null, preserved));
+            var sheetsWithComments = new List<int>();
+            for (int i = 0; i < sheets.Count; i++)
+            {
+                if (sheets[i].Comments is { Count: > 0 })
+                    sheetsWithComments.Add(i + 1);
+            }
+
+            WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null, properties is not null, preserved, sheetsWithComments));
         WriteEntry(zip, "_rels/.rels", RootRelsXml(properties is not null));
         WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended));
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null, preserved));
@@ -220,7 +232,13 @@ internal static class XlsbWriter
         {
             var extLinks = CollectExternalHyperlinks(sheets[i]);
             WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf, date1904, extLinks));
-            var sheetRels = BuildSheetRelsXml(i + 1, extLinks, preserved);
+            bool hasComments = sheets[i].Comments is { Count: > 0 };
+            if (hasComments)
+            {
+                WriteEntry(zip, $"xl/comments{i + 1}.bin", BuildCommentsBin(sheets[i].Comments!));
+                WriteEntry(zip, $"xl/drawings/vmlDrawing{i + 1}.vml", XlsxWriter.VmlDrawingXml(sheets[i].Comments!));
+            }
+            var sheetRels = BuildSheetRelsXml(i + 1, extLinks, preserved, hasComments);
             if (!string.IsNullOrEmpty(sheetRels))
                 WriteEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.bin.rels", sheetRels);
         }
@@ -291,9 +309,10 @@ internal static class XlsbWriter
     }
 
     /// <summary>合并工作表级保留 rels（图表/透视表等）与重建的超链接 rels </summary>
-    private static string? BuildSheetRelsXml(int sheetNumber, List<string> extLinks, OoxmlPreservedParts? preserved)
+    private static string? BuildSheetRelsXml(int sheetNumber, List<string> extLinks, OoxmlPreservedParts? preserved, bool hasComments = false)
     {
         var relParts = new List<XlsxWriter.RelInfo>();
+        int nextRid = 1;
         for (int k = 0; k < extLinks.Count; k++)
         {
             relParts.Add(new XlsxWriter.RelInfo
@@ -302,6 +321,22 @@ internal static class XlsbWriter
                 Type = $"{OfficeRelNs}/hyperlink",
                 Target = extLinks[k],
                 TargetMode = "External",
+            });
+            nextRid = k + 2;
+        }
+        if (hasComments)
+        {
+            relParts.Add(new XlsxWriter.RelInfo
+            {
+                Id = $"rIdC1",
+                Type = $"{OfficeRelNs}/comments",
+                Target = $"../comments{sheetNumber}.bin",
+            });
+            relParts.Add(new XlsxWriter.RelInfo
+            {
+                Id = $"rIdV1",
+                Type = $"{OfficeRelNs}/vmlDrawing",
+                Target = $"../drawings/vmlDrawing{sheetNumber}.vml",
             });
         }
         string rebuilt = XlsxWriter.RelsXml(relParts);
@@ -329,8 +364,6 @@ internal static class XlsbWriter
                     TargetFormat = targetFormat,
                     Message = msg,
                 });
-            if (sheet.Comments is { Count: > 0 })
-                Report(DegradationCapability.Comments, $"xlsb 批注读取已支持但写出尚未实现，工作表 '{sheet.SheetName}' 的 {sheet.Comments.Count} 个批注在重建路径中已丢弃。未修改时 verbatim 保留。");
             if (sheet.Validations is { Count: > 0 })
                 Report(DegradationCapability.DataValidation, $"xlsb 不支持数据验证，工作表 '{sheet.SheetName}' 的数据验证已丢弃。");
             if (sheet.Filter is not null && sheet.Filter.Columns.Count > 0)
@@ -392,19 +425,25 @@ internal static class XlsbWriter
 
     // ── 包 XML 部件 ──
 
-    private static string ContentTypesXml(int sheetCount, bool hasSst, bool hasVba, bool hasProps, OoxmlPreservedParts? preserved)
+    private static string ContentTypesXml(int sheetCount, bool hasSst, bool hasVba, bool hasProps, OoxmlPreservedParts? preserved, IReadOnlyList<int>? sheetsWithComments = null)
     {
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
         sb.Append("<Default Extension=\"bin\" ContentType=\"application/vnd.ms-excel.sheet.binary.macroEnabled.main\"/>");
         sb.Append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
+        sb.Append("<Default Extension=\"vml\" ContentType=\"application/vnd.openxmlformats-officedocument.vmlDrawing\"/>");
         sb.Append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
         for (int i = 1; i <= sheetCount; i++)
             sb.Append($"<Override PartName=\"/xl/worksheets/sheet{i}.bin\" ContentType=\"application/vnd.ms-excel.worksheet\"/>");
         sb.Append("<Override PartName=\"/xl/styles.bin\" ContentType=\"application/vnd.ms-excel.styles\"/>");
         if (hasSst)
             sb.Append("<Override PartName=\"/xl/sharedStrings.bin\" ContentType=\"application/vnd.ms-excel.sharedStrings\"/>");
+        if (sheetsWithComments is not null)
+        {
+            foreach (var idx in sheetsWithComments)
+                sb.Append($"<Override PartName=\"/xl/comments{idx}.bin\" ContentType=\"application/vnd.ms-excel.comments\"/>");
+        }
         if (hasVba)
             sb.Append("<Override PartName=\"/xl/vbaProject.bin\" ContentType=\"application/vnd.ms-office.vbaProject\"/>");
         if (hasProps)
@@ -1033,6 +1072,18 @@ internal static class XlsbWriter
         int xf = getXf(cell.NumberFormat);
         bool lastSeen = !firstInRow && col == prevCol + 1;
 
+        var formulaText = cell.Formula ?? (cell.IsFormula ? cell.Text : null);
+        if (!string.IsNullOrEmpty(formulaText))
+        {
+            var rpn = FormulaEncoder.TryEncode(formulaText, biff12: true);
+            if (rpn is not null)
+            {
+                WriteFormulaCell(ms, col, cell, xf, rpn, lastSeen);
+                prevCol = col;
+                return;
+            }
+        }
+
         switch (cell.Type)
         {
             case CellType.Text:
@@ -1082,6 +1133,52 @@ internal static class XlsbWriter
                 break;
         }
         prevCol = col;
+    }
+
+    private static void WriteFormulaCell(MemoryStream ms, int col, Cell cell, int xf, byte[] rpn, bool lastSeen)
+    {
+        // BIFF12 BrtFmla* records do not use Short variants.
+        // Layout: col(4) + ixfe(3) + padding(1) + value + reserved(2) + cce(4) + RPN
+        // The reader expects value at offset 8 (col(4)+ixfe(3)+pad(1)).
+        var data = new MemoryStream();
+        WriteS32(data, col);
+        data.WriteByte((byte)(xf & 0xFF));
+        data.WriteByte((byte)((xf >> 8) & 0xFF));
+        data.WriteByte((byte)((xf >> 16) & 0xFF));
+        data.WriteByte(0x00); // padding byte to align value at offset 8
+
+        switch (cell.Type)
+        {
+            case CellType.Number:
+                WriteDouble(data, cell.Number);
+                WriteU16(data, 0); // reserved
+                WriteU32(data, (uint)rpn.Length);
+                data.Write(rpn, 0, rpn.Length);
+                WriteRecord(ms, BrtFmlaNum, data.ToArray());
+                break;
+            case CellType.Date:
+                WriteDouble(data, FormatDetector.DateToSerial(cell.Date, false));
+                WriteU16(data, 0);
+                WriteU32(data, (uint)rpn.Length);
+                data.Write(rpn, 0, rpn.Length);
+                WriteRecord(ms, BrtFmlaNum, data.ToArray());
+                break;
+            case CellType.Boolean:
+                data.WriteByte((byte)(cell.Boolean ? 1 : 0));
+                WriteU16(data, 0);
+                WriteU32(data, (uint)rpn.Length);
+                data.Write(rpn, 0, rpn.Length);
+                WriteRecord(ms, BrtFmlaBool, data.ToArray());
+                break;
+            default:
+                // BrtFmlaString: value = XLWideString (cch(4) + chars)
+                WriteU32(data, 0); // cch = 0 (empty string result)
+                WriteU16(data, 0); // reserved
+                WriteU32(data, (uint)rpn.Length);
+                data.Write(rpn, 0, rpn.Length);
+                WriteRecord(ms, BrtFmlaString, data.ToArray());
+                break;
+        }
     }
 
     private static void WriteCellBlank(MemoryStream ms, int col, int xf, bool lastSeen)
@@ -1291,5 +1388,85 @@ internal static class XlsbWriter
         var b = new byte[4];
         WriteU32To(b, 0, v);
         return b;
+    }
+
+    // ── comments1.bin ──
+
+    private const int BrtBeginComments = 0x0274;
+    private const int BrtEndComments = 0x0275;
+    private const int BrtBeginCommentAuthors = 0x0276;
+    private const int BrtEndCommentAuthors = 0x0277;
+    private const int BrtCommentAuthor = 0x0278;
+    private const int BrtBeginCommentList = 0x0279;
+    private const int BrtBeginComment = 0x0025;
+    private const int BrtUid = 0x0C00;
+    private const int BrtBeginCommentText = 0x0026;
+    private const int BrtCommentText = 0x027D;
+    private const int BrtEndCommentText = 0x027C;
+    private const int BrtEndComment = 0x027A;
+    private const int BrtCommentRichValue = 0x027B;
+
+    /// <summary>
+    /// 构建 commentsN.bin 的 BIFF12 记录流。
+    /// 结构：BeginComments > BeginCommentAuthors > Author > EndCommentAuthors >
+    /// BeginCommentList > [BeginComment > Uid > BeginCommentText > RichValue > CommentText > EndCommentText > EndComment]* > EndComments
+    /// </summary>
+    private static byte[] BuildCommentsBin(IReadOnlyDictionary<string, string> comments)
+    {
+        var ms = new MemoryStream();
+
+        WriteRecord(ms, BrtBeginComments, Array.Empty<byte>());
+        WriteRecord(ms, BrtBeginCommentAuthors, Array.Empty<byte>());
+
+        var authorBytes = new MemoryStream();
+        WriteWideString(authorBytes, "LiteExcel");
+        WriteRecord(ms, BrtCommentAuthor, authorBytes.ToArray());
+
+        WriteRecord(ms, BrtEndCommentAuthors, Array.Empty<byte>());
+        WriteRecord(ms, BrtBeginCommentList, Array.Empty<byte>());
+
+        int shapeId = 1025;
+        foreach (var kv in comments)
+        {
+            var (row, col) = CellRef.Parse(kv.Key);
+
+            // BrtBeginComment: row(4) + col(4) + authorId(4) + shapeId(4) + flags(2)
+            var bcData = new MemoryStream();
+            WriteS32(bcData, row);
+            WriteS32(bcData, col);
+            WriteU32(bcData, 0); // authorId
+            WriteU32(bcData, (uint)shapeId);
+            WriteU16(bcData, 0x0080); // flags
+            WriteRecord(ms, BrtBeginComment, bcData.ToArray());
+
+            // BrtUid: 16-byte GUID
+            var guid = Guid.NewGuid().ToByteArray();
+            WriteRecord(ms, BrtUid, guid);
+
+            // BrtBeginCommentText
+            WriteRecord(ms, BrtBeginCommentText, Array.Empty<byte>());
+
+            // BrtCommentRichValue: 36 bytes (from real sample)
+            var rvData = new byte[36];
+            rvData[0] = 0x00;
+            WriteRecord(ms, BrtCommentRichValue, rvData);
+
+            // BrtCommentText: flags(1) + XLWideString
+            var ctData = new MemoryStream();
+            ctData.WriteByte(0x01); // flags
+            WriteWideString(ctData, kv.Value);
+            WriteRecord(ms, BrtCommentText, ctData.ToArray());
+
+            // BrtEndCommentText
+            WriteRecord(ms, BrtEndCommentText, Array.Empty<byte>());
+
+            // BrtEndComment
+            WriteRecord(ms, BrtEndComment, Array.Empty<byte>());
+
+            shapeId++;
+        }
+
+        WriteRecord(ms, BrtEndComments, Array.Empty<byte>());
+        return ms.ToArray();
     }
 }

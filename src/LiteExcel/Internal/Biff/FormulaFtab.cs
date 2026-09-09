@@ -989,4 +989,34 @@ internal static partial class FormulaFtab
     {
         return Argc.TryGetValue(iftab, out var n) ? n : 0;
     }
+
+    private static readonly Dictionary<string, int> NameLookup = BuildNameLookup();
+
+    private static Dictionary<string, int> BuildNameLookup()
+    {
+        var dict = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < Names.Length; i++)
+        {
+            if (Names[i] is not null && !dict.ContainsKey(Names[i]!))
+                dict[Names[i]!] = i;
+        }
+        return dict;
+    }
+
+    /// <summary>函数名 → iftab 索引。找不到返回 -1。</summary>
+    public static int LookupName(string name)
+    {
+        return NameLookup.TryGetValue(name, out var idx) ? idx : -1;
+    }
+
+    private static readonly HashSet<int> VarArgFuncs = new()
+    {
+        0, 1, 4, 5, 6, 7, 9, 10, 13, 14, 36, 37, 48, 97, 148, 150, 152, 169, 170, 171,
+        183, 216, 219, 255, 256, 257, 258, 274, 275, 276, 277, 278, 279, 280, 281,
+        282, 283, 291, 300, 301, 302, 335, 336, 341, 344, 345, 447, 448, 461, 465,
+        467, 468, 469, 470, 471, 472,
+    };
+
+    /// <summary>该函数是否使用可变参数（PtgFuncVar）。</summary>
+    public static bool IsVarArg(int iftab) => VarArgFuncs.Contains(iftab);
 }

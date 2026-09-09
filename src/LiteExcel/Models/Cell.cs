@@ -110,7 +110,7 @@ public sealed class Cell
     /// <summary>创建公式单元格（仅写公式字符串，不计算结果） </summary>
     public static Cell FromFormula(string formula)
     {
-        return new Cell { Type = CellType.Text, Formula = formula, IsFormula = true };
+        return new Cell { Type = CellType.Number, Number = 0, Formula = formula, IsFormula = true };
     }
 
     public static Cell Empty => new() { Type = CellType.Empty };

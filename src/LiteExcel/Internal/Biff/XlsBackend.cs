@@ -376,6 +376,11 @@ internal static class XlsBackend
         bool freeze = false;
         int freezeRows = 0;
         int freezeCols = 0;
+        int pendingCommentRow = -1;
+        int pendingCommentCol = -1;
+        string? pendingCommentText = null;
+        int pendingTxoCch = 0;
+        int pendingTxoFormatRuns = 0;
 
         for (; i < records.Count; i++)
         {
@@ -433,13 +438,44 @@ internal static class XlsBackend
                     ParseRowHeight(rec.Data, rowHeights);
                     break;
                 case BiffRecords.OpPane:
-                    // xSplit(2) ySplit(2) topRow(2) leftCol(2) activePane(1) fNoSplit(1)
                     if (rec.Data.Length >= 8)
                     {
                         int xSplit = BiffRecords.ReadU16(rec.Data, 0);
                         int ySplit = BiffRecords.ReadU16(rec.Data, 2);
                         freeze = ySplit >= 1 || xSplit >= 1;
                         if (freeze) { freezeRows = ySplit; freezeCols = xSplit; }
+                    }
+                    break;
+                case BiffRecords.OpNote:
+                    pendingCommentRow = BiffRecords.ReadU16(rec.Data, 0);
+                    pendingCommentCol = BiffRecords.ReadU16(rec.Data, 2);
+                    if (pendingCommentText is not null)
+                    {
+                        sheet.Comments ??= new Dictionary<string, string>();
+                        var a1 = CellRef.ToString(pendingCommentRow, pendingCommentCol);
+                        sheet.Comments[a1] = pendingCommentText;
+                        pendingCommentText = null;
+                    }
+                    break;
+                case BiffRecords.OpTxo:
+                    if (rec.Data.Length >= 16)
+                    {
+                        pendingTxoCch = BiffRecords.ReadU16(rec.Data, 12);
+                        pendingTxoFormatRuns = BiffRecords.ReadU16(rec.Data, 14);
+                    }
+                    break;
+                case BiffRecords.OpContinue:
+                    if (pendingTxoCch > 0 && pendingCommentText is null)
+                    {
+                        if (rec.Data.Length >= 1)
+                        {
+                            bool unicode = (rec.Data[0] & 0x01) != 0;
+                            int textBytes = rec.Data.Length - 1;
+                            pendingCommentText = unicode
+                                ? Encoding.Unicode.GetString(rec.Data, 1, textBytes)
+                                : Latin1.GetString(rec.Data, 1, textBytes);
+                        }
+                        pendingTxoCch = 0;
                     }
                     break;
             }

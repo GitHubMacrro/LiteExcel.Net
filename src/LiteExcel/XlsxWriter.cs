@@ -996,6 +996,7 @@ public static partial class XlsxWriter
         var formulaText = cell.Formula ?? (cell.IsFormula ? cell.Text : null);
         if (!string.IsNullOrEmpty(formulaText))
         {
+            if (formulaText.StartsWith("=")) formulaText = formulaText.Substring(1);
             var fEsc = XmlEscape(formulaText);
             switch (cell.Type)
             {
@@ -1411,7 +1412,7 @@ public static partial class XlsxWriter
     }
 
     /// <summary>生成 VML legacyDrawing（批注形状载体，Excel 需要它才能显示批注） </summary>
-    private static string VmlDrawingXml(IReadOnlyDictionary<string, string> comments)
+    internal static string VmlDrawingXml(IReadOnlyDictionary<string, string> comments)
     {
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");

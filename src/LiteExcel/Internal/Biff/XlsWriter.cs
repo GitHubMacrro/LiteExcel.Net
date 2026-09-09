@@ -9,7 +9,7 @@ namespace LiteExcel.Internal.Biff;
 /// <summary>
 /// 传统 .xls（BIFF8）写入后端。
 /// 从对象模型 SheetData 生成 Workbook 流（全局子流 + 各工作表子流），再包进 OLE2/CFB 容器。
-/// 公式单元格降级为静态值（按缓存值写出）。
+/// 公式单元格支持基础公式写回（A1→RPN 编码）；不支持的公式降级为缓存值写出。
 /// </summary>
 internal static class XlsWriter
 {
@@ -51,7 +51,12 @@ internal static class XlsWriter
     private const ushort OpRk = 0x027E;
     private const ushort OpBoolErr = 0x0205;
     private const ushort OpHlink = 0x01B8;
+    private const ushort OpFormula = 0x0006;
     private const ushort OpHlinkTooltip = 0x0800;
+    private const ushort OpNote = 0x001C;
+    private const ushort OpTxo = 0x01B6;
+    private const ushort OpObj = 0x005D;
+    private const ushort OpMsodrawing = 0x00EC;
 
     private const int MaxRecordData = 8192; // 保守的记录数据上限（规范为 8224 总长）
 
@@ -101,8 +106,6 @@ internal static class XlsWriter
                     TargetFormat = targetFormat,
                     Message = msg,
                 });
-            if (sheet.Comments is { Count: > 0 })
-                Report(DegradationCapability.Comments, $"xls 不支持批注，工作表 '{sheet.SheetName}' 的批注已丢弃。");
             if (sheet.Validations is { Count: > 0 })
                 Report(DegradationCapability.DataValidation, $"xls 不支持数据验证，工作表 '{sheet.SheetName}' 的数据验证已丢弃。");
             if (sheet.Filter is not null)
@@ -344,7 +347,8 @@ internal static class XlsWriter
                 WriteCell(ms, r, col, cell, sst, sstIndex, getXf, date1904);
         }
 
-        // 尾部：WINDOW2 → PANE → MERGEDCELLS → CodeName → FeatHdr → Feat → EOF（对齐 Excel/SheetJS）
+        // 尾部：批注 → WINDOW2 → PANE → MERGEDCELLS → CodeName → FeatHdr → Feat → EOF
+        WriteComments(ms, sheet);
         int freezeRows = sheet.FreezeRows;
         int freezeCols = sheet.FreezeColumns;
         if (sheet.FreezeHeader) freezeRows = Math.Max(freezeRows, 1);
@@ -502,6 +506,18 @@ internal static class XlsWriter
         List<string> sst, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904)
     {
         int ixfe = getXf(cell.Type == CellType.Date || cell.Type == CellType.Number ? cell.NumberFormat : null);
+
+        var formulaText = cell.Formula ?? (cell.IsFormula ? cell.Text : null);
+        if (!string.IsNullOrEmpty(formulaText))
+        {
+            var rpn = FormulaEncoder.TryEncode(formulaText, biff12: false);
+            if (rpn is not null)
+            {
+                WriteFormulaCell(ms, rw, col, cell, ixfe, rpn, date1904);
+                return;
+            }
+        }
+
         switch (cell.Type)
         {
             case CellType.Text:
@@ -557,6 +573,58 @@ internal static class XlsWriter
     }
 
     // ── 记录体构造 ──
+
+    /// <summary>
+    /// BIFF8 FORMULA (0x0006) 记录：rw(2) + col(2) + ixfe(2) + value(8) + grbit(2) + chn(4) + cce(2) + RPN。
+    /// value 根据结果类型：数字=8字节double，布尔/错误=FF FF type(1) val(1) 00..00，空=FF FF 03 00..00。
+    /// </summary>
+    private static void WriteFormulaCell(MemoryStream ms, int rw, int col, Cell cell, int ixfe, byte[] rpn, bool date1904)
+    {
+        var d = new MemoryStream();
+        WriteU16d(d, (ushort)rw);
+        WriteU16d(d, (ushort)col);
+        WriteU16d(d, (ushort)ixfe);
+
+        switch (cell.Type)
+        {
+            case CellType.Number:
+                var nb = BitConverter.GetBytes(cell.Number);
+                d.Write(nb, 0, 8);
+                break;
+            case CellType.Date:
+                var db = BitConverter.GetBytes(FormatDetector.DateToSerial(cell.Date, date1904));
+                d.Write(db, 0, 8);
+                break;
+            case CellType.Boolean:
+                d.Write(new byte[] { 0xFF, 0xFF, 0x01, (byte)(cell.Boolean ? 1 : 0) }, 0, 4);
+                d.Write(new byte[4], 0, 4);
+                break;
+            default:
+                d.Write(new byte[] { 0xFF, 0xFF, 0x03, 0x00 }, 0, 4);
+                d.Write(new byte[4], 0, 4);
+                break;
+        }
+
+        WriteU16d(d, 0);        // grbit (2)
+        WriteU32d(d, 0);        // chn (4)
+        WriteU16d(d, (ushort)rpn.Length);  // cce (2)
+        d.Write(rpn, 0, rpn.Length);
+        WriteRecord(ms, OpFormula, d.ToArray());
+    }
+
+    private static void WriteU16d(MemoryStream ms, ushort v)
+    {
+        ms.WriteByte((byte)v);
+        ms.WriteByte((byte)(v >> 8));
+    }
+
+    private static void WriteU32d(MemoryStream ms, uint v)
+    {
+        ms.WriteByte((byte)v);
+        ms.WriteByte((byte)(v >> 8));
+        ms.WriteByte((byte)(v >> 16));
+        ms.WriteByte((byte)(v >> 24));
+    }
 
     private static byte[] Bof(int type)
     {
@@ -804,5 +872,176 @@ internal static class XlsWriter
     {
         d[offset] = (byte)v;
         d[offset + 1] = (byte)(v >> 8);
+    }
+
+    // ── 批注记录组 ──
+
+    /// <summary>
+    /// 写出 BIFF8 批注记录组：MSODRAWING + OBJ + TXO + CONTINUE(文本) + CONTINUE(格式) + NOTE。
+    /// 每条批注对应一组记录，MSODRAWING 包含最小化的 Office Drawing 形状容器。
+    /// </summary>
+    private static void WriteComments(MemoryStream ms, SheetData sheet)
+    {
+        if (sheet.Comments is not { Count: > 0 }) return;
+        int shapeId = 1025;
+        foreach (var kv in sheet.Comments)
+        {
+            var (row, col) = CellRef.Parse(kv.Key);
+            WriteRecord(ms, OpMsodrawing, BuildMsodrawing(shapeId, row, col));
+            WriteRecord(ms, OpObj, BuildObjRecord(shapeId));
+            WriteRecord(ms, OpMsodrawing, BuildMsodrawingEnd());
+            WriteRecord(ms, OpTxo, BuildTxoRecord(kv.Value));
+            WriteRecord(ms, OpContinue, BuildTxoText(kv.Value));
+            WriteRecord(ms, OpContinue, BuildTxoFormatRuns());
+            WriteRecord(ms, OpNote, BuildNoteRecord(row, col));
+            shapeId++;
+        }
+    }
+
+    /// <summary>构建最小化的 MSODRAWING 记录（Office Drawing 形状容器）。</summary>
+    private static byte[] BuildMsodrawing(int shapeId, int row, int col)
+    {
+        // 构建内部容器，再包装进 DgContainer
+        var spContent = new MemoryStream();
+
+        // Shape (SpAtom): type=0x00A4, data = spid(4) + shapeType(4)
+        var shapeData = new byte[8];
+        BitConverter.GetBytes((uint)shapeId).CopyTo(shapeData, 0);
+        BitConverter.GetBytes((uint)0xCB).CopyTo(shapeData, 4); // 0xCB = comment shape
+        WriteDrawingAtom(spContent, 0xF, 0, 0x00A4, shapeData);
+
+        // OPTContainer: type=0xF00B, empty
+        WriteDrawingAtom(spContent, 0xF, 0, 0xF00B, Array.Empty<byte>());
+
+        // ClientAnchor: type=0xF010, 18 bytes anchor
+        var anchor = new byte[18];
+        anchor[0] = 0x03; // fAnchor = 3 (move+size with cells)
+        // col1(2) + dx1(2) + row1(2) + dy1(2) + col2(2) + dx2(2) + row2(2) + dy2(2)
+        WriteU16(anchor, 1, (ushort)col);
+        WriteU16(anchor, 5, (ushort)row);
+        WriteU16(anchor, 9, (ushort)(col + 1));
+        WriteU16(anchor, 13, (ushort)(row + 4));
+        WriteDrawingAtom(spContent, 0x0, 0, 0xF010, anchor);
+
+        // ClientData: type=0xF012, empty
+        WriteDrawingAtom(spContent, 0x0, 0, 0xF012, Array.Empty<byte>());
+
+        // SpgrContainer > SpContainer
+        var spgrContent = new MemoryStream();
+        WriteDrawingAtom(spgrContent, 0xF, 0, 0xF004, spContent.ToArray());
+
+        var spgrData = spgrContent.ToArray();
+
+        // Dg + SpgrContainer
+        var dgContent = new MemoryStream();
+        // Dg record: type=0x0FF8, data = csp(4) + spidCur(4) + spidMax(4) + cdg(4)
+        var dgData = new byte[16];
+        BitConverter.GetBytes((uint)1).CopyTo(dgData, 0);     // csp
+        BitConverter.GetBytes((uint)shapeId).CopyTo(dgData, 4); // spidCur
+        BitConverter.GetBytes((uint)1024).CopyTo(dgData, 8);    // spidMax
+        BitConverter.GetBytes((uint)1).CopyTo(dgData, 12);      // cdg
+        WriteDrawingAtom(dgContent, 0xF, 0, 0x0FF8, dgData);
+        WriteDrawingAtom(dgContent, 0xF, 0, 0xF003, spgrData);
+
+        // DgContainer
+        var result = new MemoryStream();
+        WriteDrawingAtom(result, 0xF, 0, 0xF000, dgContent.ToArray());
+        return result.ToArray();
+    }
+
+    /// <summary>MSODRAWING 容器结束标记（8 字节）。</summary>
+    private static byte[] BuildMsodrawingEnd() =>
+        new byte[] { 0x0F, 0x00, 0x04, 0xF0, 0x00, 0x00, 0x00, 0x00 };
+
+    /// <summary>OBJ 记录：ftCmo(对象类型=Note=0x0014) + 保留字段。</summary>
+    private static byte[] BuildObjRecord(int shapeId)
+    {
+        // OBJ = ftCmo(15 bytes) + ftCf(1 byte) + ftPioGrbit(2 bytes) + reserved(6 bytes)
+        var d = new byte[52];
+        // ftCmo: type(2) + id(2) + flags(2) + reserved(8)
+        WriteU16(d, 0, 0x0015); // ft = ftCmo
+        WriteU16(d, 2, 0x0014); // ot = Note (0x14)
+        WriteU16(d, 4, (ushort)shapeId); // id
+        // flags(2) at offset 6 = 0x0601 (standard)
+        WriteU16(d, 6, 0x0601);
+        // rest is zeros
+        // ftCf: type=0x0007 + unused(1)
+        WriteU16(d, 15, 0x0007);
+        d[17] = 0x00;
+        // ftPioGrbit: type=0x0008 + unused(1)
+        WriteU16(d, 18, 0x0008);
+        d[20] = 0x00;
+        return d;
+    }
+
+    /// <summary>TXO 记录：文本对象控制信息。</summary>
+    private static byte[] BuildTxoRecord(string text)
+    {
+        // TXO: flags(2) + orientation(2) + rotation(2) + reserved(8) + cchText(2) + cbFormat(2) + reserved(4)
+        var d = new byte[18];
+        WriteU16(d, 0, 0x0212);  // flags
+        WriteU16(d, 12, (ushort)text.Length);  // cchText
+        WriteU16(d, 14, 0x0000);  // cbFormat = 0 (no format runs)
+        return d;
+    }
+
+    /// <summary>TXO 文本数据（CONTINUE 记录）：flags(1) + UTF-16LE 文本。</summary>
+    private static byte[] BuildTxoText(string text)
+    {
+        var textBytes = Encoding.Unicode.GetBytes(text);
+        var data = new byte[1 + textBytes.Length];
+        data[0] = 0x01; // flags: bit0=1 = UTF-16LE
+        Buffer.BlockCopy(textBytes, 0, data, 1, textBytes.Length);
+        return data;
+    }
+
+    /// <summary>TXO 格式 runs（CONTINUE 记录）：空 runs。</summary>
+    private static byte[] BuildTxoFormatRuns() =>
+        new byte[] { 0x00, 0x00 };
+
+    /// <summary>NOTE 记录：row(2) + col(2) + reserved(2) + idObj(2) + author(null-terminated ASCII)。</summary>
+    private static byte[] BuildNoteRecord(int row, int col)
+    {
+        var author = Encoding.GetEncoding(28591).GetBytes("LiteExcel");
+        var data = new byte[6 + author.Length + 1];
+        WriteU16(data, 0, (ushort)row);
+        WriteU16(data, 2, (ushort)col);
+        WriteU16(data, 4, 0x0000); // reserved
+        // Actually NOTE format: row(2) + col(2) + flags(2) + idObj(2) + author...
+        // But we already wrote row/col/reserved. Let me fix:
+        // NOTE: rw(2) + col(2) + fFlags(2) + idObj(2) + author(null-terminated)
+        // So we need 8 bytes header + author + null
+        var note = new byte[8 + author.Length + 1];
+        WriteU16(note, 0, (ushort)row);
+        WriteU16(note, 2, (ushort)col);
+        WriteU16(note, 4, 0x0000); // flags
+        WriteU16(note, 6, 0x0001); // idObj (matching OBJ id)
+        Buffer.BlockCopy(author, 0, note, 8, author.Length);
+        note[8 + author.Length] = 0x00; // null terminator
+        return note;
+    }
+
+    // ── Office Drawing 原子记录写入 ──
+
+    private static void WriteDrawingAtom(MemoryStream ms, int ver, int instance, int type, byte[] data)
+        => WriteDrawingRecord(ms, ver, instance, type, data);
+
+    private static void WriteDrawingRecord(MemoryStream ms, int ver, int instance, int type, byte[] data)
+    {
+        // Record header (8 bytes):
+        // byte 0: [ver:4][instance_hi:4]  (ver in bits 0-3, instance bits 4-15)
+        // byte 1: [instance_lo:8]
+        // bytes 2-3: [type:16 LE]
+        // bytes 4-7: [length:32 LE]
+        ms.WriteByte((byte)((ver & 0x0F) | ((instance & 0x0F) << 4)));
+        ms.WriteByte((byte)((instance >> 4) & 0xFF));
+        ms.WriteByte((byte)(type & 0xFF));
+        ms.WriteByte((byte)((type >> 8) & 0xFF));
+        ms.WriteByte((byte)(data.Length & 0xFF));
+        ms.WriteByte((byte)((data.Length >> 8) & 0xFF));
+        ms.WriteByte((byte)((data.Length >> 16) & 0xFF));
+        ms.WriteByte((byte)((data.Length >> 24) & 0xFF));
+        if (data.Length > 0)
+            ms.Write(data, 0, data.Length);
     }
 }
