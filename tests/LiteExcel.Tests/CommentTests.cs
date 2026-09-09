@@ -170,6 +170,13 @@ public class CommentTests
         finally { if (File.Exists(file)) File.Delete(file); }
     }
 
+    private static string GetCommentFixturePath(string ext)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", $"excel-authored-comments-filter.{ext}");
+        Assert.True(File.Exists(path), $"Required fixture is missing: {path}");
+        return path;
+    }
+
     [Fact]
     public void Xlsb_Comments_RoundTrip()
     {
@@ -196,15 +203,7 @@ public class CommentTests
     [Fact]
     public void Xlsb_RealSample_ReadsComments()
     {
-        var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "files", "批注", "批注+筛选.xlsb");
-        if (!File.Exists(src))
-        {
-            var alt = Path.Combine("D:", "Visual Studio Project", "CC", "dotnet", "Customwin.Utils.Xlsx", "LiteXlsx", "files", "批注", "批注+筛选.xlsb");
-            if (!File.Exists(alt)) { Assert.True(false, "Test sample not found"); return; }
-            src = alt;
-        }
-
-        var wb = Excel.Open(src);
+        var wb = Excel.Open(GetCommentFixturePath("xlsb"));
         var ws = wb.Worksheets[0];
         Assert.NotNull(ws.Comments);
         Assert.True(ws.Comments!.Count > 0);
@@ -217,15 +216,7 @@ public class CommentTests
     [Fact]
     public void Xlsx_RealSample_ReadsComments()
     {
-        var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "files", "批注", "批注+筛选.xlsx");
-        if (!File.Exists(src))
-        {
-            var alt = Path.Combine("D:", "Visual Studio Project", "CC", "dotnet", "Customwin.Utils.Xlsx", "LiteXlsx", "files", "批注", "批注+筛选.xlsx");
-            if (!File.Exists(alt)) { Assert.Fail("Test sample not found"); return; }
-            src = alt;
-        }
-
-        var wb = Excel.Open(src);
+        var wb = Excel.Open(GetCommentFixturePath("xlsx"));
         var ws = wb.Worksheets[0];
         Assert.NotNull(ws.Comments);
         Assert.True(ws.Comments!.Count > 0);
@@ -234,15 +225,7 @@ public class CommentTests
     [Fact]
     public void Xls_RealSample_ReadsComments()
     {
-        var src = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "files", "批注", "批注+筛选.xls");
-        if (!File.Exists(src))
-        {
-            var alt = Path.Combine("D:", "Visual Studio Project", "CC", "dotnet", "Customwin.Utils.Xlsx", "LiteXlsx", "files", "批注", "批注+筛选.xls");
-            if (!File.Exists(alt)) { Assert.Fail("Test sample not found"); return; }
-            src = alt;
-        }
-
-        var wb = Excel.Open(src);
+        var wb = Excel.Open(GetCommentFixturePath("xls"));
         var ws = wb.Worksheets[0];
         Assert.NotNull(ws.Comments);
         Assert.True(ws.Comments!.Count > 0);
