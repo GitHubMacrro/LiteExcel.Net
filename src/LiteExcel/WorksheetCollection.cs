@@ -46,6 +46,7 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
             throw new LiteExcelException($"工作表名重复：{name}");
 
         var sheet = new Worksheet(name);
+        sheet.ParentCollection = this;
         _sheets.Add(sheet);
         _workbook.OnWorksheetAdded(sheet);
         return sheet;
@@ -74,8 +75,10 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
     {
         var sheet = Find(name);
         if (sheet is null) return false;
+        int idx = _sheets.IndexOf(sheet);
         _sheets.Remove(sheet);
-        _workbook.OnWorksheetRemoved(sheet);
+        sheet.ParentCollection = null;
+        _workbook.OnWorksheetRemoved(sheet, idx);
         return true;
     }
 
@@ -84,7 +87,8 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
     {
         var sheet = _sheets[index];
         _sheets.RemoveAt(index);
-        _workbook.OnWorksheetRemoved(sheet);
+        sheet.ParentCollection = null;
+        _workbook.OnWorksheetRemoved(sheet, index);
     }
 
     /// <summary>是否包含指定名称的工作表 </summary>
@@ -101,7 +105,13 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
         _sheets.Insert(toIndex, item);
     }
 
-    internal void AddInternal(Worksheet sheet) => _sheets.Add(sheet);
+    internal void AddInternal(Worksheet sheet)
+    {
+        sheet.ParentCollection = this;
+        _sheets.Add(sheet);
+    }
+
+    internal int IndexOf(Worksheet sheet) => _sheets.IndexOf(sheet);
 
     internal Worksheet? Find(string name)
     {

@@ -1,14 +1,14 @@
 # Changelog
 
-## [2.4.74] - 2026-09-09
+## [2.4.74] - 2026-09-10
 
 ### Added
 
+- **Worksheet.Delete()**：新增工作表级删除方法；`Worksheets.Remove`/`RemoveAt` 保持原语义。删除最后一张表时 `Delete()` 抛 `LiteExcelException`。删除会同步清理引用该表的命名区域，避免写出后 Excel 报 `#REF!`。见 §7.6。
 - **统一读取门面扩展到 xls/xlsb**：`Excel.Read<T>`、`Excel.ReadSheet`、`Excel.ReadAsDataTable` 现支持按路径自动路由 xlsx/xlsm/xlsb/xls；从流读取时新增 `ExcelFormat` 显式重载。`Excel.StreamRows` 和 `Excel.EnumerateRows` 同样扩展到 xls/xlsb（path 和显式格式 Stream 重载）。CSV 仍不支持流式读取。
 - **XLSB BIFF12 记录级流式读取**：`XlsbRowStreamReader` 逐条读取 BIFF12 记录，遇到 `BrtRowHdr` 时 yield 前一行，支持所有单元格记录类型（Blank/Rk/Error/Bool/Real/St/Isst + Short 变体 + 公式缓存值）。工作表数据不再驻留内存。
 - **XLS BIFF8 记录级流式读取**：`XlsRowStreamReader` 预扫描全局段后从目标表 BOF 逐条读取 BIFF8 记录按行 yield，支持 Number/Rk/MulRk/LabelSst/Label/BoolErr/Formula 全部单元格记录。
 - **XLSB 自动筛选范围读写**：读取 `BrtBeginAFilter` 提取筛选范围到 `SheetData.Filter.Range`；写出时在 `EndSheetData` 后写出范围记录。复杂筛选条件降级上报。
-- **XLSB 批注读取**：解析 `BrtBeginComment` + `BrtCommentText` 提取批注到 `SheetData.Comments`。写出仍降级上报（未修改时 verbatim 保留）。
 - **XLSB 高级部件工作表级保护**：含透视表/切片器/时间线的 XLSB，仅当修改了高级部件所在工作表时默认阻止保存；修改无关工作表允许保存。此前为工作簿级判断，会误阻无关工作表。
 - **XLSB 批注读写闭环**：根据真实 Excel 样本校准，批注存储在独立 `commentsN.bin` 部件（BIFF12 记录 `0x0274`-`0x027D`）而非 `sheetN.bin` 内；VML 与 XLSX 相同。读取解析 `BrtCommentText` + VML `<x:Row>/<x:Column>` 定位；写出生成完整记录链。此前推测的记录号（`0x003E` 等）已被证伪并修正。
 - **XLS 批注读写闭环**：BIFF8 批注记录组（`MSODRAWING` + `OBJ` + `TXO` + `CONTINUE` + `NOTE`）完整读写。读取从 NOTE 记录解析坐标、从 TXO 后续 CONTINUE 解析文本；写出构建最小化 Office Drawing 形状容器。

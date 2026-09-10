@@ -97,6 +97,9 @@ public sealed class Worksheet
     /// <summary>整表单元格集合入口 </summary>
     public Cells Cells { get; }
 
+    /// <summary>所属的工作表集合（由 Add/AddInternal 注入；删除后清空）。内部使用 </summary>
+    internal WorksheetCollection? ParentCollection { get; set; }
+
     internal Worksheet()
     {
         Cells = new Cells(this);
@@ -105,6 +108,20 @@ public sealed class Worksheet
     internal Worksheet(string name) : this()
     {
         Name = name;
+    }
+
+    /// <summary>
+    /// 删除当前工作表（从所属工作簿中移除）。不能删除工作簿中最后一张工作表。
+    /// 对已在删除后调用的工作表返回 false；首次成功调用返回 true。
+    /// 删除时同步清理关联的命名区域。工作簿级语义（_openedSheetNames、保留部件）随自动失效。
+    /// </summary>
+    public bool Delete()
+    {
+        var parent = ParentCollection;
+        if (parent is null) return false;
+        if (parent.Count <= 1)
+            throw new LiteExcelException("不能删除工作簿中最后一张工作表。");
+        return parent.Remove(Name);
     }
 
     /// <summary>总行数（1-based 有效行数，0 表示空表） </summary>

@@ -19,6 +19,7 @@
 | 6 | [Styles](#6-styles) |
 | 7 | [Merged Cells](#7-merged-cells) |
 | 7.5 | [Insert / Delete Rows and Columns](#75-insert--delete-rows-and-columns) |
+| 7.6 | [Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete) |
 | 8 | [AutoFilter](#8-autofilter) |
 | 9 | [Row Height and Column Width](#9-row-height-and-column-width) |
 | 10 | [Comments](#10-comments) |
@@ -1220,6 +1221,29 @@ ws.DeleteColumns(1, 1); // delete 1 column starting from column 1
 | `DeleteColumns(colIndex, count)` | Delete `count` columns starting from column `colIndex` |
 
 On delete: objects fully inside the deleted range are removed; objects spanning the range are shrunk; objects after the range shift left/up. On insert: objects at/after the insertion point shift right/down.
+
+## 7.6 Deleting a Worksheet `Worksheet.Delete()`
+
+To delete an entire worksheet, use `Worksheet.Delete()` (or `Worksheets.Remove(name)` / `RemoveAt(index)`):
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+wb.Worksheets["Temp"].Delete();          // delete directly
+wb.Worksheets.Remove("Temp");           // equivalent
+wb.Worksheets.RemoveAt(2);              // by index
+```
+
+Rules:
+
+- The last remaining worksheet cannot be deleted (`Delete()` throws `LiteExcelException`)
+- Calling `Delete()` on an already-deleted sheet returns `false` (idempotent)
+- Named ranges referencing the deleted sheet are removed, preventing `#REF!` errors in the saved file
+- **Deleting within `foreach` while iterating (`foreach + ws.Delete()`) modifies the collection and breaks enumeration.** Correct pattern is to snapshot with `ToList()` first, then delete:
+
+```csharp
+foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("Temp")).ToList())
+    ws.Delete();
+```
 
 ---
 

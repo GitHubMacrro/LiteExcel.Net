@@ -476,8 +476,18 @@ public sealed class Workbook
         Properties.Modified = DateTime.Now;
     }
 
-    internal void OnWorksheetRemoved(Worksheet ws)
+    internal void OnWorksheetRemoved(Worksheet ws, int removedIndex)
     {
         Properties.Modified = DateTime.Now;
+        // 保留 _openedSheetNames 原状：verbatim 保真通道用「表数对比 + 角色匹配」检测结构变化，
+        // 删除表后 count 不再一致，自然不满足 verbatim 条件，走重建路径。
+        // 删除命名区域：localSheetId 指向被删表的命名区域自动失效，避免写出后 Excel 报 #REF。
+        // 同时处理局部索引：删除表前的 localSheetId > removedIndex 的要减一。
+        Names.RemoveAll(n => n.IsLocalSheet && n.LocalSheetId == removedIndex);
+        foreach (var n in Names)
+        {
+            if (n.IsLocalSheet && n.LocalSheetId > removedIndex)
+                n.LocalSheetId--;
+        }
     }
 }

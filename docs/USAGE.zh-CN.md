@@ -19,6 +19,7 @@
 | 6 | [样式](#6-样式) |
 | 7 | [合并单元格](#7-合并单元格) |
 | 7.5 | [插入 / 删除行列](#75-插入--删除行列) |
+| 7.6 | [删除整张工作表](#76-删除整张工作表-worksheetdelete) |
 | 8 | [自动筛选](#8-自动筛选) |
 | 9 | [行高与列宽](#9-行高与列宽) |
 | 10 | [批注](#10-批注) |
@@ -1307,6 +1308,29 @@ ws.DeleteColumns(1, 1); // 从第 1 列开始删除 1 列
 | `DeleteColumns(colIndex, count)` | 从第 `colIndex` 列起删除 `count` 列 |
 
 删除时：完全位于删除区域内的合并/批注等会被删除；跨越删除区域的对象会收缩；之后的对象整体偏移。插入时：插入点之后的对象整体偏移。
+
+## 7.6 删除整张工作表 `Worksheet.Delete()`
+
+删除整张表用 `Worksheet.Delete()`（或 `Worksheets.Remove(name)` / `RemoveAt(index)`）：
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+wb.Worksheets["临时"].Delete();          // 直接删除
+wb.Worksheets.Remove("临时");            // 等价
+wb.Worksheets.RemoveAt(2);               // 按索引删除
+```
+
+规则：
+
+- 不能删除工作簿中最后一张工作表（`Delete()` 抛 `LiteExcelException`）
+- 已删除的表再次 `Delete()` 返回 `false`（幂等安全）
+- 引用被删表的命名区域会同步被移除，避免写出后 Excel 报 `#REF!`
+- **在 `foreach + ws.Delete()` 中直接删除会修改集合导致枚举错误**，正确做法是先用 `ToList()` 快照再删：
+
+```csharp
+foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("临时")).ToList())
+    ws.Delete();
+```
 
 ---
 
