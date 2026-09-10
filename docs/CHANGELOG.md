@@ -1,10 +1,17 @@
 # Changelog
 
-## [2.4.74] - 2026-09-10
+## [2.4.75] - 2026-09-10
+
+> **补充发布说明**：NuGet/tag 的 2.4.74 基于较早提交打 tag（漏掉了 `Worksheet.Delete()` 与其文档同步），故将该项补入本版本重新发布，使各发布版本的 CHANGELOG 与实际包内容严格对应。
 
 ### Added
 
 - **Worksheet.Delete()**：新增工作表级删除方法；`Worksheets.Remove`/`RemoveAt` 保持原语义。删除最后一张表时 `Delete()` 抛 `LiteExcelException`。删除会同步清理引用该表的命名区域，避免写出后 Excel 报 `#REF!`。见 §7.6。
+
+## [2.4.74] - 2026-09-10
+
+### Added
+
 - **统一读取门面扩展到 xls/xlsb**：`Excel.Read<T>`、`Excel.ReadSheet`、`Excel.ReadAsDataTable` 现支持按路径自动路由 xlsx/xlsm/xlsb/xls；从流读取时新增 `ExcelFormat` 显式重载。`Excel.StreamRows` 和 `Excel.EnumerateRows` 同样扩展到 xls/xlsb（path 和显式格式 Stream 重载）。CSV 仍不支持流式读取。
 - **XLSB BIFF12 记录级流式读取**：`XlsbRowStreamReader` 逐条读取 BIFF12 记录，遇到 `BrtRowHdr` 时 yield 前一行，支持所有单元格记录类型（Blank/Rk/Error/Bool/Real/St/Isst + Short 变体 + 公式缓存值）。工作表数据不再驻留内存。
 - **XLS BIFF8 记录级流式读取**：`XlsRowStreamReader` 预扫描全局段后从目标表 BOF 逐条读取 BIFF8 记录按行 yield，支持 Number/Rk/MulRk/LabelSst/Label/BoolErr/Formula 全部单元格记录。
