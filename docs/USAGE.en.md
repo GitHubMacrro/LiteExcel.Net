@@ -1245,6 +1245,15 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("Temp")).ToList())
     ws.Delete();
 ```
 
+#### Fidelity
+
+Saving after deleting a worksheet uses a **surgical verbatim write-back**: only the deleted sheet and its references are removed; all other worksheets, pivot tables, tables, slicers, connections, query tables, and macro code are preserved as-is.
+
+- **xlsx / xlsm**: all remaining advanced parts (pivot tables, charts, slicers, ActiveX, macros) are fully preserved.
+- **xlsb**: deleting an XLSB worksheet and saving as xlsb preserves pivot tables, pivot caches, tables, slicers, connections, the data model, and VBA macros; the sheet list, named-range scopes, external sheet references, and the active-sheet index are adjusted accordingly.
+- **xlsb → xlsm**: binary advanced parts such as pivot tables are preserved (tables are rebuilt).
+- If the deleted sheet is the data source of a pivot table/slicer or is referenced by a pivot cache, surgical deletion is unsafe; by default it falls back to rebuild (advanced parts may be lost) and is recorded in `SaveDegradations`. Set `workbook.AllowFeatureLossOnSave = false` to throw instead.
+
 ---
 
 # 8. AutoFilter
@@ -2756,6 +2765,8 @@ Output:
 
 Writing to xls / xlsb: styles degrade to `NumberFormat` only (to avoid BIFF hand-writing risks); comments / data validation / conditional formatting / images / tables / named ranges are dropped; formula text is not kept and is written as the cached value. These degradations are reported via `OnDegradation` (see Chapter 22).
 
+> **xls sheet size limit**: `xls` (BIFF8) supports at most 256 columns / 65536 rows. Data beyond the limit (including column-width declarations that extend far past the data range) is truncated on write and reported via `DegradationCapability.SheetSize`.
+
 Reading xls / xlsb: only `NumberFormat` is retained from styles; advanced capabilities such as comments / data validation / conditional formatting / images / tables are not read back; parseable formulas are restored as A1 text into `Cell.Formula` (array formulas / 3D references / names fall back to the cached value only). **These degradations are explicitly reported via `OnDegradation` when writing** (see Chapter 22).
 
 Reading an xls file (styles retain only the number format):
@@ -2875,7 +2886,7 @@ Fidelity is more than keeping part bytes: the elements that reference them must 
 | `sheet{N}.xml` / `sharedStrings.xml` verbatim passthrough | `xl/worksheets/sheet{N}.xml` | sparse cell layout and absolute references (same condition as `styles.xml`; preserved when unmodified) |
 | `workbook.bin` / `styles.bin` / `sheet{N}.bin` verbatim passthrough | XLSB binary parts | BIFF12 pivot table / slicer host records (preserved verbatim when unmodified + structure unchanged, otherwise rebuilt) |
 
-> **XLS pivot table protection**: when a source .xls file contains pivot tables (detected via `SXVIEW` record), saving is blocked by default with a `LiteExcelException`, because the current model cannot faithfully write back or convert BIFF8 pivot tables. Set `wb.AllowFeatureLossOnSave = true` to allow saving; pivot tables are dropped and reported via the degradation callback.
+> **XLS pivot table degradation**: when a source .xls file contains pivot tables (detected via `SXVIEW` record), the current model cannot faithfully write back or convert BIFF8 pivot tables; pivot tables are dropped and recorded in `wb.SaveDegradations` (allowed by default). Set `wb.AllowFeatureLossOnSave = false` to throw a `LiteExcelException` instead.
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // open an xlsm containing macros
@@ -3182,6 +3193,19 @@ await Task.Run(() =>
 
 # 22. Degradation Callback OnDegradation
 
+This chapter describes capability degradation: when writing to a format that does not support a capability, the dropped items are recorded and reported.
+
+> **Allow-by-default, never silent**: `Workbook.AllowFeatureLossOnSave` defaults to `true`. Capabilities not supported by the target format (VBA macros / BIFF8 pivot tables / XLSB advanced parts, etc.) are **allowed by default** (no exception); each `Save`/`SaveAs` accumulates the dropped items into the read-only **`Workbook.SaveDegradations`** list (`IReadOnlyList<DegradationInfo>`, cleared before each save), so "what was lost" is always queryable. Set `AllowFeatureLossOnSave = false` to restore strict mode (throws `LiteExcelException`).
+
+```csharp
+var wb = Excel.Open("data.xlsb");
+wb.SaveAs("data.xlsx");                 // allowed by default; VBA is stripped when macros present
+foreach (var d in wb.SaveDegradations)  // query what this save dropped
+    Console.WriteLine($"{d.Capability}: {d.Message}");
+
+wb.AllowFeatureLossOnSave = false;      // strict mode: unsupported formats throw
+```
+
 ## 📑 Contents
 
 | # | Section |
@@ -3192,7 +3216,7 @@ await Task.Run(() =>
 
 ---
 
-`ExcelWriteOptions.OnDegradation` is an optional callback (default null; when not registered, behavior is identical to previous versions — no breaking change). When writing to a format that does not support a certain capability (xls / xlsb / csv), each capability that is silently discarded is reported via callback:
+`ExcelWriteOptions.OnDegradation` is an optional callback (`Excel.Write` path; the `wb.SaveAs` path uses `wb.SaveDegradations`). When writing to a format that does not support a certain capability (xls / xlsb / csv), each dropped capability is reported via callback:
 
 ```csharp
 var wb = Excel.Create();

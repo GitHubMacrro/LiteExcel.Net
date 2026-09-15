@@ -31,8 +31,12 @@ internal static class FormatDetector
         string? fmtCode = GetFormatCode(ifmt, formats);
         if (IsDateFormat(ifmt, fmtCode))
         {
-            var date = date1904 ? new DateTime(1904, 1, 1).AddDays(val) : DateTime.FromOADate(val);
-            return Cell.FromDate(date, fmtCode);
+            // OADate 合法范围约 [-657435, 2958465.9999...]，超出时不能解释为日期 → 按数字处理，避免抛异常导致整个文件读失败
+            if (val is > -657435.0 and < 2958466.0 && !double.IsNaN(val) && !double.IsInfinity(val))
+            {
+                var date = date1904 ? new DateTime(1904, 1, 1).AddDays(val) : DateTime.FromOADate(val);
+                return Cell.FromDate(date, fmtCode);
+            }
         }
         return Cell.FromNumber(val, fmtCode);
     }

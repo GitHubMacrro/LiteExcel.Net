@@ -58,6 +58,12 @@ public enum DegradationCapability
 
     /// <summary>超级表（Table/ListObject）；目标格式不支持或引用了 Excel 未知的样式名 </summary>
     Tables,
+
+    /// <summary>VBA 宏工程（目标格式为无宏格式 xlsx/xls 时被丢弃） </summary>
+    Macros,
+
+    /// <summary>工作表数据范围超出目标格式上限（xls 最多 256 列 / 65536 行），超界部分被裁剪 </summary>
+    SheetSize,
 }
 
 /// <summary>

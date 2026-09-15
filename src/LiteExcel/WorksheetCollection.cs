@@ -121,7 +121,31 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
         return null;
     }
 
-    public IEnumerator<Worksheet> GetEnumerator() => _sheets.GetEnumerator();
+    /// <summary>
+    /// 返回快照枚举器：在枚举过程中对集合进行增删不会影响正在进行的遍历。
+    /// 例如可以在 foreach 中直接调用 <c>ws.Delete()</c> 而不触发「集合已修改」异常。
+    /// 注意：枚举期间新增的表不会被本次遍历看到。
+    /// </summary>
+    public IEnumerator<Worksheet> GetEnumerator()
+    {
+        // 快照语义：开始枚举时拷贝当前列表，遍历期间对集合的增删不影响本次遍历。
+        var snapshot = _sheets.ToArray();
+        return ((IEnumerable<Worksheet>)snapshot).GetEnumerator();
+    }
+
+    /// <summary>批量删除所有满足 <paramref name="predicate"/> 判断的工作表，返回删除数量 </summary>
+    public int RemoveAll(Predicate<Worksheet> predicate)
+    {
+        if (predicate is null) throw new ArgumentNullException(nameof(predicate));
+        int removed = 0;
+        for (int i = _sheets.Count - 1; i >= 0; i--)
+        {
+            if (!predicate(_sheets[i])) continue;
+            RemoveAt(i);
+            removed++;
+        }
+        return removed;
+    }
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

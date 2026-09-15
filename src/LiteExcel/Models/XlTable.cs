@@ -97,6 +97,12 @@ public sealed class XlTable
 
     internal void ClearColumns() => _columns.Clear();
 
+    /// <summary>来自文件的原始部件路径（如 "xl/tables/table8.xml"）。非空时写出应原样透传原 XML，避免保真丢失（计算列公式/dxf/uid）。</summary>
+    internal string? OriginEntry { get; set; }
+
+    /// <summary>来自文件的原始 table XML 字节（UTF-8）。非空时 TablePlan 原样写回，不重建。</summary>
+    internal string? OriginXml { get; set; }
+
     /// <summary>写出到 tableStyleInfo 的样式名 </summary>
     internal string StyleName =>
         !string.IsNullOrEmpty(CustomStyleName) ? CustomStyleName!

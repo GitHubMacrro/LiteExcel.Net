@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.4.76] - 2026-09-11
+
+### Fixed
+
+- **严重保真问题修复**：打开包含 Excel Table 的 xlsx/xlsm 文件后保存，不再重复生成表部件；原始表 XML（包括计算列公式、原始 dxf/uid 等）按原内容保留。
+- **删除工作表的手术式保存**：仅删除工作表且其余工作表未修改时，xlsx/xlsm 保存改为只摘除目标工作表及其关系，其他工作表、透视表、图表、切片器、ActiveX、连接、查询表和自定义 XML 原样保留。
+- **工作表关系清理**：删除工作表后同步移除孤儿 worksheet 关系、内容类型声明和过期计算链，避免 Excel 打开时执行文件级修复。
+- **XLSB 跨格式安全边界**：xlsx/xlsm 的 XML 高级部件不再透传到 xlsb；包含无法安全重建的高级部件的 XLSB 在非 verbatim 编辑/结构变化时默认阻止保存，避免静默丢失透视表、连接等内容。
+- **XLSB 手术式删除**：删除 XLSB 工作表后保存为 xlsb，改为只摘除目标工作表及其引用，其他工作表、透视表、透视缓存、超级表、切片器、连接、查询表、数据模型、ActiveX、图表和 VBA 宏原样保留。同步调整 `workbook.bin` 的 BundleSh、命名区域 itab、外部表引用 XTI 及活动表索引。
+- **XLSB 跨格式降级**：xlsb 转换为 xlsm 时保留透视表等二进制部件（超表转为重建），避免默认阻止。
+- **能力降级默认放行（行为变更）**：`Workbook.AllowFeatureLossOnSave` 默认值由 `false` 改为 **`true`**。目标格式不支持的能力（VBA 宏、BIFF8 透视表、XLSB 高级部件）不再默认抛异常阻止保存，而是放行并记录到新增的只读清单 `Workbook.SaveDegradations`（非静默，可查询）。设 `AllowFeatureLossOnSave = false` 恢复严格模式（抛异常阻止）。
+- **宏转换**：`xlsm`/`xlsb` 转换为 `xlsx`/`xls` 时剥离 VBA 宏工程（含 `vbaProject.bin`、关系、Content-Type 声明、工作簿 codeName），并上报 `DegradationCapability.Macros`。注意：调用了 VBA 自定义函数（UDF）的公式在 Excel 中会显示 `#NAME?`；内置函数与普通引用不受影响。
+- **XLS 透视表检测接入**：打开 `.xls` 时接入 `SourceHasPivotTables`（此前从未赋值，守卫失效），使透视表降级能正确上报。
+- **XLS 工作表尺寸上限裁剪**：写出 xls（BIFF8）时将列/行裁剪到格式上限（256 列 / 65536 行）。此前超出上限的列宽声明（如声明到第 386 列）或越界单元格会产生越界的 DIMENSIONS/COLINFO 记录，导致 Excel 打开时执行文件级修复。超界数据经 `DegradationCapability.SheetSize` 上报。修复 `xlsx`/`xlsm` → `xls` 的转换。
+- **XLSB 手术式删除保留 VBA（回归修复）**：删除 XLSB 工作表后另存为 xlsb 时曾因 `WriteSurgicalXlsb` 中 vbaProject 被双重跳过而丢失 `xl/vbaProject.bin`（Content-Type/关系却仍声明，产生不一致包）。现已让 Parts 循环正常写出该部件，并同步移除过期 `calcChain.bin` 的孤儿关系、修复 `WriteVerbatim` 的 vbaProject 重复条目。
+- **BIFF8 日期健壮性**：超出 OLE Automation 日期范围的日期格式数值回退为数字，不再导致整个 xls 文件读取失败。
+- **工作表枚举删除**：`foreach (var ws in wb.Worksheets) { ws.Delete(); }` 使用快照枚举，可安全删除；新增 `WorksheetCollection.RemoveAll(Predicate<Worksheet>)` 批量删除入口。
+
+### Tests
+
+- 新增表重复、直接 foreach 删除、`RemoveAll`、跨格式部件过滤和 BIFF8 日期回归测试。
+- 使用真实复杂 Excel 样本验证：xlsx/xlsm 删除工作表后 Excel COM 正常打开，表格与透视表保持；XLSB 高级部件结构修改保存被安全拦截。
+
 ## [2.4.75] - 2026-09-10
 
 > **补充发布说明**：NuGet/tag 的 2.4.74 基于较早提交打 tag（漏掉了 `Worksheet.Delete()` 与其文档同步），故将该项补入本版本重新发布，使各发布版本的 CHANGELOG 与实际包内容严格对应。

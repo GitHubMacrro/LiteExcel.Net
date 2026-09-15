@@ -71,9 +71,15 @@ public sealed class Workbook
 
     internal HashSet<int> AdvancedXlsbSheetIndexes { get; } = new();
 
-    /// <summary>是否允许保存时丢失不支持的高级功能（如 BIFF8 透视表）。默认 false：含透视表的 XLS 保存被阻止。
-    /// 用户显式设为 true 后允许保存，但透视表等不可保真能力会被丢弃，并通过降级回调上报。 </summary>
-    public bool AllowFeatureLossOnSave { get; set; }
+    /// <summary>是否允许保存时丢失不支持的高级功能（如 VBA 宏、BIFF8 透视表、xlsb 高级部件）。默认 true：不受支持的能力会被丢弃但经 <see cref="SaveDegradations"/> 记录（非静默）。
+    /// 用户显式设为 false 后，含此类能力且目标格式不支持时保存被阻止并抛 <see cref="LiteExcelException"/>。 </summary>
+    public bool AllowFeatureLossOnSave { get; set; } = true;
+
+    /// <summary>上一次保存期间被丢弃的能力清单（每次 Save/SaveAs 前清空、保存中累积）。
+    /// 用于在默认放行下仍能获知"丢失了什么"，避免静默数据丢失。 </summary>
+    public IReadOnlyList<DegradationInfo> SaveDegradations => _saveDegradations;
+
+    private readonly List<DegradationInfo> _saveDegradations = new();
 
     /// <summary>
     /// 当前目标路径。
@@ -113,8 +119,11 @@ public sealed class Workbook
             wb.Properties.Subject = properties.Subject;
             wb.Properties.Application = properties.Application;
         }
-        foreach (var sheet in sheets)
+        for (int i = 0; i < sheets.Count; i++)
         {
+            var sheet = sheets[i];
+            // 记录打开时的 0-based 序号：删除/移动表后用于从 preserved 复用该表原始 rels
+            sheet.OrigIndex = i;
             var ws = Worksheet.FromSheetData(sheet);
             wb.Worksheets.AddInternal(ws);
             wb.OnWorksheetAdded(ws);
@@ -130,6 +139,7 @@ public sealed class Workbook
         ThrowIfReadOnly();
         if (string.IsNullOrEmpty(_currentPath))
             throw new LiteExcelException("当前工作簿没有目标路径，请使用 SaveAs 指定保存位置");
+        _saveDegradations.Clear();
         SaveCore(_currentPath, Format);
     }
 
@@ -148,6 +158,7 @@ public sealed class Workbook
             throw new ArgumentException("路径不能为空", nameof(path));
 
         ValidateExtension(path, format);
+        _saveDegradations.Clear();
         SaveCore(path, format);
         _currentPath = path;
         Format = format;
@@ -160,6 +171,7 @@ public sealed class Workbook
         if (stream is null) throw new ArgumentNullException(nameof(stream));
         if (!stream.CanWrite) throw new ArgumentException("流不可写", nameof(stream));
 
+        _saveDegradations.Clear();
         SaveCore(stream, format);
     }
 
@@ -193,12 +205,14 @@ public sealed class Workbook
     {
         // 在创建目标文件前完成格式能力校验。
         ThrowIfMacroNotSupported(format);
+        // 文件级密码仅支持 xlsx/xlsm/xlsb；csv/xls 不支持加密写出
+        ThrowIfPasswordNotSupported(format);
         // 在创建目标文件前阻止无法保真的 XLS 透视表保存。
         ThrowIfPivotTablesNotPreservable(format);
         ThrowIfAdvancedXlsbPartsNotPreservable(format);
 
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
-        SaveCore(fs, format);
+        WriteTo(fs, format);
     }
 
     private void SaveCore(Stream stream, ExcelFormat format)
@@ -210,6 +224,18 @@ public sealed class Workbook
         // 阻止无法保真的 BIFF8 透视表保存。
         ThrowIfPivotTablesNotPreservable(format);
         ThrowIfAdvancedXlsbPartsNotPreservable(format);
+        WriteTo(stream, format);
+    }
+
+    /// <summary>执行实际写出的 switch 分发。守卫校验已在调用方完成，避免 path→stream 双重执行导致降级重复上报。</summary>
+    private void WriteTo(Stream stream, ExcelFormat format)
+    {
+        // 包装回调：writer 级降级也累积进 SaveDegradations，同时透传外部回调。
+        void OnDeg(DegradationInfo info)
+        {
+            _saveDegradations.Add(info);
+            DegradationCallback?.Invoke(info);
+        }
 
         switch (format)
         {
@@ -219,6 +245,9 @@ public sealed class Workbook
                 var sheets = BuildSheetDataList();
                 bool structureUnchanged = StructureUnchanged(sheets);
                 bool verbatimX = CanVerbatimXlsx(sheets);
+                bool surgicalX = CanSurgicalXlsx(sheets);
+                // 目标为无宏 xlsx 且源含宏 → 剥离宏（宏已由 ThrowIfMacroNotSupported 放行并上报）
+                bool dropMacros = format == ExcelFormat.Xlsx && VbaProjectBytes is not null;
                 var openPwd = Security.GetOpenPassword();
                 var (fsHash, fsSalt, fsSpin, fsRo) = BuildFileSharingParams();
                 if (!string.IsNullOrEmpty(openPwd))
@@ -228,7 +257,7 @@ public sealed class Workbook
                     XlsxWriter.Write(zipMs, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
                         macroEnabled: format == ExcelFormat.Xlsm, date1904: Date1904,
                         fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo,
-                        workbookProtection: Protection, degradationCallback: DegradationCallback, verbatim: verbatimX);
+                        workbookProtection: Protection, degradationCallback: OnDeg, verbatim: verbatimX, surgical: surgicalX, dropMacros: dropMacros);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwd);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -238,19 +267,19 @@ public sealed class Workbook
                     XlsxWriter.Write(stream, sheets, Properties, PreservedParts, mergeSheetRels: structureUnchanged,
                         macroEnabled: format == ExcelFormat.Xlsm, date1904: Date1904,
                         fileSharingHash: fsHash, fileSharingSalt: fsSalt, fileSharingSpin: fsSpin, fileSharingReadOnlyRecommended: fsRo,
-                        workbookProtection: Protection, degradationCallback: DegradationCallback, verbatim: verbatimX);
+                        workbookProtection: Protection, degradationCallback: OnDeg, verbatim: verbatimX, surgical: surgicalX, dropMacros: dropMacros);
                 }
                 break;
             }
             case ExcelFormat.Csv:
                 if (Worksheets.Count != 1)
                     throw new NotSupportedException("CSV 仅支持单工作表工作簿");
-                CsvBackend.Write(stream, Worksheets[0].ToSheetData(), DegradationCallback, ExcelFormat.Csv, WriteSeparator, WriteEncoding);
+                CsvBackend.Write(stream, Worksheets[0].ToSheetData(), OnDeg, ExcelFormat.Csv, WriteSeparator, WriteEncoding);
                 break;
             case ExcelFormat.Xls:
             {
                 var xlsSheets = BuildSheetDataList();
-                XlsWriter.Write(stream, xlsSheets, Date1904, DegradationCallback, ExcelFormat.Xls,
+                XlsWriter.Write(stream, xlsSheets, Date1904, OnDeg, ExcelFormat.Xls,
                     Names, Properties);
                 break;
             }
@@ -260,12 +289,13 @@ public sealed class Workbook
                 var openPwdB = Security.GetOpenPassword();
                 var (fsHashB, fsSaltB, fsSpinB, fsRoB) = BuildFileSharingParams();
                 bool verbatimB = CanVerbatimXlsb(xlsbSheets);
+                bool surgicalB = CanSurgicalXlsb(xlsbSheets);
                 if (!string.IsNullOrEmpty(openPwdB))
                 {
                     using var zipMs = new MemoryStream();
                     XlsbWriter.Write(zipMs, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
-                        fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
-                        PreservedParts, Properties, Names, verbatim: verbatimB);
+                        fsHashB, fsSaltB, fsSpinB, fsRoB, OnDeg, ExcelFormat.Xlsb,
+                        PreservedParts, Properties, Names, verbatim: verbatimB, surgical: surgicalB, allowFeatureLoss: AllowFeatureLossOnSave);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwdB);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -273,8 +303,8 @@ public sealed class Workbook
                 else
                 {
                     XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
-                        fsHashB, fsSaltB, fsSpinB, fsRoB, DegradationCallback, ExcelFormat.Xlsb,
-                        PreservedParts, Properties, Names, verbatim: verbatimB);
+                        fsHashB, fsSaltB, fsSpinB, fsRoB, OnDeg, ExcelFormat.Xlsb,
+                        PreservedParts, Properties, Names, verbatim: verbatimB, surgical: surgicalB, allowFeatureLoss: AllowFeatureLossOnSave);
                 }
                 break;
             }
@@ -283,13 +313,25 @@ public sealed class Workbook
         }
     }
 
-    /// <summary>含 VBA 宏的工作簿不允许保存为不支持宏的格式（xlsx/xls），防止宏静默丢失或生成不一致文件 </summary>
+    /// <summary>含 VBA 宏的工作簿保存为不支持宏的格式（xlsx/xls）时：默认放行并上报（宏被剥离），
+    /// 严格模式（AllowFeatureLossOnSave=false）抛异常阻止。</summary>
     private void ThrowIfMacroNotSupported(ExcelFormat format)
     {
-        if (VbaProjectBytes is not null && (format == ExcelFormat.Xls || format == ExcelFormat.Xlsx))
-            throw new LiteExcelException(
-                $"无法写出 {format}：当前工作簿包含 VBA 宏，而 {format} 格式不支持宏。" +
-                "请另存为 .xlsm 或 .xlsb 以保留宏。");
+        if (VbaProjectBytes is null || (format != ExcelFormat.Xls && format != ExcelFormat.Xlsx))
+            return;
+        if (AllowFeatureLossOnSave)
+        {
+            ReportDegradation(new DegradationInfo
+            {
+                Capability = DegradationCapability.Macros,
+                TargetFormat = format,
+                Message = $"源工作簿包含 VBA 宏，而 {format} 格式不支持宏，宏代码将被剥离。调用了 VBA 自定义函数的公式在 Excel 中会显示 #NAME?。",
+            });
+            return;
+        }
+        throw new LiteExcelException(
+            $"无法写出 {format}：当前工作簿包含 VBA 宏，而 {format} 格式不支持宏。" +
+            "请另存为 .xlsm 或 .xlsb 以保留宏。");
     }
 
     /// <summary>文件级密码（打开/修改）仅支持 xlsx/xlsm/xlsb；csv/xls 不支持加密写出 </summary>
@@ -311,7 +353,7 @@ public sealed class Workbook
         if (AllowFeatureLossOnSave)
         {
             // 显式允许降级时上报并继续写出。
-            DegradationCallback?.Invoke(new DegradationInfo
+            ReportDegradation(new DegradationInfo
             {
                 Capability = DegradationCapability.PivotTables,
                 TargetFormat = format,
@@ -329,14 +371,22 @@ public sealed class Workbook
     {
         if (Format != ExcelFormat.Xlsb || !SourceHasAdvancedXlsbParts)
             return;
-        bool modified = AdvancedXlsbSheetIndexes.Count == 0
-            ? Worksheets.Any(ws => ws.IsModified)
-            : AdvancedXlsbSheetIndexes.Any(index => index >= 0 && index < Worksheets.Count && Worksheets[index].IsModified);
-        if (!modified)
+        var sheets = BuildSheetDataList();
+        if (CanVerbatimXlsb(sheets))
             return;
+        // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留。
+        if (CanSurgicalXlsb(sheets))
+            return;
+        bool anyAdvancedModified = AdvancedXlsbSheetIndexes.Count > 0
+            && AdvancedXlsbSheetIndexes.Any(i => i >= 0 && i < Worksheets.Count && Worksheets[i].IsModified);
+        bool structureChanged = _openedSheetNames is not null
+            && (Worksheets.Count != _openedSheetNames.Count
+                || !Worksheets.Select((w, i) => w.Name).SequenceEqual(_openedSheetNames));
+        if (!anyAdvancedModified && !structureChanged)
+            return; // 实际上 CanVerbatimXlsb 已判 false 但又不涉及结构/高级部件改动，允许保存
         if (AllowFeatureLossOnSave)
         {
-            DegradationCallback?.Invoke(new DegradationInfo
+            ReportDegradation(new DegradationInfo
             {
                 Capability = DegradationCapability.PivotTables,
                 TargetFormat = format,
@@ -345,8 +395,15 @@ public sealed class Workbook
             return;
         }
         throw new LiteExcelException(
-            "源 XLSB 文件包含透视表、切片器、图表或其他高级部件，当前版本无法在编辑后安全合并这些部件。默认已阻止本次保存。\n" +
+            "源 XLSB 文件包含透视表、切片器、图表或其他高级部件，当前版本无法在编辑/删除工作表后安全合并这些部件。默认已阻止本次保存。\n" +
             "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
+    }
+
+    /// <summary>记录一次能力降级：累积进 <see cref="SaveDegradations"/> 并透传外部回调。</summary>
+    private void ReportDegradation(DegradationInfo info)
+    {
+        _saveDegradations.Add(info);
+        DegradationCallback?.Invoke(info);
     }
 
     /// <summary>
@@ -402,6 +459,42 @@ public sealed class Workbook
     }
 
     /// <summary>
+    /// 是否可以「手术式原样写回」（surgical verbatim）：仅从源文件中删除若干工作表而保持其余全部逐字节不变。
+    /// 条件：源为 xlsx/xlsm、当前表是打开时表的有序子集（只删不增/不改名/不移动）、且无任何保留表被修改。
+    /// 命中时 XlsxWriter 可原样写出保留部件 + 仅摘除被删表引用，最大限度保留透视表/图表/切片器等高级功能。
+    /// </summary>
+    private bool CanSurgicalXlsx(List<SheetData> sheets)
+    {
+        if (Format != ExcelFormat.Xlsx && Format != ExcelFormat.Xlsm) return false;
+        if (_openedSheetNames is null) return false;
+        if (PreservedParts?.VerbatimXmlParts is null) return false;
+        // 必须有表被删除（count 减少）才走手术式；无删除时走 verbatim 路径（calcChain 清理等）
+        if (sheets.Count >= _openedSheetNames.Count) return false;
+
+        // 当前表名必须是打开时表名的「有序子序列」（去掉若干项后剩余顺序完全一致）。
+        int cur = 0;
+        foreach (var name in _openedSheetNames)
+        {
+            if (cur < sheets.Count && string.Equals(sheets[cur].SheetName, name, StringComparison.Ordinal))
+            {
+                cur++;
+            }
+            // 否则视为打开时被删除的表，跳过；
+            // 若当前表在打开表中找不到且仍有剩余当前表，则不是纯删除（可能改名/新增）→ 不匹配。
+        }
+        if (cur != sheets.Count) return false; // 当前表中存在不与打开表顺序对齐的项
+
+        // 无任何工作表被修改
+        foreach (var ws in Worksheets)
+            if (ws.IsModified) return false;
+
+        // 修改密码变动时需重建 workbook（含 fileSharing）
+        if (Security.ModifyPasswordTouched || Security.HasModifyPassword) return false;
+
+        return true;
+    }
+
+    /// <summary>
     /// 判断是否可对 XLSB 做 verbatim 保留（原样写出原始二进制部件而非重建）。
     /// 条件：源格式为 XLSB + 结构不变（表数+表名）+ 无工作表修改 + 原始二进制部件已捕获。
     /// </summary>
@@ -422,6 +515,39 @@ public sealed class Workbook
         // 修改密码变动时需重建包含 BrtFileSharingIso 记录的 workbook.bin。
         if (Security.ModifyPasswordTouched) return false;
         if (Security.HasModifyPassword) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// 是否可以「手术式原样写回」（surgical verbatim）xlsb：仅从源文件中删除若干工作表而保持其余全部逐字节不变。
+    /// 条件：源为 xlsb、当前表是打开时表的有序子集（只删不增/不改名/不移动）、且无任何保留表被修改、
+    /// 原始二进制部件已捕获、无密码变动。命中时 XlsbWriter 可原样写出保留部件 + 仅摘除被删表引用，
+    /// 最大限度保留透视表/切片器/宏等高级功能。
+    /// </summary>
+    private bool CanSurgicalXlsb(List<SheetData> sheets)
+    {
+        if (Format != ExcelFormat.Xlsb) return false;
+        if (_openedSheetNames is null) return false;
+        if (PreservedParts?.VerbatimBinaries is null) return false;
+        if (!PreservedParts.VerbatimBinaries.ContainsKey("xl/workbook.bin")) return false;
+        // 必须有表被删除（count 减少）才走手术式
+        if (sheets.Count >= _openedSheetNames.Count) return false;
+
+        // 当前表名必须是打开时表名的「有序子序列」
+        int cur = 0;
+        foreach (var name in _openedSheetNames)
+        {
+            if (cur < sheets.Count && string.Equals(sheets[cur].SheetName, name, StringComparison.Ordinal))
+                cur++;
+        }
+        if (cur != sheets.Count) return false;
+
+        // 无任何工作表被修改
+        foreach (var ws in Worksheets)
+            if (ws.IsModified) return false;
+
+        // 修改密码变动时需重建 workbook.bin
+        if (Security.ModifyPasswordTouched || Security.HasModifyPassword) return false;
         return true;
     }
 
@@ -489,5 +615,45 @@ public sealed class Workbook
             if (n.IsLocalSheet && n.LocalSheetId > removedIndex)
                 n.LocalSheetId--;
         }
+
+        // 同步清理 preserved 原始 definedNames XML：
+        // 保留部件 XML 中的命名区域仍引用被删表（localSheetId 是 0-based 序号），
+        // 若不同步清理 → 写出后 Excel 提示「已删除的功能：命名区域」（文件修复）。
+        if (PreservedParts?.DefinedNamesXml is { Length: > 0 })
+            PreservedParts.DefinedNamesXml = CleanDefinedNamesXmlOnDelete(PreservedParts.DefinedNamesXml, removedIndex);
+    }
+
+    /// <summary>删除工作表后，对原 definedNames XML 文本做同步清理：
+    /// 1. localSheetId == removedIndex → 删除该 definedName
+    /// 2. localSheetId > removedIndex → 局部索引减一（保持次序正确） </summary>
+    private static string? CleanDefinedNamesXmlOnDelete(string xml, int removedIndex)
+    {
+        if (string.IsNullOrEmpty(xml)) return null;
+
+        var doc = System.Xml.Linq.XDocument.Parse("<root>" + xml + "</root>",
+            System.Xml.Linq.LoadOptions.PreserveWhitespace | System.Xml.Linq.LoadOptions.SetLineInfo);
+
+        var root = doc.Root;
+        if (root is null) return xml;
+
+        var toRemove = new System.Collections.Generic.List<System.Xml.Linq.XElement>();
+        foreach (var dn in root.Elements())
+        {
+            if (dn.Name.LocalName != "definedName") continue;
+            var attr = dn.Attribute("localSheetId");
+            if (attr is null) continue; // 全局命名区域不动
+            if (!int.TryParse(attr.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int idx))
+                continue;
+
+            if (idx == removedIndex)
+                toRemove.Add(dn); // 引用被删除表，移除
+            else if (idx > removedIndex)
+                attr.Value = (idx - 1).ToString(System.Globalization.CultureInfo.InvariantCulture); // 排名前移
+        }
+        foreach (var el in toRemove) el.Remove();
+
+        // root 只在保存为片段时使用。为避免整个 XML 被包进 <root> 也输出，改写 root 的 InnerXml。
+        var content = string.Concat(root.Nodes().Select(n => n.ToString(System.Xml.Linq.SaveOptions.DisableFormatting)));
+        return string.IsNullOrEmpty(content) ? null : content;
     }
 }

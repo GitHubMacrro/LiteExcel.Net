@@ -78,6 +78,11 @@ internal sealed class OoxmlPreservedParts
                 continue;
             }
 
+            // 超级表已由 XlsxReader 读入 sheet.Tables 并带原始 XML 回写；从保留部件剔除，
+            // 避免 TablePlan 重建（table13+）与保留部件透传（table1-12）双写导致表重复/保真丢失。
+            if (IsTablePart(name))
+                continue;
+
             // 捕获根、工作簿和工作表关系，供保存时合并。
             if (IsMergeRelsPath(name, binary))
             {
@@ -112,6 +117,11 @@ internal sealed class OoxmlPreservedParts
         return preserved;
     }
 
+    /// <summary>是否为超级表定义部件（xl/tables/table{N}.xml）。注意不排除 xl/tables/_rels/*.rels：表 rels 引用 queryTable 等子部件，须透传保留。 </summary>
+    private static bool IsTablePart(string name)
+        => name.StartsWith("xl/tables/table", StringComparison.Ordinal)
+            && name.EndsWith(".xml", StringComparison.Ordinal);
+
     /// <summary>写入器会整体重建（不保留）的包条目 </summary>
     internal static HashSet<string> BuildRebuiltEntries(int sheetCount, bool binary = false)
     {
@@ -125,6 +135,7 @@ internal sealed class OoxmlPreservedParts
                 "xl/_rels/workbook.bin.rels",
                 "xl/sharedStrings.bin",
                 "xl/styles.bin",
+                "xl/calcChain.bin",   // 陈旧计算链不透传，由 Excel 在打开时重建。
                 "docProps/core.xml",
                 "docProps/app.xml",
             };

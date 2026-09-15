@@ -1332,6 +1332,15 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("临时")).ToList(
     ws.Delete();
 ```
 
+#### 保真性
+
+删除工作表后保存，采用**手术式原样写回**：仅摘除被删表及其引用，其余工作表、透视表、超级表、切片器、连接、查询表、宏代码等高级部件原样保留。
+
+- **xlsx / xlsm**：完整保留其余高级部件（透视表/图表/切片器/ActiveX/宏）。
+- **xlsb**：删除 XLSB 工作表后保存为 xlsb，同样完整保留透视表、透视缓存、超级表、切片器、连接、数据模型和 VBA 宏；同步调整工作表清单、命名区域作用域、外部表引用与活动表索引。
+- **xlsb → xlsm**：透视表等二进制部件保留（超级表转为重建）。
+- 若被删表是某透视表/切片器的数据源，或某透视缓存引用该表，无法安全执行手术式删除；此时默认回退到重建（高级部件可能丢失）并记录到 `SaveDegradations`，设 `workbook.AllowFeatureLossOnSave = false` 可改为抛异常阻止。
+
 ---
 
 # 8. 自动筛选
@@ -2822,6 +2831,8 @@ Excel.Write("matrix.csv", wb, new ExcelWriteOptions
 
 xls / xlsb 写出时：样式降级为仅保留 `NumberFormat`（规避 BIFF 手写风险）；批注 / 数据验证 / 条件格式 / 图片 / 超级表 / 命名区域被丢弃；公式文本不保留，按缓存值写出。这些降级经 `OnDegradation` 显式上报（见第 22 章）。
 
+> **xls 工作表尺寸上限**：`xls`（BIFF8）最多 256 列 / 65536 行。超出上限的数据（含远超数据范围的列宽声明）在写出时被裁剪，经 `DegradationCapability.SheetSize` 上报。
+
 xls / xlsb 读回时：样式仅保留 `NumberFormat`；批注 / 数据验证 / 条件格式 / 图片 / 超级表等高级能力不读回；可解析的公式会还原为 A1 文本填入 `Cell.Formula`（数组公式 / 3D 引用 / 名称等无法解析时仅保留缓存值）。
 
 读取 xls 文件（样式仅保留数字格式）：
@@ -2940,7 +2951,7 @@ catch (LiteExcelException ex)
 | `sheet{N}.xml` / `sharedStrings.xml` 原样透传 | `xl/worksheets/sheet{N}.xml` | 稀疏单元格布局与绝对引用（与 `styles.xml` 一致判定，未修改时原样保留） |
 | `workbook.bin` / `styles.bin` / `sheet{N}.bin` 原样透传 | XLSB 包内二进制部件 | BIFF12 透视表 / 切片器宿主记录（未修改 + 结构未变时原样保留，否则重建） |
 
-> **XLS 透视表保护**：源 .xls 文件包含透视表（检测到 `SXVIEW` 记录）时，保存默认被阻止并抛 `LiteExcelException`，因为当前模型无法保真写回或转换 BIFF8 透视表。设 `wb.AllowFeatureLossOnSave = true` 后允许保存，透视表被丢弃并经降级回调上报。
+> **XLS 透视表降级**：源 .xls 文件包含透视表（检测到 `SXVIEW` 记录）时，当前模型无法保真写回或转换 BIFF8 透视表，透视表会被丢弃并记录到 `wb.SaveDegradations`（默认放行）；设 `wb.AllowFeatureLossOnSave = false` 可改为抛 `LiteExcelException` 阻止。
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // 打开包含宏的 xlsm
@@ -3248,7 +3259,19 @@ await Task.Run(() =>
 
 # 22. 降级回调 OnDegradation
 
-本章介绍降级回调：写出到不支持某能力的格式时，对被静默丢弃的能力逐项上报。
+本章介绍能力降级：写出到不支持某能力的格式时，对被丢弃的能力逐项记录与上报。
+
+> **默认放行 + 非静默**：`Workbook.AllowFeatureLossOnSave` 默认 `true`。目标格式不支持的能力（VBA 宏 / BIFF8 透视表 / XLSB 高级部件等）默认**放行保存**，不再抛异常阻止；每次 `Save`/`SaveAs` 的丢弃项会累积到只读清单 **`Workbook.SaveDegradations`**（`IReadOnlyList<DegradationInfo>`，每次保存前清空），可随时查询"这次保存丢了什么"。设 `AllowFeatureLossOnSave = false` 恢复严格模式（抛 `LiteExcelException` 阻止保存）。
+
+```csharp
+var wb = Excel.Open("data.xlsb");
+wb.SaveAs("data.xlsx");                 // 默认放行；含宏时剥离 VBA
+foreach (var d in wb.SaveDegradations)  // 查询本次保存丢弃的能力
+    Console.WriteLine($"{d.Capability}: {d.Message}");
+// 输出示例：Macros: 源工作簿包含 VBA 宏，而 Xlsx 格式不支持宏，宏代码将被剥离。…
+
+wb.AllowFeatureLossOnSave = false;      // 严格模式：不支持的格式将抛异常
+```
 
 ## 📑 目录
 
@@ -3262,7 +3285,7 @@ await Task.Run(() =>
 
 ## 22.1 能力枚举 DegradationCapability
 
-`ExcelWriteOptions.OnDegradation` 为可选回调（默认 null，不注册则行为与历史版本完全一致，无破坏性）。写出到不支持某能力的格式（xls / xlsb / csv）时，对被静默丢弃的能力逐项回调：
+`ExcelWriteOptions.OnDegradation` 为可选回调（`Excel.Write` 路径；`wb.SaveAs` 路径用 `wb.SaveDegradations` 查询）。写出到不支持某能力的格式（xls / xlsb / csv）时，对被丢弃的能力逐项回调：
 
 ```csharp
 var wb = Excel.Create();

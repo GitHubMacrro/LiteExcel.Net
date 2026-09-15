@@ -913,8 +913,19 @@ public static partial class XlsxReader
             if (tableEntry is null) continue;
             try
             {
-                var table = ParseTable(XElement.Load(tableEntry.Open()), styles);
-                if (table is not null) sheet.Tables.Add(table);
+                // 先读原始 XML 字节（保留原表 id / 计算列公式 / dataDxfId / xr:uid 等），供保存时逐字回写，避免保真丢失。
+                string? rawXml = null;
+                using (var rawStream = tableEntry.Open())
+                using (var reader = new System.IO.StreamReader(rawStream, System.Text.Encoding.UTF8))
+                    rawXml = reader.ReadToEnd();
+                using var parseStream = tableEntry.Open();
+                var table = ParseTable(XElement.Load(parseStream), styles);
+                if (table is not null)
+                {
+                    table.OriginEntry = entry;
+                    table.OriginXml = rawXml;
+                    sheet.Tables.Add(table);
+                }
             }
             catch
             {
@@ -1727,6 +1738,9 @@ public static partial class XlsxReader
             // 1904 系统：epoch = 1904-01-01
             return new DateTime(1904, 1, 1).AddDays(serial);
         }
+        // OADate 合法范围约 [-657435, 2958465.9999...]，超出时回退为基准值以免抛异常中断整表读取
+        if (serial is <= -657435.0 or >= 2958466.0 || double.IsNaN(serial) || double.IsInfinity(serial))
+            return DateTime.FromOADate(0);
         // 1900 系统：用 .NET 内置转换（自动处理 1900 闰年 bug）
         return DateTime.FromOADate(serial);
     }

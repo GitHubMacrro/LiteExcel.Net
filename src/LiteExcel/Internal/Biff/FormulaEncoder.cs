@@ -388,7 +388,7 @@ internal static class FormulaEncoder
         var (row, col, rowAbs, colAbs) = ParseCellRef(refStr);
         if (row < 0 || col < 0) return false;
 
-        ms.WriteByte(0x24); // PtgRef
+        ms.WriteByte(0x44); // PtgRef with 16-bit column (supports cols > 63 in both BIFF8 and BIFF12)
 
         if (biff12)
         {
@@ -400,8 +400,8 @@ internal static class FormulaEncoder
         }
 
         ushort colWord = (ushort)(col & 0x3FFF);
-        if (colAbs) colWord |= 0x4000;
-        if (rowAbs) colWord |= 0x8000;
+        if (!colAbs) colWord |= 0x4000;
+        if (!rowAbs) colWord |= 0x8000;
         WriteU16(ms, colWord);
 
         return true;
@@ -418,7 +418,7 @@ internal static class FormulaEncoder
         var (r2, c2, r2a, c2a) = ParseCellRef(last);
         if (r1 < 0 || c1 < 0 || r2 < 0 || c2 < 0) return false;
 
-        ms.WriteByte(0x25); // PtgArea
+        ms.WriteByte(0x45); // PtgArea with 16-bit column (supports cols > 63 in both BIFF8 and BIFF12)
 
         if (biff12)
         {
@@ -433,10 +433,10 @@ internal static class FormulaEncoder
 
         ushort c1w = (ushort)(c1 & 0x3FFF);
         ushort c2w = (ushort)(c2 & 0x3FFF);
-        if (c1a) c1w |= 0x4000;
-        if (r1a) c1w |= 0x8000;
-        if (c2a) c2w |= 0x4000;
-        if (r2a) c2w |= 0x8000;
+        if (!c1a) c1w |= 0x4000;
+        if (!r1a) c1w |= 0x8000;
+        if (!c2a) c2w |= 0x4000;
+        if (!r2a) c2w |= 0x8000;
         WriteU16(ms, c1w);
         WriteU16(ms, c2w);
 

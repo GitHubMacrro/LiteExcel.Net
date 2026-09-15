@@ -118,6 +118,8 @@ internal static class XlsWriter
                 Report(DegradationCapability.ConditionalFormatting, $"xls 不支持条件格式，工作表 '{sheet.SheetName}' 的条件格式已丢弃。");
             if (sheet.Tables is { Count: > 0 })
                 Report(DegradationCapability.Tables, $"xls 不支持超级表，工作表 '{sheet.SheetName}' 的超级表已丢弃。");
+            if (ExeedsBiff8Limits(sheet))
+                Report(DegradationCapability.SheetSize, $"工作表 '{sheet.SheetName}' 的数据超出 xls 格式上限（最多 256 列 / 65536 行），超界部分已裁剪。");
         }
     }
 
@@ -142,6 +144,23 @@ internal static class XlsWriter
     private static bool HasMeaningfulProperties(WorkbookProperties? p)
         => p is not null && (p.Creator is not null || p.Title is not null || p.Subject is not null
             || p.LastModifiedBy is not null || p.Created is not null || p.Modified is not null || p.Application is not null);
+
+    /// <summary>工作表是否存在超出 BIFF8 上限（256 列 / 65536 行）的非空单元格。 </summary>
+    private static bool ExeedsBiff8Limits(SheetData sheet)
+    {
+        const int MaxColBiff8 = 255;   // 0-based
+        const int MaxRowBiff8 = 65535; // 0-based
+        for (int r = 0; r < sheet.Rows.Count; r++)
+        {
+            var row = sheet.Rows[r];
+            for (int c = 0; c < row.Count; c++)
+            {
+                if (row[c].IsEmpty) continue;
+                if (c > MaxColBiff8 || r > MaxRowBiff8) return true;
+            }
+        }
+        return false;
+    }
 
     private static byte[] BuildWorkbookStream(IReadOnlyList<SheetData> sheets, bool date1904)
     {
@@ -302,6 +321,14 @@ internal static class XlsWriter
         if (sheet.ColumnWidths is { } widths && widths.Count - 1 > maxCol)
             maxCol = widths.Count - 1;
 
+        // BIFF8（xls）固有限制：最多 256 列（0-based 0..255）、65536 行（0-based 0..65535）。
+        // 超出部分无法表示，必须裁剪，否则 DIMENSIONS/COLINFO 越界导致 Excel 报文件修复。
+        // 实测列宽声明常超出数据范围（如声明到第 386 列而数据仅到第 12 列），裁剪列宽无损。
+        const int MaxColBiff8 = 255;
+        const int MaxRowBiff8 = 65535;
+        if (maxCol > MaxColBiff8) maxCol = MaxColBiff8;
+        if (maxRow > MaxRowBiff8) maxRow = MaxRowBiff8;
+
         if (maxRow < 0)
         {
             WriteRecord(ms, OpDimensions, Dimensions(0, 1, 0, 1));
@@ -311,7 +338,7 @@ internal static class XlsWriter
         }
         if (sheet.ColumnWidths is { } cw)
         {
-            for (int c = 0; c < cw.Count; c++)
+            for (int c = 0; c < cw.Count && c <= MaxColBiff8; c++)
             {
                 double w = cw[c];
                 if (w <= 0) continue;

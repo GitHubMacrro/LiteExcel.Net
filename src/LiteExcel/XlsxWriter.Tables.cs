@@ -32,16 +32,25 @@ public static partial class XlsxWriter
             var plan = new TablePlan();
             plan.BySheet = new List<List<(string, string)>>(sheets.Count);
 
-            // 起始 id：跳过保留部件中已存在的 table{N}（工作簿级唯一）
+            // 起始 id：跳过已存在的 table{N}（工作簿级唯一），来源包括『文件中读入的原始表（OriginEntry）』与部分保留部件。
+            // 文件来源的表已在模型 sheet.Tables 中（带 OriginEntry），且已从 preserved.Parts 剔除（见 OoxmlPreservedParts.Capture），
+            // 因此这里主要扫描模型中的 OriginEntry；再兜底扫描 preserved.Parts 以防未来路径混入。
+            int maxId = 0;
+            foreach (var sheet in sheets)
+            {
+                if (sheet.Tables is null) continue;
+                foreach (var tbl in sheet.Tables)
+                    if (tbl.OriginEntry is not null && TryParseTableNumber(tbl.OriginEntry, out int on) && on > maxId)
+                        maxId = on;
+            }
             if (preserved is not null)
             {
-                int maxId = 0;
                 foreach (var key in preserved.Parts.Keys)
                 {
                     if (TryParseTableNumber(key, out int n) && n > maxId) maxId = n;
                 }
-                plan._nextId = maxId + 1;
             }
+            plan._nextId = maxId + 1;
 
             for (int i = 0; i < sheets.Count; i++)
             {
@@ -52,6 +61,13 @@ public static partial class XlsxWriter
                     for (int t = 0; t < sheet.Tables.Count; t++)
                     {
                         var tbl = sheet.Tables[t];
+                        // 来自文件的表：原样回写原始 table XML（保留 id / 计算列公式 / dataDxfId / uid），不重建、不重复编号。
+                        if (tbl.OriginEntry is not null && tbl.OriginXml is not null)
+                        {
+                            plan.TableXmlParts.Add((tbl.OriginEntry, tbl.OriginXml));
+                            sheetTables.Add((tbl.OriginEntry, $"rIdT{t + 1}"));
+                            continue;
+                        }
                         if (onDegradation is not null && !IsKnownStyle(tbl.StyleName))
                         {
                             onDegradation(new DegradationInfo
@@ -62,7 +78,9 @@ public static partial class XlsxWriter
                                 Message = $"超级表「{tbl.Name}」引用了 Excel 未知的样式名「{tbl.StyleName}」，打开后样式将退化为无样式",
                             });
                         }
+                        // 新建表：分配不冲突的新 id
                         int id = plan._nextId++;
+                        while (AlreadyHas(plan, id)) id = plan._nextId++;
                         string entry = $"xl/tables/table{id}.xml";
                         string relId = $"rIdT{t + 1}";
                         plan.TableXmlParts.Add((entry, BuildTableXml(tbl, id, stylesheet)));
@@ -72,6 +90,13 @@ public static partial class XlsxWriter
                 plan.BySheet.Add(sheetTables);
             }
             return plan;
+        }
+
+        private static bool AlreadyHas(TablePlan plan, int id)
+        {
+            foreach (var (entry, _) in plan.TableXmlParts)
+                if (TryParseTableNumber(entry, out int n) && n == id) return true;
+            return false;
         }
 
         /// <summary>是否 Excel 内置样式名（Light/Medium/Dark 共 60 种）或 None </summary>

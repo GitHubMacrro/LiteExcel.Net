@@ -66,6 +66,7 @@ public static class Excel
             {
                 var sheets = XlsBackend.ReadAll(path);
                 var wbX = Workbook.FromSheetData(sheets, null, ExcelFormat.Xls, path);
+                wbX.SourceHasPivotTables = Internal.Biff.XlsBackend.HasPivotTablesSnapshot;
                 AttachXlsNames(wbX);
                 wbX.Date1904 = XlsBackend.ReadDate1904(path);
                 return wbX;

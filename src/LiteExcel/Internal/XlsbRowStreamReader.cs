@@ -159,9 +159,9 @@ internal static class XlsbRowStreamReader
     }
 
     private static void PutCell(Dictionary<int, Cell> cells, byte[] d, bool shortCell,
-        ref int prevCol, Func<int, Cell> factory)
+        ref int prevCol, Func<int, Cell> factory, int valueOffset = -1)
     {
-        int valueOff = shortCell ? 4 : 8;
+        int valueOff = valueOffset >= 0 ? valueOffset : (shortCell ? 4 : 8);
         int col;
         if (shortCell)
             col = prevCol + 1;

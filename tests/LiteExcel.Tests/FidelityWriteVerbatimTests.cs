@@ -202,6 +202,7 @@ public class FidelityWriteVerbatimTests
             blocked.SourceHasAdvancedXlsbParts = true;
             blocked.AdvancedXlsbSheetIndexes.Add(0);
             blocked.Worksheets[0].SetValue("A1", "unsafe");
+            blocked.AllowFeatureLossOnSave = false;
             Assert.Throws<LiteExcelException>(() => blocked.SaveAs(blockedPath));
             Assert.False(File.Exists(blockedPath));
         }
@@ -227,6 +228,7 @@ public class FidelityWriteVerbatimTests
 
             var opened = Excel.Open(src);
             opened.SourceHasPivotTables = true; // 模拟 BIFF8 SXVIEW 检测命中
+            opened.AllowFeatureLossOnSave = false; // 严格模式：默认放行，此处显式要求阻止
 
             Assert.Throws<LiteExcelException>(() => opened.SaveAs(bad));
             // 目标文件未被创建/截断

@@ -53,6 +53,10 @@ public sealed class Worksheet
     /// <summary>读取时捕获的 sheet 元素 state 属性（hidden / veryHidden，内部使用） </summary>
     internal string? SheetState { get; set; }
 
+    /// <summary>打开时的工作表序号（0-based；-1 = 本次新建/非读取来源）。
+    /// 用于删除/移动工作表后，从 preserved 取对应该表的原始 rels（pivot/绘图/查询表等），避免结构变化时误丢。 </summary>
+    internal int OrigIndex { get; set; } = -1;
+
     /// <summary>表头样式（写出时作用于首行） </summary>
     public CellStyle? HeaderStyle { get; set; }
 
@@ -909,6 +913,7 @@ public sealed class Worksheet
             SheetExtLstXml = SheetExtLstXml,
             SheetId = SheetId,
             SheetState = SheetState,
+            OrigIndex = OrigIndex,
             ColumnWidths = ToColumnWidthsList(ColumnWidths),
             Comments = Comments,
             Validations = Validations,
@@ -977,6 +982,7 @@ public sealed class Worksheet
             Filter = sheet.Filter,
             CodeName = sheet.CodeName,
             Protection = sheet.Protection,
+            OrigIndex = sheet.OrigIndex,
         };
 
         if (sheet.Tables is { Count: > 0 })
@@ -1046,6 +1052,8 @@ public sealed class Worksheet
             AutoFilter = t.AutoFilter,
             TotalsRowShown = t.TotalsRowShown,
             HeaderStyle = t.HeaderStyle?.Clone(),
+            OriginEntry = t.OriginEntry,
+            OriginXml = t.OriginXml,
         };
         foreach (var c in t.Columns)
             clone.AddColumn(c.Clone());

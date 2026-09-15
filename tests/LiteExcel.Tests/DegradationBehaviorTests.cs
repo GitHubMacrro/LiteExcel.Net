@@ -46,12 +46,12 @@ public class DegradationBehaviorTests
     [Fact]
     public void SaveAs_Xls_WithMacro_ThrowsToPreventSilentLoss()
     {
-        // 宏不静默丢失：有宏的工作簿写 .xls（不支持宏）必须明确报错
+        // 严格模式（AllowFeatureLossOnSave=false）：有宏的工作簿写 .xls（不支持宏）必须明确报错
         var wb = Excel.Create(ExcelFormat.Xlsm);
-        // 通过 friend 程序集注入假宏字节，模拟打开 xlsm 捕获的宏
         var prop = typeof(Workbook).GetProperty("VbaProjectBytes",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         prop!.SetValue(wb, new byte[] { 0x00, 0x01, 0x02 });
+        wb.AllowFeatureLossOnSave = false;
 
         var path = Path.Combine(Path.GetTempPath(), "liteexcel-macro-to-xls.xls");
         if (File.Exists(path)) File.Delete(path);
@@ -64,11 +64,12 @@ public class DegradationBehaviorTests
     [Fact]
     public void SaveAs_Xlsx_WithMacro_ThrowsToPreventSilentLoss()
     {
-        // 宏不静默丢失：有宏的工作簿写 .xlsx（不支持宏）必须明确报错，避免生成不一致文件
+        // 严格模式（AllowFeatureLossOnSave=false）：有宏的工作簿写 .xlsx 必须明确报错
         var wb = Excel.Create(ExcelFormat.Xlsm);
         var prop = typeof(Workbook).GetProperty("VbaProjectBytes",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         prop!.SetValue(wb, new byte[] { 0x00, 0x01, 0x02 });
+        wb.AllowFeatureLossOnSave = false;
 
         var path = Path.Combine(Path.GetTempPath(), "liteexcel-macro-to-xlsx.xlsx");
         if (File.Exists(path)) File.Delete(path);
@@ -81,15 +82,62 @@ public class DegradationBehaviorTests
     [Fact]
     public void Save_StreamXlsx_WithMacro_ThrowsToPreventSilentLoss()
     {
-        // Stream 保存同样受宏保护
+        // Stream 保存同样受宏保护（严格模式）
+        var wb = Excel.Create(ExcelFormat.Xlsm);
+        var prop = typeof(Workbook).GetProperty("VbaProjectBytes",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        prop!.SetValue(wb, new byte[] { 0x00, 0x01, 0x02 });
+        wb.AllowFeatureLossOnSave = false;
+
+        using var ms = new MemoryStream();
+        var ex = Assert.Throws<LiteExcelException>(() => wb.Save(ms, ExcelFormat.Xlsx));
+        Assert.Contains("宏", ex.Message);
+    }
+
+    [Fact]
+    public void SaveAs_Xlsx_WithMacro_DefaultDropsAndReports()
+    {
+        // 默认（AllowFeatureLossOnSave=true）：有宏的工作簿写 .xlsx 放行，宏被剥离并上报
         var wb = Excel.Create(ExcelFormat.Xlsm);
         var prop = typeof(Workbook).GetProperty("VbaProjectBytes",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         prop!.SetValue(wb, new byte[] { 0x00, 0x01, 0x02 });
 
-        using var ms = new MemoryStream();
-        var ex = Assert.Throws<LiteExcelException>(() => wb.Save(ms, ExcelFormat.Xlsx));
-        Assert.Contains("宏", ex.Message);
+        var path = Path.Combine(Path.GetTempPath(), "liteexcel-macro-default-xlsx.xlsx");
+        if (File.Exists(path)) File.Delete(path);
+        try
+        {
+            wb.SaveAs(path, ExcelFormat.Xlsx);
+            Assert.True(File.Exists(path));
+            bool reported = false;
+            foreach (var d in wb.SaveDegradations)
+                if (d.Capability == DegradationCapability.Macros) reported = true;
+            Assert.True(reported);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void SaveAs_Xls_WithMacro_DefaultDropsAndReports()
+    {
+        // 默认：有宏的工作簿写 .xls 放行，宏被剥离并上报
+        var wb = Excel.Create(ExcelFormat.Xlsm);
+        var prop = typeof(Workbook).GetProperty("VbaProjectBytes",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        prop!.SetValue(wb, new byte[] { 0x00, 0x01, 0x02 });
+
+        var path = Path.Combine(Path.GetTempPath(), "liteexcel-macro-default-xls.xls");
+        if (File.Exists(path)) File.Delete(path);
+        try
+        {
+            wb.SaveAs(path, ExcelFormat.Xls);
+            Assert.True(File.Exists(path));
+            bool reported = false;
+            foreach (var d in wb.SaveDegradations)
+                if (d.Capability == DegradationCapability.Macros) reported = true;
+            Assert.True(reported);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
     }
 
     [Fact]

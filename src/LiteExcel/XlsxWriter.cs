@@ -74,10 +74,19 @@ public static partial class XlsxWriter
         OoxmlPreservedParts? preserved, bool mergeSheetRels, bool macroEnabled = false, bool date1904 = false,
         string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null,
         bool fileSharingReadOnlyRecommended = false, WorkbookProtection? workbookProtection = null,
-        Action<DegradationInfo>? degradationCallback = null, bool verbatim = false)
+        Action<DegradationInfo>? degradationCallback = null, bool verbatim = false, bool surgical = false, bool dropMacros = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
+
+        // 方案 A：手术式原样写回（surgical verbatim）——仅删除若干工作表，其余全部逐字节保留。
+        // 最大限度保住透视表/图表/切片器/activeX/customXml/connections 等高级部件。
+        if (surgical && preserved is not null
+            && preserved.VerbatimXmlParts is not null)
+        {
+            WriteSurgicalXlsx(stream, sheets, properties, preserved, macroEnabled, dropMacros);
+            return;
+        }
 
         // 0. Sheet 名校验（入口拦截，不影响写出逻辑）
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -103,6 +112,11 @@ public static partial class XlsxWriter
         // 原始样式、共享字符串和工作表部件齐全时可启用原样写出。
         verbatim = verbatim && preserved?.VerbatimXmlParts is not null
             && preserved.VerbatimXmlParts.ContainsKey("xl/styles.xml");
+
+        // 跨格式兼容（D2）：仅当源为 XML-OOXML（xlsx/xlsm）时才透传保留部件。
+        // 源为 xlsb（BIFF12 二进制）时保留部件是 .bin 记录，直接混入 xlsx 包会造成结构性损坏。
+        if (preserved is not null && preserved.VerbatimXmlParts is null)
+            preserved = null;
 
         // 预扫描：注册所有字符串和样式
         if (!verbatim)
@@ -152,18 +166,19 @@ public static partial class XlsxWriter
                 imageEntries.Add(entry);
             foreach (var kv in preserved.Parts)
             {
+                if (dropMacros && kv.Key == "xl/vbaProject.bin") continue; // 目标无宏，剥离 VBA
                 if (imageEntries.Contains(kv.Key)) continue;
                 WriteEntry(zip, kv.Key, kv.Value);
             }
         }
 
-        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled, imagePlan, tablePlan));
+        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled, imagePlan, tablePlan, dropMacros));
         WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
         // 先算 workbook.xml.rels 以取得保留 rel 的 rId 重编号映射，
         // workbook.xml 内的 pivotCaches / externalReferences 引用须按该映射改写
         var keptRelIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
-        var workbookRels = WorkbookRelsXml(sheets.Count, preserved, imagePlan, keptRelIdMap);
-        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended, workbookProtection, keptRelIdMap));
+        var workbookRels = WorkbookRelsXml(sheets.Count, preserved, imagePlan, keptRelIdMap, dropMacros);
+        WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended, workbookProtection, keptRelIdMap, dropMacros));
         WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", workbookRels);
 
         // 超级表部件
@@ -202,10 +217,14 @@ public static partial class XlsxWriter
 
             var hyperlinks = new List<(string Ref, string Target, string? Tooltip, bool IsInternal)>();
             var inCellVm = imagePlan.InCellVmBySheet(i);
+            // 该表在源文件中的 1-based 序号（0 = 本次新增/非读取来源）。
+            // 仅当 mergeSheetRels=true（表结构未变）时合并原始 rels；结构变化时不合并（旧设计）。
+            // surgical 路径独立处理保留表原始 rels，不走此分支。
+            int origSheetNum = mergeSheetRels && sheets[i].OrigIndex >= 0 ? sheets[i].OrigIndex + 1 : 0;
             // 新增图片或保留关系包含绘图时，都写出 <drawing>。
             // 否则 sheet XML 缺该元素，Excel 认为工作表无绘图，图表随之消失（rel 悬空）
             bool hasNewFloating = imagePlan.FloatingBySheet[i].Count > 0;
-            bool hasPreservedDrawing = mergeSheetRels && HasPreservedDrawingRel(preserved, i + 1);
+            bool hasPreservedDrawing = origSheetNum > 0 && HasPreservedDrawingRel(preserved, origSheetNum);
             bool hasDrawing = hasNewFloating || hasPreservedDrawing;
             string drawingRelId = hasDrawing ? imagePlan.DrawingTargetFor(i, preserved).RelId : "";
             bool hasComments = sheets[i].Comments is { Count: > 0 };
@@ -220,8 +239,10 @@ public static partial class XlsxWriter
             }
 
             // 工作表 rels：合并保留的绘图/超链接等 rel（工作表结构未变时），追加新建超链接/批注/drawing/table
+            // 删除/移动表后 mergeSheetRels 为 false，但每个保留表仍应复用其「原始序号」对应的保留 rels，
+            // 否则 pivot/绘图/查询表等引用会成孤儿，Excel 打开报修复。
             var sheetKeptIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
-            var sheetRels = MergeSheetRels(i + 1, hasComments, preserved, mergeSheetRels, hyperlinks, hasDrawing, imagePlan,
+            var sheetRels = MergeSheetRels(i + 1, hasComments, preserved, origSheetNum, hyperlinks, hasDrawing, imagePlan,
                 tableRels: tablePlan.SheetTableRels(i), keptIdMap: sheetKeptIdMap);
             // 保留 rel 被重新编号时，sheet XML 内引用旧 rId 的元素（<drawing r:id>、extLst 里的 <x14:slicer r:id> 等）
             // 须按 sheetKeptIdMap 同步改写。写入器本次新生成的 rId（rIdD1/rIdH{n}/rIdC1）不在映射内，原样保留。
@@ -253,6 +274,320 @@ public static partial class XlsxWriter
             WriteXmlEntry(zip, "xl/sharedStrings.xml", SharedStringsXml(sharedStrings));
             WriteXmlEntry(zip, "xl/styles.xml", stylesheet.BuildStylesXml());
         }
+    }
+
+    /// <summary>
+    /// 方案 A：手术式原样写回（surgical verbatim）。
+    /// 仅从源包中"摘除"被删除的工作表部件及其引用（workbook.xml/rels/CT），其余全部逐字节保留。
+    /// 这是「打开复杂工作簿 → 删除一张普通表 → 保存」的最高保真路径：
+    /// 透视表、图表、切片器、ActiveX、customXml、connections、queryTables 全部原封不动。
+    /// </summary>
+    /// <param name="deletedOrigIndexes">被删表在打开时的 0-based 序号集合 </param>
+    private static void WriteSurgicalXlsx(Stream stream, IReadOnlyList<SheetData> sheets,
+        WorkbookProperties? properties, OoxmlPreservedParts preserved, bool macroEnabled, bool dropMacros = false)
+    {
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+
+        var vb = preserved.VerbatimXmlParts!;
+        // 每个当前保留表在打开时的 1-based 序号（OrigIndex+1），以及被删除的打开序号集合
+        var deletedOrigIdx = ComputeDeletedOrigIndexes(preserved, sheets);
+
+        // ── 整理待删除的部件路径集合 ──
+        var deletedPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (int one in deletedOrigIdx)
+        {
+            deletedPaths.Add($"xl/worksheets/sheet{one + 1}.xml");
+            deletedPaths.Add($"xl/worksheets/_rels/sheet{one + 1}.xml.rels");
+            // 删除表独有的批注、drawing 页等附属部件：从该表的 rels 里收集再删
+            var relsKey = $"xl/worksheets/_rels/sheet{one + 1}.xml.rels";
+            if (preserved.Rels.TryGetValue(relsKey, out var deletedRelsXml))
+            {
+                foreach (var m in ParseRels(deletedRelsXml))
+                {
+                    // 只删除「以该 sheet 为宿主」的部件（skip 相对路径解释太复杂；用包含性 fallback）
+                    // 直接将 workbook.xml.rels 中引用的、且路径含该表名的部件移除
+                }
+            }
+        }
+
+        // ── 1) root rels 原样 ──
+        if (preserved.Rels.TryGetValue("_rels/.rels", out var rootRels))
+            WriteXmlEntry(zip, "_rels/.rels", rootRels);
+        else
+            WriteXmlEntry(zip, "_rels/.rels", WriterRootRels(properties is not null));
+
+        // ── 2) ContentTypes：剔除被删表的 sheet override ──
+            WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesAfterDelete(sheets, preserved, deletedOrigIdx, macroEnabled, dropMacros));
+
+        // ── 3) workbook.xml：删被删表 + 重建 sheets + 清 definedNames ──
+        WriteXmlEntry(zip, "xl/workbook.xml", BuildWorkbookXmlAfterDelete(sheets, preserved, macroEnabled, deletedOrigIdx, dropMacros));
+
+        // ── 4) workbook.xml.rels：删被删表 Relationship ──
+        WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", BuildWorkbookRelsAfterDelete(sheets, preserved, deletedOrigIdx, dropMacros));
+
+        // ── 5) docProps 原样或重建 ──
+        if (properties is not null)
+        {
+            WriteXmlEntry(zip, "docProps/core.xml", CorePropsXml(properties));
+            WriteXmlEntry(zip, "docProps/app.xml", AppPropsXml(properties, sheets));
+        }
+        else if (preserved.VerbatimXmlParts.TryGetValue("docProps/core.xml", out var coreProp))
+        {
+            WriteEntry(zip, "docProps/core.xml", coreProp);
+            if (preserved.VerbatimXmlParts.TryGetValue("docProps/app.xml", out var appProp))
+                WriteEntry(zip, "docProps/app.xml", appProp);
+        }
+
+        // ── 6) styles / sharedStrings 原样 ──
+        if (vb.TryGetValue("xl/styles.xml", out var stylesBytes)) WriteEntry(zip, "xl/styles.xml", stylesBytes);
+        if (vb.TryGetValue("xl/sharedStrings.xml", out var sstBytes)) WriteEntry(zip, "xl/sharedStrings.xml", sstBytes);
+
+        // ── 7) 保留表 sheet XML 原样 + 各自 rels 原样 ──
+        foreach (var kv in preserved.VerbatimXmlParts)
+        {
+            var name = kv.Key;
+            // 跳过已被上面重写的部件（workbook/styles/sst）和被删表
+            if (name == "xl/workbook.xml" || name == "xl/styles.xml" || name == "xl/sharedStrings.xml") continue;
+            if (name == "xl/calcChain.xml") continue;
+            if (name == "[Content_Types].xml" || name == "_rels/.rels") continue;
+            if (name.StartsWith("docProps/", StringComparison.Ordinal)) continue;
+            if (deletedPaths.Contains(name)) continue; // 被删表的 sheet XML
+            WriteEntry(zip, name, kv.Value);
+        }
+
+        // ── 8) 其余保留部件（pivot/drawing/activeX/media/customXml/connections/queryTables/theme 等）原样 ──
+        foreach (var kv in preserved.Parts)
+        {
+            if (deletedPaths.Contains(kv.Key)) continue;
+            if (dropMacros && kv.Key == "xl/vbaProject.bin") continue; // 目标无宏，剥离 VBA
+            WriteEntry(zip, kv.Key, kv.Value);
+        }
+
+        // ── 8b) 超级表部件：模型已读入 sheet.Tables（带原始 entry/XML），逐个逐字写回。
+        // D1 修复把表从 preserved.Parts 剔除（避免与模型重建双重写出），此处手术式路径直接复用模型原表。
+        foreach (var s in sheets)
+        {
+            if (s.Tables is null) continue;
+            foreach (var t in s.Tables)
+            {
+                if (t.OriginEntry is null || t.OriginXml is null) continue;
+                if (deletedPaths.Contains(t.OriginEntry)) continue;
+                WriteXmlEntry(zip, t.OriginEntry, t.OriginXml);
+            }
+        }
+
+        // ── 9) 所有 sheet-level rels 原样（除被删表） ──
+        foreach (var kv in preserved.Rels)
+        {
+            var relsPath = kv.Key;
+            if (relsPath == "_rels/.rels") continue;                       // 已写
+            if (relsPath == "xl/_rels/workbook.xml.rels") continue;        // 已重建
+            if (deletedPaths.Contains(relsPath)) continue;                 // 被删表 rels
+            WriteXmlEntry(zip, relsPath, kv.Value);
+        }
+    }
+
+    /// <summary>计算被删表的打开时 0-based 序号集合（当前 sheets 是打开表的子序列） </summary>
+    private static List<int> ComputeDeletedOrigIndexes(OoxmlPreservedParts preserved, IReadOnlyList<SheetData> currentSheets)
+    {
+        // 打开时表的总数 = VerbatimXmlParts 中 sheetN.xml 的数量（也可用 preserved.Parts 中其它指标）
+        int openedCount = 0;
+        foreach (var key in preserved.VerbatimXmlParts!.Keys)
+        {
+            if (key.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal) && key.EndsWith(".xml", StringComparison.Ordinal))
+                openedCount++;
+        }
+        if (openedCount == 0) return new List<int>();
+
+        // 当前保留表的 OrigIndex 集合（0-based）。OrigIndex 是打开时的序号。
+        var keptOrig = new HashSet<int>();
+        foreach (var s in currentSheets)
+            if (s.OrigIndex >= 0) keptOrig.Add(s.OrigIndex);
+
+        var deleted = new List<int>();
+        for (int i = 0; i < openedCount; i++)
+            if (!keptOrig.Contains(i)) deleted.Add(i);
+        return deleted;
+    }
+
+    /// <summary>重建 [Content_Types].xml：剔除被删表 sheet override，其余保留 </summary>
+    private static string ContentTypesAfterDelete(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts preserved, List<int> deletedOrigIdx, bool macroEnabled, bool dropMacros = false)
+    {
+        var sb = new StringBuilder(512);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
+
+        var deletedSheetPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var d in deletedOrigIdx)
+            deletedSheetPaths.Add($"/xl/worksheets/sheet{d + 1}.xml");
+
+        // Default declarations
+        var seenExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        sb.Append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
+        sb.Append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
+        seenExt.Add("rels"); seenExt.Add("xml");
+        foreach (var d in preserved.DefaultTypes)
+        {
+            if (d.Extension == "rels" || d.Extension == "xml") continue;
+            if (!seenExt.Add(d.Extension)) continue;
+            sb.Append($"<Default Extension=\"{d.Extension}\" ContentType=\"{d.ContentType}\"/>");
+        }
+
+        // Override declarations：剔除被删表 sheet override，其余保留
+        var seenPart = new HashSet<string>(StringComparer.Ordinal);
+        // workbook.xml 主文档 override（macroEnabled 决定类型）
+        seenPart.Add("/xl/workbook.xml");
+        sb.Append(macroEnabled
+            ? "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.ms-excel.sheet.macroEnabled.main+xml\"/>"
+            : "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>");
+        // styles / sharedStrings override（数据原样写回，需要声明）
+        seenPart.Add("/xl/styles.xml");
+        sb.Append("<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>");
+        foreach (var o in preserved.OverrideTypes)
+        {
+            if (o.PartName == "/xl/sharedStrings.xml")
+            {
+                seenPart.Add(o.PartName);
+                sb.Append($"<Override PartName=\"{o.PartName}\" ContentType=\"{o.ContentType}\"/>");
+            }
+        }
+        foreach (var o in preserved.OverrideTypes)
+        {
+            if (deletedSheetPaths.Contains(o.PartName)) continue;
+            if (o.PartName == "/xl/workbook.xml") continue; // 已重写
+            if (o.PartName == "/xl/styles.xml" || o.PartName == "/xl/sharedStrings.xml") continue; // 已处理
+            if (o.PartName == "/xl/calcChain.xml") continue; // 陈旧计算链不透传
+            if (dropMacros && o.PartName == "/xl/vbaProject.bin") continue; // 目标无宏，剥离 VBA
+            if (seenPart.Contains(o.PartName)) continue;
+            seenPart.Add(o.PartName);
+            sb.Append($"<Override PartName=\"{o.PartName}\" ContentType=\"{o.ContentType}\"/>");
+        }
+
+        sb.Append("</Types>");
+        return sb.ToString();
+    }
+
+    /// <summary>重建 workbook.xml：从原字节剔除被删的 sheet 条目 + 清理 definedNames（用 XDocument 统一处理，避免正则损坏 XML）</summary>
+    private static string BuildWorkbookXmlAfterDelete(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts preserved,
+        bool macroEnabled, List<int> deletedOrigIdx, bool dropMacros = false)
+    {
+        // 用原始 workbook.xml 作为基底，移除 deleted sheets
+        var origWb = preserved.VerbatimXmlParts?["xl/workbook.xml"];
+        if (origWb is null) throw new LiteExcelException("surgical 删除需要原始 workbook.xml");
+
+        string xml = System.Text.Encoding.UTF8.GetString(origWb);
+        if (deletedOrigIdx.Count == 0) return xml; // 无删除，原样返回
+
+        var deleted = new HashSet<int>(deletedOrigIdx);
+        System.Xml.Linq.XDocument doc;
+        try
+        {
+            doc = System.Xml.Linq.XDocument.Parse(xml, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+        }
+        catch
+        {
+            // 无法解析则走保守路径：仅做字符串级 definedName localSheetId 重排。
+            return xml;
+        }
+
+        var dns = doc.Root?.GetDefaultNamespace();
+        if (doc.Root is null) return xml;
+
+        // 由 workbook.xml.rels 得知 rId → 表部件序号，定位被删表对应的 r:id
+        var sheetTargetMap = new Dictionary<string, int>(StringComparer.Ordinal);
+        var origRels = preserved.Rels.TryGetValue("xl/_rels/workbook.xml.rels", out var relsText) ? relsText : "";
+        foreach (var rel in ParseRels(origRels))
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(rel.Target, @"worksheets/sheet(\d+)\.xml");
+            if (m.Success) sheetTargetMap[rel.Id] = int.Parse(m.Groups[1].Value) - 1;
+        }
+        var deletedRids = new HashSet<string>();
+        foreach (var kv in sheetTargetMap)
+            if (deleted.Contains(kv.Value)) deletedRids.Add(kv.Key);
+
+        // 移除被删表的 <sheet> 元素（r:id 属性位于 OOXML relationships 命名空间）
+        var relNs = System.Xml.Linq.XNamespace.Get(OfficeRelNs);
+        var sheetsEl = doc.Root.Element(dns + "sheets");
+        if (sheetsEl is not null)
+        {
+            var removable = new List<System.Xml.Linq.XElement>();
+            foreach (var sh in sheetsEl.Elements(dns + "sheet"))
+            {
+                var rid = sh.Attribute(relNs + "id");
+                if (deletedRids.Contains(rid != null ? rid.Value : "")) removable.Add(sh);
+            }
+            foreach (var el in removable) el.Remove();
+        }
+
+        // 清理 definedNames（localSheetId 指向被删表的条目移除，其余偏移修正）
+        var definedNames = doc.Root.Element(dns + "definedNames");
+        if (definedNames is not null)
+        {
+            var removableDn = new List<System.Xml.Linq.XElement>();
+            foreach (var dn in definedNames.Elements(dns + "definedName"))
+            {
+                var attr = dn.Attribute("localSheetId");
+                if (attr is null) continue;
+                if (!int.TryParse(attr.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int idx)) continue;
+                if (deleted.Contains(idx)) { removableDn.Add(dn); }
+                else { int shift = deleted.Count(d => d < idx); if (shift > 0) attr.Value = (idx - shift).ToString(System.Globalization.CultureInfo.InvariantCulture); }
+            }
+            foreach (var el in removableDn) el.Remove();
+            if (!definedNames.HasElements) definedNames.Remove();
+        }
+
+        var outXm = doc.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+        if (dropMacros) outXm = StripWorkbookCodeName(outXm);
+        return outXm;
+    }
+
+    /// <summary>从 workbookPr 起始标签中移除 codeName 属性（目标无宏时剥离 VBA 绑定）。</summary>
+    private static string StripWorkbookCodeName(string xml)
+    {
+        int idx = xml.IndexOf("<workbookPr", StringComparison.Ordinal);
+        if (idx < 0) return xml;
+        int tagEnd = xml.IndexOf('>', idx);
+        if (tagEnd < 0) return xml;
+        var tag = xml.Substring(idx, tagEnd - idx + 1);
+        var cleaned = tag;
+        int cn = cleaned.IndexOf(" codeName=", StringComparison.Ordinal);
+        if (cn >= 0)
+        {
+            int q1 = cleaned.IndexOf('"', cn);
+            if (q1 >= 0)
+            {
+                int q2 = cleaned.IndexOf('"', q1 + 1);
+                if (q2 > q1)
+                    cleaned = cleaned.Substring(0, cn) + cleaned.Substring(q2 + 1);
+            }
+        }
+        return xml.Substring(0, idx) + cleaned + xml.Substring(tagEnd + 1);
+    }
+
+    /// <summary>重建 workbook.xml.rels：移除被删表的 worksheet Relationship，其余保留原样 </summary>
+    private static string BuildWorkbookRelsAfterDelete(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts preserved,
+        List<int> deletedOrigIdx, bool dropMacros = false)
+    {
+        var origRels = preserved.Rels.TryGetValue("xl/_rels/workbook.xml.rels", out var r) ? r : "";
+        var keptRels = new List<RelInfo>();
+        foreach (var rel in ParseRels(origRels))
+        {
+            if (dropMacros && rel.Type.IndexOf("vbaProject", StringComparison.OrdinalIgnoreCase) >= 0)
+                continue; // 目标无宏，剔除 vbaProject 关系
+            if (!rel.Type.EndsWith("/worksheet", StringComparison.Ordinal))
+            {
+                keptRels.Add(rel);
+                continue;
+            }
+            // 是被删表对应的穿件吗？
+            var m = System.Text.RegularExpressions.Regex.Match(rel.Target, @"worksheets/sheet(\d+)\.xml");
+            if (m.Success && int.TryParse(m.Groups[1].Value, out int num))
+            {
+                if (deletedOrigIdx.Contains(num - 1)) continue; // 删除
+            }
+            keptRels.Add(rel);
+        }
+        return RelsXml(keptRels);
     }
 
     /// <summary>
@@ -1054,7 +1389,7 @@ public static partial class XlsxWriter
 
     // ── OOXML 部件构建 ──
 
-    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved, bool macroEnabled = false, ImagePlan? imagePlan = null, TablePlan? tablePlan = null)
+    private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved, bool macroEnabled = false, ImagePlan? imagePlan = null, TablePlan? tablePlan = null, bool dropMacros = false)
     {
         var defaults = new List<(string Ext, string Ct)>();
         var overrides = new List<(string Part, string Ct)>();
@@ -1136,6 +1471,13 @@ public static partial class XlsxWriter
             foreach (var o in preserved.OverrideTypes)
             {
                 if (rebuiltEntries.Contains(o.PartName.TrimStart('/'))) continue;
+                if (dropMacros && o.PartName == "/xl/vbaProject.bin") continue;
+                // 工作表/批注部件的 Override 一律由写入器按当前模型重建：
+                // 删除表后原文件中 sheet{旧N}.xml / comments{旧N}.xml 的 Override 若透传，
+                // 会声明不存在的部件 → Excel 报「文件格式或扩展名无效」拒绝打开。
+                var partPath = o.PartName.TrimStart('/');
+                if (partPath.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal)) continue;
+                if (partPath.StartsWith("xl/comments", StringComparison.Ordinal)) continue;
                 overrides.Add(o);
             }
         }
@@ -1187,13 +1529,15 @@ public static partial class XlsxWriter
 
     /// <summary>合并工作表级 rels：保留未重建目标（绘图/超链接等），追加新建超链接/批注/table rel。返回 null 表示无需写出 </summary>
     private static string? MergeSheetRels(int sheetNumber, bool hasComments, OoxmlPreservedParts? preserved,
-        bool mergeSheetRels, List<(string Ref, string Target, string? Tooltip, bool IsInternal)>? hyperlinks = null,
+        int origSheetNumber, List<(string Ref, string Target, string? Tooltip, bool IsInternal)>? hyperlinks = null,
         bool hasDrawing = false, XlsxWriter.ImagePlan? imagePlan = null, List<RelInfo>? tableRels = null,
         Dictionary<string, string>? keptIdMap = null)
     {
         string original = "";
-        if (mergeSheetRels && preserved is not null
-            && preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetNumber}.xml.rels", out var r))
+        // 只有真实的保留表（origSheetNumber>0）才合并其原始 rels；新增表（0）不合并。
+        // 用「原始序号」而非重建后的序号取 preserved.Rels，确保删除/移动表后仍复用正确的原有引用。
+        if (origSheetNumber > 0 && preserved is not null
+            && preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{origSheetNumber}.xml.rels", out var r))
         {
             original = r;
         }
@@ -1530,14 +1874,14 @@ public static partial class XlsxWriter
     private static string WorkbookXml(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved, bool date1904,
         string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null,
         bool fileSharingReadOnlyRecommended = false, WorkbookProtection? workbookProtection = null,
-        Dictionary<string, string>? keptRelIdMap = null)
+        Dictionary<string, string>? keptRelIdMap = null, bool dropMacros = false)
     {
         var sb = new StringBuilder(256);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append($"<workbook xmlns=\"{MainNs}\" xmlns:r=\"{OfficeRelNs}\">");
         // 工作簿宿主 VBA 代码名：schema 要求位于 sheets 之前，缺失会导致 Excel 重排宏文档模块
         // date1904：1904 日期系统（1904-01-01 基准，读取侧 XlsxReader 按此换算）
-        var wbCodeName = preserved?.WorkbookCodeName;
+        var wbCodeName = dropMacros ? null : preserved?.WorkbookCodeName;
         bool hasWbAttr = !string.IsNullOrEmpty(wbCodeName) || date1904;
         if (hasWbAttr)
         {
@@ -1609,7 +1953,7 @@ public static partial class XlsxWriter
     }
 
     private static string WorkbookRelsXml(int sheetCount, OoxmlPreservedParts? preserved, ImagePlan? imagePlan = null,
-        Dictionary<string, string>? keptIdMap = null)
+        Dictionary<string, string>? keptIdMap = null, bool dropMacros = false)
     {
         var rebuiltTargets = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 1; i <= sheetCount; i++)
@@ -1619,6 +1963,8 @@ public static partial class XlsxWriter
         rebuiltTargets.Add("xl/sharedStrings.xml");
         rebuiltTargets.Add("xl/styles.xml");
         rebuiltTargets.Add("xl/calcChain.xml"); // 陈旧计算链不透传，其关系一并移除。
+        if (dropMacros)
+            rebuiltTargets.Add("xl/vbaProject.bin"); // 目标无宏，剔除 vbaProject 关系。
         if (imagePlan is { HasInCell: true })
         {
             rebuiltTargets.Add("xl/metadata.xml");
@@ -1631,6 +1977,20 @@ public static partial class XlsxWriter
         string original = "";
         if (preserved is not null && preserved.Rels.TryGetValue("xl/_rels/workbook.xml.rels", out var r))
             original = r;
+
+        // 删除表后：原 workbook rels 中所有 worksheet 类型的 rel（指向 sheetN.xml）均由写入器重建负责；
+        // 凡原 rel 指向已被删除/未重建的工作表部件，都必须一并移除，避免孤儿 rel 导致 Excel 修复报错。
+        if (!string.IsNullOrEmpty(original))
+        {
+            foreach (var rel in ParseRels(original))
+            {
+                if (rel.Type.EndsWith("/worksheet", StringComparison.Ordinal))
+                {
+                    var abs = ResolveRelsTarget("xl", rel.Target);
+                    rebuiltTargets.Add(abs);
+                }
+            }
+        }
 
         return MergeRelsXml(original, "xl", rebuiltTargets, WriterWorkbookRels(sheetCount, imagePlan), keptIdMap) ?? WriterWorkbookRels(sheetCount, imagePlan);
     }

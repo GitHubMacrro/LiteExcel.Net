@@ -76,4 +76,8 @@ public sealed class SheetData
 
     /// <summary>读取时捕获的 &lt;sheet&gt; 元素 state 属性（hidden / veryHidden）；默认 null = 可见。</summary>
     internal string? SheetState { get; set; }
+
+    /// <summary>打开时该表在源工作簿中的 0-based 序号；-1 表示本次新增（无原始保留部件/rels）。
+    /// 用于删除/移动表后，仍能按原序号复用该表的保留 rels（绘图/超链接/透视表引用等），避免孤儿部件。</summary>
+    internal int OrigIndex { get; set; } = -1;
 }

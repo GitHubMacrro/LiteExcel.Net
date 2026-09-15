@@ -134,4 +134,158 @@ public class DeleteSheetTests
         Assert.Equal("A", wb.Worksheets[1].Name);
         Assert.Equal("Keep", wb.Worksheets[2].Name);
     }
+
+    [Fact]
+    public void Delete_ForeachDirectDelete_Works()
+    {
+        var wb = Excel.Create();
+        wb.Worksheets.Add("A");
+        wb.Worksheets.Add("XSheet_1");
+        wb.Worksheets.Add("XSheet_2");
+        wb.Worksheets.Add("Keep");
+
+        // 不调用 .ToList()，直接 in foreach Delete —— 不应抛 InvalidOperationException
+        foreach (var ws in wb.Worksheets)
+        {
+            if (ws.Name.Contains("XSheet"))
+                ws.Delete();
+        }
+
+        Assert.Equal(3, wb.Worksheets.Count);
+        Assert.Equal("A", wb.Worksheets[1].Name);
+        Assert.Equal("Keep", wb.Worksheets[2].Name);
+    }
+
+    [Fact]
+    public void Delete_RemoveAll_Works()
+    {
+        var wb = Excel.Create();
+        wb.Worksheets.Add("A");
+        wb.Worksheets.Add("X1");
+        wb.Worksheets.Add("X2");
+        wb.Worksheets.Add("Keep");
+
+        int removed = wb.Worksheets.RemoveAll(w => w.Name.StartsWith("X"));
+
+        Assert.Equal(2, removed);
+        Assert.Equal(3, wb.Worksheets.Count);
+        Assert.Equal("Keep", wb.Worksheets[2].Name);
+    }
+
+    [Fact]
+    public void Delete_XlsbSurgical_OpenedThenSaved()
+    {
+        // 打开 xlsb → 删除中间表 → 另存为 xlsb（手术式删除通道），应保留其余表与命名区域
+        var file = GetTempFile(".xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            wb.Worksheets[0].Name = "Alpha";
+            wb.Worksheets[0].SetValue("A1", "keep1");
+            wb.Worksheets.Add("Beta").SetValue("A1", "drop");
+            wb.Worksheets.Add("Gamma").SetValue("A1", "keep2");
+            wb.SaveAs(file);
+
+            var opened = Excel.Open(file);
+            Assert.Equal(3, opened.Worksheets.Count);
+            var beta = opened.Worksheets.FirstOrDefault(w => w.Name == "Beta");
+            Assert.NotNull(beta);
+            beta.Delete();
+            Assert.Equal(2, opened.Worksheets.Count);
+
+            var outPath = GetTempFile(".xlsb");
+            opened.SaveAs(outPath);
+
+            var reopened = Excel.Open(outPath);
+            Assert.Equal(2, reopened.Worksheets.Count);
+            Assert.Equal("Alpha", reopened.Worksheets[0].Name);
+            Assert.Equal("Gamma", reopened.Worksheets[1].Name);
+            Assert.Equal("keep1", reopened.Worksheets[0].Cell("A1").GetString());
+            Assert.Equal("keep2", reopened.Worksheets[1].Cell("A1").GetString());
+            File.Delete(outPath);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Delete_XlsbSurgical_PreservesDefinedNames()
+    {
+        // 打开含 sheet 级命名区域的 xlsb，删除非首表后，命名区域 itab 应正确偏移
+        var file = GetTempFile(".xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            wb.Worksheets[0].Name = "S0";
+            wb.Worksheets[0].SetValue("A1", "x");
+            wb.Worksheets.Add("S1").SetValue("A1", "drop");
+            wb.Worksheets.Add("S2").SetValue("A1", "y");
+            wb.Worksheets.Add("S3").SetValue("A1", "z");
+            // 添加命名区域
+            wb.Names.Add(new NamedRange { Name = "GlobalN", Reference = "S0!$A$1" });
+            wb.Worksheets[3].SetValue("B1", 1);
+            wb.SaveAs(file);
+
+            var opened = Excel.Open(file);
+            var s1 = opened.Worksheets.FirstOrDefault(w => w.Name == "S1");
+            Assert.NotNull(s1);
+            s1.Delete();
+            Assert.Equal(3, opened.Worksheets.Count);
+
+            var outPath = GetTempFile(".xlsb");
+            opened.SaveAs(outPath);
+
+            var reopened = Excel.Open(outPath);
+            Assert.Equal(3, reopened.Worksheets.Count);
+            Assert.Equal("S0", reopened.Worksheets[0].Name);
+            Assert.Equal("S2", reopened.Worksheets[1].Name);
+            Assert.Equal("S3", reopened.Worksheets[2].Name);
+            File.Delete(outPath);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void Delete_XlsbSurgical_PreservesVbaProject()
+    {
+        // 手术式删除路径必须保留 xl/vbaProject.bin（回归：曾因双重跳过丢失 VBA）
+        var file = GetTempFile(".xlsb");
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            wb.Worksheets[0].Name = "Alpha";
+            wb.Worksheets[0].SetValue("A1", "x");
+            wb.Worksheets.Add("Beta").SetValue("A1", "drop");
+            wb.Worksheets.Add("Gamma").SetValue("A1", "y");
+            var prop = typeof(Workbook).GetProperty("VbaProjectBytes",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            prop!.SetValue(wb, new byte[] { 0x55, 0x56, 0x42, 0x41 }); // 假宏字节
+            wb.SaveAs(file);
+
+            var opened = Excel.Open(file);
+            Assert.Equal(3, opened.Worksheets.Count);
+            opened.Worksheets.First(w => w.Name == "Beta").Delete();
+            Assert.Equal(2, opened.Worksheets.Count);
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+
+            // 输出必须包含 vbaProject.bin 且字节一致
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(outPath))
+            {
+                var entry = zip.GetEntry("xl/vbaProject.bin");
+                Assert.NotNull(entry);
+                using var ms = new MemoryStream();
+                entry!.Open().CopyTo(ms);
+                Assert.Equal(new byte[] { 0x55, 0x56, 0x42, 0x41 }, ms.ToArray());
+            }
+
+            // 重新打开，宏仍在
+            var reopened = Excel.Open(outPath);
+            Assert.Equal(2, reopened.Worksheets.Count);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
 }
