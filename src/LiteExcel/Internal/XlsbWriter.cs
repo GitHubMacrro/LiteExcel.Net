@@ -591,15 +591,15 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                 WriteEntry(zip, RenamePartName(relsPath), System.Text.Encoding.UTF8.GetBytes(RenameRefs(sheetRels)));
         }
 
-        // 其余保留部件重编号后写出；connections/pivotTable 做保真微调。
+        // 其余保留部件重编号后写出；仅 pivotTable 做 cacheId 保真微调，connections 原样透传
+        // （`_xlcn.LinkedTable_*` 名是纯元数据、无部件按字符串引用它；Excel 另存时会自行追加 "1"，
+        //   库不应改写源名——旧「去尾部 1」会截断合法表名后缀如 Table1→Table，且多次另存逐次降级）。
         foreach (var kv in preserved.Parts)
         {
             if (deletedPaths.Contains(kv.Key)) continue;
             if (kv.Key == "xl/calcChain.bin") continue;
             byte[] data = kv.Value;
-            if (kv.Key == "xl/connections.bin")
-                data = ModifyConnectionsBin(data);
-            else if (kv.Key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
+            if (kv.Key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
             {
                 var cacheAbs = PivotTableCacheTarget(kv.Key, preserved);
                 int cacheId = cacheAbs is not null && cacheIndexByTarget.TryGetValue(cacheAbs, out var ci) ? ci : -1;
@@ -745,30 +745,18 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         return ms.ToArray();
     }
 
-    /// <summary>改写定义名：`_xlcn.LinkedTable_*` 去尾部冗余 "1"；rgce 引用被删表时失效化。
+    /// <summary>改写定义名：rgce 引用被删表时失效化（名称本身原样保留）。
+    /// `_xlcn.LinkedTable_*` 名是纯元数据、无部件按字符串引用；Excel 另存时会自行追加 "1"，
+    /// 库不应改写源名（旧「去尾部 1」会截断合法表名后缀 Table1→Table，且多次另存逐次降级）。
     /// rgce 布局（真实样本标定）：`18 19` + ixti(u16) + body(10)；当 ixti 指向已失效的 XTI 条目时，
     /// 把 body 的 `00 xx 00 00 00` 改为失效标记 `10 FF FF FF FF`（与 Excel 产出逐字节一致）。</summary>
     private static byte[] RewriteDefinedName(byte[] data, HashSet<int> deletedXti)
     {
-        int o = 9;
-        int cch = (int)Biff12Records.ReadU32(data, o);
-        if (cch <= 0 || cch == -1) return data;
-        var name = Encoding.Unicode.GetString(data, o + 4, cch * 2);
         var work = data;
-        if (name.StartsWith("_xlcn.LinkedTable_", StringComparison.Ordinal) && name.EndsWith("1", StringComparison.Ordinal))
-        {
-            var newName = name.Substring(0, name.Length - 1);
-            using var b = new MemoryStream();
-            b.Write(data, 0, 9);
-            b.Write(BitConverter.GetBytes((uint)newName.Length), 0, 4);
-            var nb = Encoding.Unicode.GetBytes(newName);
-            b.Write(nb, 0, nb.Length);
-            b.Write(data, o + 4 + cch * 2, data.Length - (o + 4 + cch * 2));
-            work = b.ToArray();
-        }
-        int o2 = 9;
-        int cch2 = (int)Biff12Records.ReadU32(work, o2);
-        int nameEnd = o2 + 4 + (cch2 <= 0 || cch2 == -1 ? 0 : cch2 * 2);
+        int nameEnd = 9;
+        int cch = (int)Biff12Records.ReadU32(work, nameEnd);
+        if (cch <= 0 || cch == -1) return work;
+        nameEnd += 4 + cch * 2;
         if (nameEnd + 4 > work.Length) return work;
         int cce = (int)Biff12Records.ReadU32(work, nameEnd);
         int rgceOff = nameEnd + 4;
@@ -970,39 +958,6 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         }
         sb.Append("</Relationships>");
         return sb.ToString();
-    }
-
-    /// <summary>保真微调 connections.bin：`_xlcn.LinkedTable_*` 连接名去尾部冗余 "1"（与 workbook.bin 定义名同步）。
-    /// 0x0844 记录布局：flags(4) + cch(4) + name(UTF-16)。</summary>
-    private static byte[] ModifyConnectionsBin(byte[] data)
-    {
-        var recs = Biff12Records.ReadAll(data);
-        using var ms = new MemoryStream(data.Length);
-        foreach (var rec in recs)
-        {
-            if (rec.Rt == 0x0844 && rec.Data.Length >= 8)
-            {
-                int cch = (int)Biff12Records.ReadU32(rec.Data, 4);
-                if (cch > 0 && 8 + cch * 2 <= rec.Data.Length)
-                {
-                    var nm = Encoding.Unicode.GetString(rec.Data, 8, cch * 2);
-                    if (nm.StartsWith("_xlcn.LinkedTable_", StringComparison.Ordinal) && nm.EndsWith("1", StringComparison.Ordinal))
-                    {
-                        var newName = nm.Substring(0, nm.Length - 1);
-                        using var b = new MemoryStream();
-                        b.Write(rec.Data, 0, 4);
-                        b.Write(BitConverter.GetBytes((uint)newName.Length), 0, 4);
-                        var nb = Encoding.Unicode.GetBytes(newName);
-                        b.Write(nb, 0, nb.Length);
-                        b.Write(rec.Data, 8 + cch * 2, rec.Data.Length - (8 + cch * 2));
-                        WriteRecord(ms, rec.Rt, b.ToArray());
-                        continue;
-                    }
-                }
-            }
-            WriteRecord(ms, rec.Rt, rec.Data);
-        }
-        return ms.ToArray();
     }
 
     /// <summary>保真微调 pivotTableN.bin：把 BrtBeginPivotTable(0x0118) 的 cacheId(off28) 归位为其 rels

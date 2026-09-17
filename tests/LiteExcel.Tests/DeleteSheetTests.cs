@@ -526,4 +526,43 @@ public class DeleteSheetTests
             if (File.Exists(outPath)) File.Delete(outPath);
         }
     }
+
+    [Fact]
+    public void Delete_XlsbSurgical_PreservesLinkedTableNames()
+    {
+        // 回归：`_xlcn.LinkedTable_*` 名是纯元数据（无部件按字符串引用），库不应改写源名。
+        // 旧「去尾部 1」会把合法表名后缀截断（Table1→Table）且多次另存逐次降级，故改为原样保留。
+        var spec = new XlsbTestFile.WorkbookSpec();
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S0" });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S1" });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S2" });
+        spec.DataModelName = "_xlcn.LinkedTable_Table1"; // 尾部 1 是表名后缀，不是冗余
+        spec.ExtraParts["xl/connections.bin"] = XlsbTestFile.BuildConnectionsBin("_xlcn.LinkedTable_Table1");
+
+        var file = XlsbTestFile.Build(spec);
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+
+            byte[] Read(string name)
+            {
+                using var zip = System.IO.Compression.ZipFile.OpenRead(outPath);
+                using var s = zip.GetEntry(name)!.Open();
+                using var ms = new MemoryStream();
+                s.CopyTo(ms);
+                return ms.ToArray();
+            }
+
+            Assert.Equal(new[] { "_xlcn.LinkedTable_Table1" }, XlsbTestFile.ReadDefinedNames(Read("xl/workbook.bin")));
+            Assert.Equal(new[] { "_xlcn.LinkedTable_Table1" }, XlsbTestFile.ReadConnectionNames(Read("xl/connections.bin")));
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
 }

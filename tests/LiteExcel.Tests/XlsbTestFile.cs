@@ -303,6 +303,62 @@ internal static class XlsbTestFile
         return -1;
     }
 
+    /// <summary>构造最小 connections.bin：一条 BrtConnection(0x0844)。
+    /// 布局：flags(u32) + cch(u32) + name(UTF-16)，无尾部。</summary>
+    public static byte[] BuildConnectionsBin(string name)
+    {
+        using var ms = new MemoryStream();
+        using (var b = new MemoryStream())
+        {
+            WriteU32(b, 0);
+            WriteWideString(b, name);
+            WriteRecord(ms, 0x0844, b.ToArray());
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>读取 workbook.bin 中 BrtDefinedName(0x0027) 的名称（布局：flags(4)+pad(1)+itab(4)+cch(u32)+name）。</summary>
+    public static List<string> ReadDefinedNames(byte[] part)
+    {
+        var result = new List<string>();
+        int pos = 0;
+        while (pos < part.Length)
+        {
+            int rt = ReadVarInt(part, ref pos);
+            int cb = ReadVarInt(part, ref pos);
+            if (cb < 0 || pos + cb > part.Length) break;
+            if (rt == 0x0027 && cb >= 9)
+            {
+                int cch = (int)(part[pos + 9] | (part[pos + 10] << 8) | (part[pos + 11] << 16) | ((uint)part[pos + 12] << 24));
+                if (cch > 0 && 13 + cch * 2 <= cb)
+                    result.Add(Encoding.Unicode.GetString(part, pos + 13, cch * 2));
+            }
+            pos += cb;
+        }
+        return result;
+    }
+
+    /// <summary>读取 connections.bin 中 BrtConnection(0x0844) 的名称（布局：flags(4)+cch(u32)+name）。</summary>
+    public static List<string> ReadConnectionNames(byte[] part)
+    {
+        var result = new List<string>();
+        int pos = 0;
+        while (pos < part.Length)
+        {
+            int rt = ReadVarInt(part, ref pos);
+            int cb = ReadVarInt(part, ref pos);
+            if (cb < 0 || pos + cb > part.Length) break;
+            if (rt == 0x0844 && cb >= 8)
+            {
+                int cch = (int)(part[pos + 4] | (part[pos + 5] << 8) | (part[pos + 6] << 16) | ((uint)part[pos + 7] << 24));
+                if (cch > 0 && 8 + cch * 2 <= cb)
+                    result.Add(Encoding.Unicode.GetString(part, pos + 8, cch * 2));
+            }
+            pos += cb;
+        }
+        return result;
+    }
+
     private static void WriteU32(byte[] b, int o, uint v)
     {
         b[o] = (byte)v; b[o + 1] = (byte)(v >> 8); b[o + 2] = (byte)(v >> 16); b[o + 3] = (byte)(v >> 24);
