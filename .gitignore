@@ -11,6 +11,7 @@ files/
 *.xlsb
 !tests/LiteExcel.Tests/Fixtures/excel-authored.xlsb
 !tests/LiteExcel.Tests/Fixtures/excel-authored-date1904.xlsb
+!tests/LiteExcel.Tests/Fixtures/excel-authored-table.xlsb
 !tests/LiteExcel.Tests/Fixtures/protected.xlsb
 !tests/LiteExcel.Tests/Fixtures/EncryptedSamples/*.xlsx
 !tests/LiteExcel.Tests/Fixtures/EncryptedSamples/*.xlsm
@@ -40,7 +41,6 @@ Desktop.ini
 *.md
 !README.md
 !README.en.md
-!README.zh-CN.md
 !docs/CHANGELOG.md
 !docs/USAGE.en.md
 !docs/USAGE.zh-CN.md

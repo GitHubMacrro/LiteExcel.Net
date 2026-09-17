@@ -15,8 +15,12 @@ namespace LiteExcel.Internal.Biff;
 internal static class FormulaEncoder
 {
     /// <summary>尝试将 A1 公式文本编码为 RPN 字节。失败返回 null。</summary>
-    public static byte[]? TryEncode(string formula, bool biff12)
+    public static byte[]? TryEncode(string formula, bool biff12) => TryEncode(formula, biff12, out _);
+
+    /// <summary>编码公式并输出其中的单元格/区域引用数（条件格式 BrtCFRule 的展开长度需要）。</summary>
+    public static byte[]? TryEncode(string formula, bool biff12, out int refCount)
     {
+        refCount = 0;
         if (string.IsNullOrEmpty(formula)) return null;
         var f = formula.Trim();
         if (f.StartsWith("=")) f = f.Substring(1);
@@ -29,10 +33,41 @@ internal static class FormulaEncoder
         if (rpn is null || rpn.Count == 0) return null;
 
         var result = EncodeRpn(rpn, biff12);
+        if (result is not null)
+        {
+            foreach (var tok in rpn)
+                if (tok.Type == TokenType.Ref || tok.Type == TokenType.Area) refCount++;
+        }
         return result;
     }
 
-    // ── 词法分析 ──
+    /// <summary>
+    /// 条件格式（BrtCFRule）公式编码：单元格/区域引用存为相对 sqref 左上角锚点的偏移，
+    /// 且 Ptg 字节与单元格公式不同（Ref=0x4C, Area=0x2D, Func=0x41, FuncVar=0x42）。
+    /// row 偏移为 20 位（低 20 位有效），col 偏移为 16 位有符号。
+    /// </summary>
+    public static byte[]? TryEncodeCf(string formula, int anchorRow, int anchorCol, out int refCount)
+    {
+        refCount = 0;
+        if (string.IsNullOrEmpty(formula)) return null;
+        var f = formula.Trim();
+        if (f.StartsWith("=")) f = f.Substring(1);
+        if (string.IsNullOrEmpty(f)) return null;
+
+        var tokens = Tokenize(f);
+        if (tokens is null || tokens.Count == 0) return null;
+
+        var rpn = InfixToRpn(tokens);
+        if (rpn is null || rpn.Count == 0) return null;
+
+        var result = EncodeRpnCf(rpn, anchorRow, anchorCol);
+        if (result is not null)
+        {
+            foreach (var tok in rpn)
+                if (tok.Type == TokenType.Ref || tok.Type == TokenType.Area) refCount++;
+        }
+        return result;
+    }
 
     private readonly struct Token
     {
@@ -114,11 +149,11 @@ internal static class FormulaEncoder
                 string op = c.ToString();
                 if (i + 1 < s.Length)
                 {
-                    if (c == '<' && s[i + 1] == '>') { op = "<>"; i += 2; continue; }
-                    if ((c == '<' || c == '>') && s[i + 1] == '=') { op = c + "="; i += 2; continue; }
+                    if (c == '<' && s[i + 1] == '>') op = "<>";
+                    else if ((c == '<' || c == '>') && s[i + 1] == '=') op = c + "=";
                 }
                 tokens.Add(new Token(TokenType.Op, op));
-                i++;
+                i += op.Length;
                 continue;
             }
 
@@ -194,8 +229,6 @@ internal static class FormulaEncoder
         while (i < s.Length && char.IsDigit(s[i])) i++;
         return i == s.Length;
     }
-
-    // ── Shunting Yard ──
 
     private static List<Token>? InfixToRpn(List<Token> tokens)
     {
@@ -278,8 +311,6 @@ internal static class FormulaEncoder
         return output;
     }
 
-    // ── RPN → Ptg 编码 ──
-
     private static byte[]? EncodeRpn(List<Token> rpn, bool biff12)
     {
         var ms = new MemoryStream();
@@ -346,6 +377,93 @@ internal static class FormulaEncoder
         }
 
         return ms.ToArray();
+    }
+
+    /// <summary>条件格式公式的 RPN → Ptg（引用为相对锚点偏移，Ptg 字节见 TryEncodeCf）。</summary>
+    private static byte[]? EncodeRpnCf(List<Token> rpn, int anchorRow, int anchorCol)
+    {
+        var ms = new MemoryStream();
+        foreach (var tok in rpn)
+        {
+            switch (tok.Type)
+            {
+                case TokenType.Number:
+                    if (EncodeNumber(ms, tok.Num) is false) return null;
+                    break;
+                case TokenType.String:
+                    if (EncodeString(ms, tok.Text, biff12: true) is false) return null;
+                    break;
+                case TokenType.Bool:
+                    ms.WriteByte(0x1D);
+                    ms.WriteByte((byte)tok.Num);
+                    break;
+                case TokenType.Ref:
+                    if (EncodeRefCf(ms, tok.Text, anchorRow, anchorCol) is false) return null;
+                    break;
+                case TokenType.Area:
+                    if (EncodeAreaCf(ms, tok.Text, anchorRow, anchorCol) is false) return null;
+                    break;
+                case TokenType.Op:
+                    byte opPtg = tok.Text switch
+                    {
+                        "+" => 0x03, "-" => 0x04, "*" => 0x05, "/" => 0x06,
+                        "^" => 0x07, "&" => 0x08, "=" => 0x0B, "<>" => 0x0E,
+                        "<" => 0x09, ">" => 0x0D, "<=" => 0x0A, ">=" => 0x0C,
+                        "u-" => 0x13, "u+" => 0x12,
+                        _ => (byte)0,
+                    };
+                    if (opPtg == 0) return null;
+                    ms.WriteByte(opPtg);
+                    break;
+                case TokenType.Func:
+                    var iftab = FormulaFtab.LookupName(tok.Text);
+                    if (iftab < 0) return null;
+                    int argc = (int)tok.Num;
+                    if (FormulaFtab.IsVarArg(iftab))
+                    {
+                        ms.WriteByte(0x42); // CF 变参函数
+                        ms.WriteByte((byte)argc);
+                        WriteU16(ms, (ushort)iftab);
+                    }
+                    else
+                    {
+                        ms.WriteByte(0x41); // CF 定参函数
+                        WriteU16(ms, (ushort)iftab);
+                    }
+                    break;
+                default:
+                    return null;
+            }
+        }
+        return ms.ToArray();
+    }
+
+    private static bool EncodeRefCf(MemoryStream ms, string refStr, int anchorRow, int anchorCol)
+    {
+        var (row, col, _, _) = ParseCellRef(refStr);
+        if (row < 0 || col < 0) return false;
+        ms.WriteByte(0x4C);
+        // row 偏移：低 20 位有效
+        uint rowOff = (uint)(row - anchorRow) & 0xFFFFF;
+        WriteU32(ms, rowOff);
+        // col 偏移：低 14 位，高 2 位为 rowRel/colRel 标志（条件格式恒相对 → 0xC000）
+        WriteU16(ms, (ushort)(((col - anchorCol) & 0x3FFF) | 0xC000));
+        return true;
+    }
+
+    private static bool EncodeAreaCf(MemoryStream ms, string areaStr, int anchorRow, int anchorCol)
+    {
+        int colon = areaStr.IndexOf(':');
+        if (colon < 0) return false;
+        var (r1, c1, _, _) = ParseCellRef(areaStr.Substring(0, colon));
+        var (r2, c2, _, _) = ParseCellRef(areaStr.Substring(colon + 1));
+        if (r1 < 0 || c1 < 0 || r2 < 0 || c2 < 0) return false;
+        ms.WriteByte(0x2D);
+        WriteU32(ms, (uint)(r1 - anchorRow) & 0xFFFFF);
+        WriteU32(ms, (uint)(r2 - anchorRow) & 0xFFFFF);
+        WriteU16(ms, (ushort)(((c1 - anchorCol) & 0x3FFF) | 0xC000));
+        WriteU16(ms, (ushort)(((c2 - anchorCol) & 0x3FFF) | 0xC000));
+        return true;
     }
 
     private static bool EncodeNumber(MemoryStream ms, double num)

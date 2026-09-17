@@ -29,10 +29,13 @@ public static partial class XlsxWriter
 
         public int InCellCount { get; private set; }
 
+        /// <summary>目标容器为 xlsb（工作表关系文件为 sheetN.bin.rels 而非 sheetN.xml.rels） </summary>
+        public bool Binary { get; private set; }
+
         /// <summary>从 sheets 收集图片并分配全局 media 序号（跳过保留部件占用的序号，避免 zip 重名） </summary>
-        public static ImagePlan Create(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved = null)
+        public static ImagePlan Create(IReadOnlyList<SheetData> sheets, OoxmlPreservedParts? preserved = null, bool binary = false)
         {
-            var plan = new ImagePlan();
+            var plan = new ImagePlan { Binary = binary };
             int media = 0;
 
             // 已保留的 media/drawing 部件：media 序号与 drawing 序号必须避开
@@ -78,6 +81,9 @@ public static partial class XlsxWriter
                         if (img is null || img.Data is null || img.Data.Length == 0) continue;
                         // 读取回填的图片已包含在保留的 drawing 部件中，避免重复写出。
                         if (img.FromPreservedDrawing) continue;
+                        // xlsb 目标不支持 InCell（richData 体系需 BIFF12 metadata.bin + 单元格 vm），
+                        // 由写入器显式降级上报，不纳入规划（避免产生孤儿 media）。
+                        if (binary && img.Placement == ImagePlacement.InCell) continue;
                         img.MediaNumber = NextMedia();
                         plan.All.Add(img);
                         if (img.Placement == ImagePlacement.InCell)
@@ -233,7 +239,7 @@ public static partial class XlsxWriter
             string entry = $"xl/drawings/drawing{DrawingNumberFor(sheetIndex)}.xml";
             string relId = "rIdD1";
             if (preserved is not null
-                && preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetIndex + 1}.xml.rels", out var relsXml))
+                && preserved.Rels.TryGetValue(SheetRelsPath(sheetIndex + 1), out var relsXml))
             {
                 foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(relsXml, "<Relationship[^>]*/>"))
                 {
@@ -258,6 +264,10 @@ public static partial class XlsxWriter
             }
             return (entry, relId);
         }
+
+        /// <summary>工作表关系文件路径：xlsx = sheetN.xml.rels，xlsb = sheetN.bin.rels </summary>
+        internal string SheetRelsPath(int sheetNumber) =>
+            $"xl/worksheets/_rels/sheet{sheetNumber}.{(Binary ? "bin" : "xml")}.rels";
 
         /// <summary>InCell richData 部件（含 metadata.xml）。entryName → XML </summary>
         public List<(string Entry, string Xml)> InCellEntries()

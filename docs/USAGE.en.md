@@ -1247,12 +1247,26 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("Temp")).ToList())
 
 #### Fidelity
 
-Saving after deleting a worksheet uses a **surgical verbatim write-back**: only the deleted sheet and its references are removed; all other worksheets, pivot tables, tables, slicers, connections, query tables, and macro code are preserved as-is.
+Saving after deleting a worksheet is equivalent to Excel's own "delete sheet then save": the deleted sheet and its references are removed, while all other worksheets, pivot tables, pivot caches, tables, connections, the data model, VBA macros, and tab colors are **preserved in full** (xlsb likewise). See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for the mechanism.
 
 - **xlsx / xlsm**: all remaining advanced parts (pivot tables, charts, slicers, ActiveX, macros) are fully preserved.
-- **xlsb**: deleting an XLSB worksheet and saving as xlsb preserves pivot tables, pivot caches, tables, slicers, connections, the data model, and VBA macros; the sheet list, named-range scopes, external sheet references, and the active-sheet index are adjusted accordingly.
+- **xlsb**: deleting an XLSB worksheet and saving as xlsb preserves pivot tables, pivot caches, tables, connections, the data model, and VBA macros.
 - **xlsb → xlsm**: binary advanced parts such as pivot tables are preserved (tables are rebuilt).
-- If the deleted sheet is the data source of a pivot table/slicer or is referenced by a pivot cache, surgical deletion is unsafe; by default it falls back to rebuild (advanced parts may be lost) and is recorded in `SaveDegradations`. Set `workbook.AllowFeatureLossOnSave = false` to throw instead.
+
+## 7.7 Sheet Visibility and Tab Color
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+wb.Worksheets["Detail"].Visible = SheetVisibility.Hidden;      // hidden (user can unhide in Excel)
+wb.Worksheets["Params"].Visible = SheetVisibility.VeryHidden;  // very hidden (only VBA/editor)
+wb.Worksheets["Summary"].TabColor = "FF0000";                  // tab color #RRGGBB / RRGGBB
+wb.SaveAs("out.xlsx");
+```
+
+- `Visible`: `Visible` (default) / `Hidden` / `VeryHidden`. **Read/write for xlsx / xlsm / xlsb / xls**.
+- `TabColor`: read/write for xlsx / xlsm; **xlsb / xls do not support tab color** — reported via `DegradationCapability.SheetVisibility` and dropped on write.
+- Guard: setting the **last visible sheet** to hidden throws `LiteExcelException` (Excel requires at least one visible sheet).
+- Changing visibility/tab color marks the worksheet as modified, which correctly disables the xlsb verbatim save path so the change is actually persisted.
 
 ---
 
@@ -1546,7 +1560,7 @@ ws.Comments = new Dictionary<string, string>
 
 Output: (this example has no console output)
 
-> ⚠️ Comments are supported only for xlsx / xlsm; when writing to xls / xlsb / csv they are dropped via the degradation mechanism (see Chapter 22). Comment write-back relies on the OOXML VML legacyDrawing, so verify with a real Excel open.
+> ⚠️ Comments are supported for xlsx / xlsm / xls / xlsb; csv does not support comments and they are dropped via the degradation mechanism (see Chapter 22). Comment write-back relies on the OOXML VML legacyDrawing (xlsx/xlsm), a separate `commentsN.bin` part + VML (xlsb), or the BIFF8 record group (xls), so verify with a real Excel open.
 
 ## 10.2 Reading Back Comments
 
@@ -1747,7 +1761,7 @@ Freeze panes are supported for freezing any rows / columns in all three formats:
 
 ---
 
-Images are supported only in xlsx / xlsm. Use `Worksheet.AddImage` to add an image and `Worksheet.Images` to read them back.
+Images are supported in xlsx / xlsm, plus **floating images in xlsb**. Use `Worksheet.AddImage` to add an image and `Worksheet.Images` to read them back. Writing to xls / csv drops images, and writing InCell images to xlsb drops them, both reported via `OnDegradation` (see Chapter 22).
 
 ## 13.1 Floating images
 
@@ -1920,7 +1934,7 @@ See the screenshot in [Chapter 12](#12-freeze-panes).
 
 ## 14.1 Writing Data Validation
 
-`Worksheet.Validations` is a `List<DataValidation>`, configured rule by rule via an object initializer; data validation is written only for xlsx / xlsm (other formats are discarded via degradation reporting):
+`Worksheet.Validations` is a `List<DataValidation>`, configured rule by rule via an object initializer; data validation is written for xlsx / xlsm / xlsb (other formats are discarded via degradation reporting):
 
 ```csharp
 var ws = Excel.Create().Worksheets["Sheet1"];
@@ -2011,6 +2025,11 @@ See the screenshot in [Chapter 10](#10-comments).
 ---
 
 Conditional formatting is read/written in xlsx / xlsm. `Worksheet.ConditionalFormats` is a `List<ConditionalFormat>`.
+
+> ⚠️ **Format support**
+> - **xlsx / xlsm**: all types read/written.
+> - **xlsb**: rebuild write supports **all 18 OOXML rule types** (cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / containsText / beginsWith / endsWith / notContainsText / uniqueValues / duplicateValues / containsBlanks / notContainsBlanks / containsErrors / notContainsErrors / timePeriod / textLength), including `Style` dxf fill / font / border; no type is dropped.
+> - **xls / csv**: conditional formatting is unsupported and fully dropped on write.
 
 ## 15.1 Cell Value Comparison (cellIs)
 
@@ -2248,7 +2267,7 @@ Other `ConditionalFormat` members: `Priority` (priority, auto-numbered by regist
 
 ---
 
-Excel tables are read/written in xlsx / xlsm. `Worksheet.AddTable` creates them; `Worksheet.Tables` reads them back.
+Excel tables are read/written in xlsx / xlsm / xlsb. `Worksheet.AddTable` creates them; `Worksheet.Tables` reads them back.
 
 ## 16.1 Creating an Excel Table
 
@@ -2388,7 +2407,7 @@ Products A1:B3 样式=TableStyleMedium2
 
 ---
 
-> ⚠️ Named-range support: **xlsx / xlsm** full read-back (from `definedNames` in `workbook.xml`); **xls** supports simple cell/range references (PtgRef3d / PtgArea3d), names with complex formulas are skipped; **xlsb is not yet supported**. When writing to a format that does not support this capability, named ranges are **silently dropped**, reported via `OnDegradation`.
+> ⚠️ Named-range support: **xlsx / xlsm** full read-back (from `definedNames` in `workbook.xml`); **xlsb** read-back is supported (`BrtDefinedName` + `BrtExternSheet`, simple cell/range references only, complex expressions skipped); **xls** supports simple cell/range references (PtgRef3d / PtgArea3d), names with complex formulas are skipped. xlsb / xls do not write named ranges. When writing to a format that does not support this capability, named ranges are **silently dropped**, reported via `OnDegradation`.
 
 ## 17.1 Reading Named Ranges
 
@@ -2702,7 +2721,7 @@ Chapters 20–23: multi-format behavior and degradation, streaming and append, A
 | 20.2 | [xls / xlsb read/write degradation](#202-xls--xlsb-readwrite-degradation) |
 | 20.3 | [CSV Behavior](#203-csv-behavior) |
 | 20.4 | [Encrypted File Format Restrictions](#204-encrypted-file-format-restrictions) |
-| 20.5 | [Fidelity Round-Trip](#205-fidelity-round-trip) |
+| 20.5 | [Open-Save Fidelity](#205-open-save-fidelity) |
 
 ---
 
@@ -2719,13 +2738,15 @@ The table below lists the support status of each capability across formats. Capa
 | Auto filter | ☑️ | ☑️ | range read/write | ❌ | ❌ |
 | Row height / Column width | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Comments | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Data validation | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Data validation | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Hyperlinks | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Freeze panes | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Images (Floating / InCell) | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Conditional formatting | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Tables | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Named ranges | ☑️ | ☑️ | ❌ | read only | ❌ |
+| Images (Floating / InCell) | ☑️ | ☑️ | floating write | ❌ | ❌ |
+| Conditional formatting | ☑️ | ☑️ | all types written | ❌ | ❌ |
+| Tables | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Named ranges | ☑️ | ☑️ | read only | read only | ❌ |
+| Sheet visibility (hidden / very hidden) | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Sheet tab color | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Document properties | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Open / Modify password | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Insert / Delete rows & columns | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
@@ -2763,11 +2784,15 @@ Output:
 
 ## 20.2 xls / xlsb read/write degradation
 
-Writing to xls / xlsb: styles degrade to `NumberFormat` only (to avoid BIFF hand-writing risks); comments / data validation / conditional formatting / images / tables / named ranges are dropped; formula text is not kept and is written as the cached value. These degradations are reported via `OnDegradation` (see Chapter 22).
+Writing to xls / xlsb depends on the format and the code path:
+
+- **xlsb rebuild write** (new workbook / edited cells): styles degrade to `NumberFormat` only; comments / data validation / tables / floating images are written; conditional formatting supports all 18 OOXML rule types (cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / text / blanks / errors / uniqueValues / duplicateValues / timePeriod / textLength); named ranges are read-back only (not written); **InCell images** are dropped; formula text is not kept and is written as the cached value. Dropped items are reported via `OnDegradation` (see Chapter 22).
+- **xlsb open-save / sheet delete** (verbatim / surgical): cells and all preserved parts pass through untouched — conditional formatting / images / pivot tables / charts / slicers are **fully preserved**, with no degradation reported.
+- **xls write**: styles degrade to `NumberFormat` only; comments are written; data validation / tables / conditional formatting / images / named ranges are dropped; formula text is not kept and is written as the cached value. These degradations are reported via `OnDegradation` (see Chapter 22).
 
 > **xls sheet size limit**: `xls` (BIFF8) supports at most 256 columns / 65536 rows. Data beyond the limit (including column-width declarations that extend far past the data range) is truncated on write and reported via `DegradationCapability.SheetSize`.
 
-Reading xls / xlsb: only `NumberFormat` is retained from styles; advanced capabilities such as comments / data validation / conditional formatting / images / tables are not read back; parseable formulas are restored as A1 text into `Cell.Formula` (array formulas / 3D references / names fall back to the cached value only). **These degradations are explicitly reported via `OnDegradation` when writing** (see Chapter 22).
+Reading xls / xlsb: only `NumberFormat` is retained from styles; xlsb reads back comments / data validation / tables / named ranges, and xls reads back comments; conditional formatting / images are not read back; parseable formulas are restored as A1 text into `Cell.Formula` (array formulas / 3D references / names fall back to the cached value only).
 
 Reading an xls file (styles retain only the number format):
 
@@ -2867,9 +2892,11 @@ Output:
 Cannot write Csv: Csv format does not support file-level passwords (open password/modify password). Please use xlsx/xlsm/xlsb to save, or remove the password first.
 ```
 
-## 20.5 Fidelity Round-Trip
+## 20.5 Open-Save Fidelity
 
-When opening xlsx / xlsm / xlsb, unmapped OOXML parts (macros / themes / drawings / charts / pivot tables, etc.) are captured and transparently passed through when saving, avoiding silent deletion. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros / charts.
+When you open an existing file and save it, everything you did not change is **preserved as-is** — nothing is lost just because the library does not understand it. This covers macros, charts, pivot tables, pivot caches, tables, slicers, external connections, the data model, custom XML, sheet tab colors, styles, and other advanced parts. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros.
+
+Deleting a worksheet and saving goes through the same fidelity logic: the deleted sheet and its references are removed, everything else is preserved, and the result is equivalent to Excel's own "delete sheet then save" (xlsb likewise keeps pivot tables / connections / data model / VBA / tab colors in full).
 
 Fidelity is more than keeping part bytes: the elements that reference them must survive too, otherwise a part is orphaned and Excel treats it as absent. The references below are written back verbatim on save, with relationship ids remapped whenever they get renumbered:
 
@@ -3269,6 +3296,9 @@ PivotTables
 RichData
 ConditionalFormatting
 Tables
+Macros
+SheetSize
+SheetVisibility
 ```
 
 ## 22.2 Degradation Info `DegradationInfo`

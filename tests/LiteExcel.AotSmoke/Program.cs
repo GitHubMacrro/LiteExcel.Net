@@ -80,6 +80,72 @@ Check("7 Create+ImportData Name", got7[0].Name == "丙", got7[0].Name);
 var got7b = Excel.Read<Plain>(p7, "表B");
 Check("7 Add<T> 行数", got7b.Count == 1 && got7b[0].Name == "乙", $"{got7b.Count}/{got7b[0].Name}");
 
+// 案例 8：工作表可见性 / 标签颜色（2.4.77 新增公开 API）
+var p8 = Path.Combine(dir, "case8.xlsx");
+var wb8 = Excel.Create();
+wb8.Worksheets[0].SetValue("A1", 1);
+wb8.Worksheets.Add("隐藏表");
+wb8.Worksheets[1].Visible = SheetVisibility.Hidden;
+wb8.Worksheets[0].TabColor = "#FF0000";
+wb8.SaveAs(p8);
+var rb8 = Excel.Open(p8);
+Check("8 可见性写回", rb8.Worksheets[1].Visible == SheetVisibility.Hidden, $"{rb8.Worksheets[1].Visible}");
+Check("8 标签颜色写回", rb8.Worksheets[0].TabColor == "FF0000", rb8.Worksheets[0].TabColor ?? "(null)");
+
+// 案例 9：条件格式（含 iconSet.Reverse / ColorScale / DataBar）——验证相关公开 API 的 AOT 安全性
+var p9 = Path.Combine(dir, "case9.xlsb");
+var wb9 = Excel.Create(ExcelFormat.Xlsb);
+var ws9 = wb9.Worksheets[0];
+ws9.SetValue("A1", 5);
+ws9.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.CellIs, Sqref = "A1:A10",
+    Operator = ConditionalOperator.GreaterThan, Formula = "3",
+    Style = new CellStyle { FillColor = "#FF0000" },
+});
+ws9.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.IconSet, Sqref = "B1:B10",
+    IconSet = new IconSetInfo { Style = IconSetStyle.ThreeArrows, Reverse = true },
+});
+ws9.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.ColorScale, Sqref = "C1:C10",
+    ColorScale = new ColorScaleInfo { MidColor = "#FFFF00" },
+});
+ws9.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.DataBar, Sqref = "D1:D10",
+    DataBar = new DataBarInfo { ShowValue = false },
+});
+wb9.SaveAs(p9);
+Check("9 xlsb 条件格式写出", File.Exists(p9) && new FileInfo(p9).Length > 0);
+Check("9 无降级", wb9.SaveDegradations.All(d => d.Capability != DegradationCapability.ConditionalFormatting));
+
+// 案例 10：条件格式（xlsx 读写回）——验证 ConditionalFormat/ColorScaleInfo/DataBarInfo/IconSetInfo 公开 API 的 AOT 安全性
+var p10 = Path.Combine(dir, "case10.xlsx");
+var wb10 = Excel.Create(ExcelFormat.Xlsx);
+var ws10 = wb10.Worksheets[0];
+ws10.SetValue("A1", 5);
+ws10.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.IconSet, Sqref = "B1:B10",
+    IconSet = new IconSetInfo { Style = IconSetStyle.ThreeArrows, Reverse = true },
+});
+ws10.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.ColorScale, Sqref = "C1:C10",
+    ColorScale = new ColorScaleInfo { LowColor = "#FF0000", MidColor = "#FFFF00", HighColor = "#00FF00" },
+});
+ws10.ConditionalFormats.Add(new ConditionalFormat
+{
+    Type = ConditionalFormatType.DataBar, Sqref = "D1:D10",
+    DataBar = new DataBarInfo { Color = "#638EC6", ShowValue = false },
+});
+wb10.SaveAs(p10);
+var rb10 = Excel.Open(p10);
+Check("10 xlsx 条件格式写回", rb10.Worksheets[0].ConditionalFormats.Count == 3, $"{rb10.Worksheets[0].ConditionalFormats.Count}");
+
 Console.WriteLine(failed == 0 ? "ALL PASSED" : $"{failed} FAILED");
 return failed == 0 ? 0 : 1;
 

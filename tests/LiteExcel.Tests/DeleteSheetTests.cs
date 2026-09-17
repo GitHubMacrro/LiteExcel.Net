@@ -288,4 +288,125 @@ public class DeleteSheetTests
             if (File.Exists(outPath)) File.Delete(outPath);
         }
     }
+
+    [Fact]
+    public void Delete_XlsbDataModel_ReferencedSheet_PreservesDataModel()
+    {
+        // 保真：含数据模型（xl/model/item.data + _xlcn. 定义名）的 xlsb，删除被 XTI 引用的表时，
+        // 手术式删除复刻 Excel 的全部同步改动（重编号 + connections/定义名同步 + rgce 失效化），
+        // 输出保留数据模型/高级部件且可正常打开（不崩溃）。
+        var spec = new XlsbTestFile.WorkbookSpec
+        {
+            HasDataModelPart = true,
+            HasExternSheet = true,
+            DataModelName = "_xlcn.LinkedTable_Table1",
+        };
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S0" });
+        spec.Sheets[0].Rows.Add(new XlsbTestFile.RowSpec { Cells = { new XlsbTestFile.CellSpec { Col = 0, Text = "keep0" } } });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S1" });
+        spec.Sheets[1].Rows.Add(new XlsbTestFile.RowSpec { Cells = { new XlsbTestFile.CellSpec { Col = 0, Text = "drop" } } });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S2" });
+        spec.Sheets[2].Rows.Add(new XlsbTestFile.RowSpec { Cells = { new XlsbTestFile.CellSpec { Col = 0, Text = "keep2" } } });
+
+        var file = XlsbTestFile.Build(spec);
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            Assert.Equal(3, opened.Worksheets.Count);
+            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            Assert.Equal(2, opened.Worksheets.Count);
+            opened.AllowFeatureLossOnSave = true;
+
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+
+            // 数据模型部件必须保留（保真）
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(outPath))
+                Assert.NotNull(zip.GetEntry("xl/model/item.data"));
+
+            // 重新打开：表数据保留，被删表消失
+            var reopened = Excel.Open(outPath);
+            Assert.Equal(2, reopened.Worksheets.Count);
+            Assert.Equal("S0", reopened.Worksheets[0].Name);
+            Assert.Equal("S2", reopened.Worksheets[1].Name);
+            Assert.Equal("keep0", reopened.Worksheets[0].Cell("A1").GetString());
+            Assert.Equal("keep2", reopened.Worksheets[1].Cell("A1").GetString());
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
+
+    [Fact]
+    public void Delete_XlsbDataModel_UnreferencedSheet_Succeeds()
+    {
+        // 反例：删除「未被 XTI / 数据模型引用」的表应正常成功（保真手术式），证明守卫精确不误伤。
+        var spec = new XlsbTestFile.WorkbookSpec
+        {
+            HasDataModelPart = true,
+            HasExternSheet = true,
+            DataModelName = "_xlcn.LinkedTable_Table1",
+        };
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S0" });
+        spec.Sheets[0].Rows.Add(new XlsbTestFile.RowSpec { Cells = { new XlsbTestFile.CellSpec { Col = 0, Text = "keep0" } } });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S1" });
+        spec.Sheets[1].Rows.Add(new XlsbTestFile.RowSpec { Cells = { new XlsbTestFile.CellSpec { Col = 0, Text = "drop" } } });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S2" });
+        spec.Sheets[2].Rows.Add(new XlsbTestFile.RowSpec { Cells = { new XlsbTestFile.CellSpec { Col = 0, Text = "keep2" } } });
+
+        var file = XlsbTestFile.Build(spec);
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            // 手工破坏 XTI 使「S1」不再被任何 XTI 条目引用（改为引用 S0/S2）
+            XlsbTestFile.RetargetExternSheet(file, deletedIndex: 1);
+            var opened = Excel.Open(file);
+            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            opened.AllowFeatureLossOnSave = true;
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+            Assert.True(File.Exists(outPath));
+            var reopened = Excel.Open(outPath);
+            Assert.Equal(2, reopened.Worksheets.Count);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
+
+    [Fact]
+    public void Delete_XlsbDataModel_StrictMode_Succeeds()
+    {
+        // 保真手术式删除现可在严格模式（AllowFeatureLossOnSave=false）下成功——不丢数据模型/高级部件，无需降级放行。
+        var spec = new XlsbTestFile.WorkbookSpec
+        {
+            HasDataModelPart = true,
+            HasExternSheet = true,
+            DataModelName = "_xlcn.LinkedTable_Table1",
+        };
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S0" });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S1" });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S2" });
+
+        var file = XlsbTestFile.Build(spec);
+        try
+        {
+            var opened = Excel.Open(file);
+            opened.AllowFeatureLossOnSave = false;
+            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            var outPath = GetTempFile(".xlsb");
+            try
+            {
+                opened.SaveAs(outPath, ExcelFormat.Xlsb);
+                Assert.True(File.Exists(outPath));
+                using var zip = System.IO.Compression.ZipFile.OpenRead(outPath);
+                Assert.NotNull(zip.GetEntry("xl/model/item.data"));
+            }
+            finally { if (File.Exists(outPath)) File.Delete(outPath); }
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

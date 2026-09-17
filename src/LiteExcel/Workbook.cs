@@ -131,8 +131,6 @@ public sealed class Workbook
         return wb;
     }
 
-    // ── 保存 ──
-
     /// <summary>保存到当前目标路径。若当前无路径（新建），抛出 <see cref="LiteExcelException"/> </summary>
     public void Save()
     {
@@ -203,11 +201,9 @@ public sealed class Workbook
 
     private void SaveCore(string path, ExcelFormat format)
     {
-        // 在创建目标文件前完成格式能力校验。
+        // 在创建目标文件前完成全部格式能力校验。
         ThrowIfMacroNotSupported(format);
-        // 文件级密码仅支持 xlsx/xlsm/xlsb；csv/xls 不支持加密写出
         ThrowIfPasswordNotSupported(format);
-        // 在创建目标文件前阻止无法保真的 XLS 透视表保存。
         ThrowIfPivotTablesNotPreservable(format);
         ThrowIfAdvancedXlsbPartsNotPreservable(format);
 
@@ -217,11 +213,8 @@ public sealed class Workbook
 
     private void SaveCore(Stream stream, ExcelFormat format)
     {
-        // 流写出路径同样执行格式能力校验。
         ThrowIfMacroNotSupported(format);
-        // 文件级密码仅支持 xlsx/xlsm/xlsb；csv/xls 不支持加密写出
         ThrowIfPasswordNotSupported(format);
-        // 阻止无法保真的 BIFF8 透视表保存。
         ThrowIfPivotTablesNotPreservable(format);
         ThrowIfAdvancedXlsbPartsNotPreservable(format);
         WriteTo(stream, format);
@@ -230,7 +223,6 @@ public sealed class Workbook
     /// <summary>执行实际写出的 switch 分发。守卫校验已在调用方完成，避免 path→stream 双重执行导致降级重复上报。</summary>
     private void WriteTo(Stream stream, ExcelFormat format)
     {
-        // 包装回调：writer 级降级也累积进 SaveDegradations，同时透传外部回调。
         void OnDeg(DegradationInfo info)
         {
             _saveDegradations.Add(info);
@@ -246,7 +238,6 @@ public sealed class Workbook
                 bool structureUnchanged = StructureUnchanged(sheets);
                 bool verbatimX = CanVerbatimXlsx(sheets);
                 bool surgicalX = CanSurgicalXlsx(sheets);
-                // 目标为无宏 xlsx 且源含宏 → 剥离宏（宏已由 ThrowIfMacroNotSupported 放行并上报）
                 bool dropMacros = format == ExcelFormat.Xlsx && VbaProjectBytes is not null;
                 var openPwd = Security.GetOpenPassword();
                 var (fsHash, fsSalt, fsSpin, fsRo) = BuildFileSharingParams();
@@ -374,7 +365,7 @@ public sealed class Workbook
         var sheets = BuildSheetDataList();
         if (CanVerbatimXlsb(sheets))
             return;
-        // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留。
+        // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留（含数据模型/透视/连接等全部高级部件）。
         if (CanSurgicalXlsb(sheets))
             return;
         bool anyAdvancedModified = AdvancedXlsbSheetIndexes.Count > 0
@@ -383,7 +374,7 @@ public sealed class Workbook
             && (Worksheets.Count != _openedSheetNames.Count
                 || !Worksheets.Select((w, i) => w.Name).SequenceEqual(_openedSheetNames));
         if (!anyAdvancedModified && !structureChanged)
-            return; // 实际上 CanVerbatimXlsb 已判 false 但又不涉及结构/高级部件改动，允许保存
+            return;
         if (AllowFeatureLossOnSave)
         {
             ReportDegradation(new DegradationInfo
@@ -594,21 +585,15 @@ public sealed class Workbook
         return false;
     }
 
-    // ── 集合回调 ──
-
     internal void OnWorksheetAdded(Worksheet ws)
     {
-        // 预留：工作簿级联动（如记录 Modified）
         Properties.Modified = DateTime.Now;
     }
 
     internal void OnWorksheetRemoved(Worksheet ws, int removedIndex)
     {
         Properties.Modified = DateTime.Now;
-        // 保留 _openedSheetNames 原状：verbatim 保真通道用「表数对比 + 角色匹配」检测结构变化，
-        // 删除表后 count 不再一致，自然不满足 verbatim 条件，走重建路径。
-        // 删除命名区域：localSheetId 指向被删表的命名区域自动失效，避免写出后 Excel 报 #REF。
-        // 同时处理局部索引：删除表前的 localSheetId > removedIndex 的要减一。
+        // 删除命名区域：localSheetId 指向被删表的自动失效；删除表前索引大于 removedIndex 的减一。
         Names.RemoveAll(n => n.IsLocalSheet && n.LocalSheetId == removedIndex);
         foreach (var n in Names)
         {
@@ -616,9 +601,7 @@ public sealed class Workbook
                 n.LocalSheetId--;
         }
 
-        // 同步清理 preserved 原始 definedNames XML：
-        // 保留部件 XML 中的命名区域仍引用被删表（localSheetId 是 0-based 序号），
-        // 若不同步清理 → 写出后 Excel 提示「已删除的功能：命名区域」（文件修复）。
+        // 同步清理 preserved 原始 definedNames XML，避免写出后 Excel 报「已删除的功能：命名区域」。
         if (PreservedParts?.DefinedNamesXml is { Length: > 0 })
             PreservedParts.DefinedNamesXml = CleanDefinedNamesXmlOnDelete(PreservedParts.DefinedNamesXml, removedIndex);
     }

@@ -99,8 +99,6 @@ internal sealed class CfbFile
         return ReadStreamBytesFromChain(_data, _sectorSize, _fat, root.StartSector, root.StreamSize);
     }
 
-    // ── 基础读取 ──
-
     private static bool IsCfb(byte[] data)
     {
         for (int i = 0; i < 8; i++)

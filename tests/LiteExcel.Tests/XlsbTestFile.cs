@@ -82,6 +82,15 @@ internal static class XlsbTestFile
         public Dictionary<int, string> Formats { get; } = new();
         public List<int> CellXfs { get; } = new() { 0 }; // 索引 0 = 默认样式
         public bool Date1904;
+
+        /// <summary>是否写出 xl/model/item.data（Power Pivot / Power Query 数据模型标志部件）。</summary>
+        public bool HasDataModelPart;
+
+        /// <summary>非 null 时写出该名称的全局 BrtDefinedName（用于模拟数据模型定义名，如 _xlcn./_xlfn.）。</summary>
+        public string? DataModelName;
+
+        /// <summary>是否写出 BrtExternSheet（每个表一条 XTI 条目，itab=i）。</summary>
+        public bool HasExternSheet;
     }
 
     public static string Build(WorkbookSpec spec)
@@ -95,8 +104,43 @@ internal static class XlsbTestFile
                 WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheet(spec, spec.Sheets[i]));
             WriteEntry(zip, "xl/sharedStrings.bin", BuildSharedStrings(spec.SharedStrings));
             WriteEntry(zip, "xl/styles.bin", BuildStyles(spec));
+
+            WriteEntry(zip, "[Content_Types].xml", BuildContentTypes(spec));
+            WriteEntry(zip, "xl/_rels/workbook.bin.rels", BuildWorkbookRels(spec));
+
+            if (spec.HasDataModelPart)
+                WriteEntry(zip, "xl/model/item.data", new byte[] { 0x00, 0x01, 0x02, 0x03 });
         }
         return TempFile(ms.ToArray());
+    }
+
+    private static byte[] BuildContentTypes(WorkbookSpec spec)
+    {
+        var sb = new StringBuilder();
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
+        sb.Append("<Default Extension=\"bin\" ContentType=\"application/vnd.ms-excel.sheet.binary.macroEnabled.main\"/>");
+        sb.Append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
+        sb.Append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
+        for (int i = 1; i <= spec.Sheets.Count; i++)
+            sb.Append($"<Override PartName=\"/xl/worksheets/sheet{i}.bin\" ContentType=\"application/vnd.ms-excel.worksheet\"/>");
+        if (spec.HasDataModelPart)
+            sb.Append("<Override PartName=\"/xl/model/item.data\" ContentType=\"application/vnd.openxmlformats-officedocument.model+data\"/>");
+        sb.Append("</Types>");
+        return Encoding.UTF8.GetBytes(sb.ToString());
+    }
+
+    private static byte[] BuildWorkbookRels(WorkbookSpec spec)
+    {
+        var sb = new StringBuilder();
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+        for (int i = 1; i <= spec.Sheets.Count; i++)
+            sb.Append($"<Relationship Id=\"rId{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i}.bin\"/>");
+        if (spec.HasDataModelPart)
+            sb.Append($"<Relationship Id=\"rId{spec.Sheets.Count + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/powerPivotData\" Target=\"model/item.data\"/>");
+        sb.Append("</Relationships>");
+        return Encoding.UTF8.GetBytes(sb.ToString());
     }
 
     private static string TempFile(byte[] bytes)
@@ -113,6 +157,63 @@ internal static class XlsbTestFile
         s.Write(content, 0, content.Length);
     }
 
+    /// <summary>就地改写指定 xlsb 的 BrtExternSheet：把引用 deletedIndex 的 XTI 条目重定向到 0，
+    /// 使该表「不再被任何 XTI 引用」（用于测试守卫不误伤未被引用的表）。</summary>
+    public static void RetargetExternSheet(string path, int deletedIndex)
+    {
+        using var zip = ZipFile.Open(path, ZipArchiveMode.Update);
+        var wbEntry = zip.GetEntry("xl/workbook.bin")!;
+        byte[] wb;
+        using (var src = wbEntry.Open())
+        using (var ms = new MemoryStream()) { src.CopyTo(ms); wb = ms.ToArray(); }
+
+        int pos = 0;
+        while (pos < wb.Length)
+        {
+            int rt = ReadVarInt(wb, ref pos);
+            int cb = ReadVarInt(wb, ref pos);
+            if (cb < 0 || pos + cb > wb.Length) break;
+            if (rt == 0x016A)
+            {
+                int cXti = (int)(wb[pos] | (wb[pos + 1] << 8) | (wb[pos + 2] << 16) | (wb[pos + 3] << 24));
+                for (int i = 0; i < cXti; i++)
+                {
+                    int off = pos + 4 + i * 12;
+                    int first = wb[off + 4] | (wb[off + 5] << 8) | (wb[off + 6] << 16) | (wb[off + 7] << 24);
+                    int last = wb[off + 8] | (wb[off + 9] << 8) | (wb[off + 10] << 16) | (wb[off + 11] << 24);
+                    if (first == deletedIndex || last == deletedIndex)
+                    {
+                        WriteU32(wb, off + 4, 0); // 重定向到 0（不指向被删表）
+                        WriteU32(wb, off + 8, 0);
+                    }
+                }
+            }
+            pos += cb;
+        }
+
+        wbEntry.Delete();
+        var ne = zip.CreateEntry("xl/workbook.bin");
+        using var os = ne.Open();
+        os.Write(wb, 0, wb.Length);
+    }
+
+    private static int ReadVarInt(byte[] b, ref int pos)
+    {
+        int v = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            byte x = b[pos++];
+            v |= (x & 0x7F) << (7 * i);
+            if ((x & 0x80) == 0) return v;
+        }
+        return v;
+    }
+
+    private static void WriteU32(byte[] b, int o, uint v)
+    {
+        b[o] = (byte)v; b[o + 1] = (byte)(v >> 8); b[o + 2] = (byte)(v >> 16); b[o + 3] = (byte)(v >> 24);
+    }
+
     private static byte[] BuildWorkbook(WorkbookSpec spec)
     {
         using var ms = new MemoryStream();
@@ -122,16 +223,40 @@ internal static class XlsbTestFile
         if (spec.Date1904) wbProp[0] = 0x01;
         WriteRecord(ms, BrtWbProp, wbProp);
         WriteRecord(ms, BrtBeginBundleShs, Empty());
-        foreach (var s in spec.Sheets)
+        for (int si = 0; si < spec.Sheets.Count; si++)
         {
+            var s = spec.Sheets[si];
             using var b = new MemoryStream();
             WriteU32(b, 0);          // Hidden
             WriteU32(b, 1);          // iTabID
-            WriteWideString(b, "rId1");
+            WriteWideString(b, $"rId{si + 1}");
             WriteWideString(b, s.Name);
             WriteRecord(ms, BrtBundleSh, b.ToArray());
         }
         WriteRecord(ms, BrtEndBundleShs, Empty());
+        if (spec.HasExternSheet)
+        {
+            using var b = new MemoryStream();
+            WriteU32(b, (uint)spec.Sheets.Count); // cXti
+            for (int i = 0; i < spec.Sheets.Count; i++)
+            {
+                WriteU32(b, 0);              // iSupportingLink
+                WriteU32(b, (uint)i);        // itabFirst
+                WriteU32(b, (uint)i);        // itabLast
+            }
+            WriteRecord(ms, 0x016A, b.ToArray()); // BrtExternSheet
+        }
+        if (spec.DataModelName is not null)
+        {
+            // BrtDefinedName: flags(4)+pad(1)+itab(4)+cch(4)+name(UTF-16)+cce(4)+rgce
+            using var b = new MemoryStream();
+            WriteU32(b, 0);                  // flags
+            b.WriteByte(0);                  // pad
+            WriteU32(b, 0xFFFFFFFF);         // itab = -1（全局）
+            WriteWideString(b, spec.DataModelName);
+            WriteU32(b, 0);                  // cce = 0（无 rgce）
+            WriteRecord(ms, 0x0027, b.ToArray()); // BrtDefinedName
+        }
         WriteRecord(ms, BrtEndBook, Empty());
         return ms.ToArray();
     }

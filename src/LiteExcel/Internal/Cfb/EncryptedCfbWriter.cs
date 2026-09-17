@@ -77,7 +77,6 @@ internal static class EncryptedCfbWriter
         };
         dirs[IEncryptionPackage].Content = encryptedPackage;
 
-        // ── 布局求解 ──
         var layout = new Layout(SectorSize);
         layout.DirectoryEntrySectorNum = BlockNum(dirs.Count, SectorSize / 128);
 
@@ -125,7 +124,6 @@ internal static class EncryptedCfbWriter
         dirs[0].Start = layout.MiniFatDataPos;
         dirs[0].Content = new byte[64 * layout.MiniFatNum];
 
-        // ── 写输出（纯字节数组偏移写入，避免流位置错乱） ──
         var buf = new byte[SectorSize + layout.TotalSectors * SectorSize];
 
         // 头部

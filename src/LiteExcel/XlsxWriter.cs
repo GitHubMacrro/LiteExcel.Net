@@ -79,8 +79,7 @@ public static partial class XlsxWriter
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
 
-        // 方案 A：手术式原样写回（surgical verbatim）——仅删除若干工作表，其余全部逐字节保留。
-        // 最大限度保住透视表/图表/切片器/activeX/customXml/connections 等高级部件。
+        // 手术式原样写回（surgical verbatim）：仅摘除被删表部件及其引用，其余逐字节保留。
         if (surgical && preserved is not null
             && preserved.VerbatimXmlParts is not null)
         {
@@ -88,37 +87,25 @@ public static partial class XlsxWriter
             return;
         }
 
-        // 0. Sheet 名校验（入口拦截，不影响写出逻辑）
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var sheet in sheets)
         {
             ValidateSheetName(sheet?.SheetName);
-            // 低层 API 也校验重复表名，与高层 WorksheetCollection.Add 保持一致。
             if (!seenNames.Add(sheet!.SheetName!))
                 throw new LiteExcelException($"工作表名重复：{sheet.SheetName}");
         }
 
-        // 0. Sheet 名校验（入口拦截，不影响写出逻辑）
-        foreach (var sheet in sheets)
-        {
-            ValidateSheetName(sheet?.SheetName);
-        }
-
-        //   收集共享字符串和样式（跨所有表）
         var sharedStrings = new List<string>();
         var sharedIndex = new Dictionary<string, int>();
         var stylesheet = new Stylesheet();
 
-        // 原始样式、共享字符串和工作表部件齐全时可启用原样写出。
         verbatim = verbatim && preserved?.VerbatimXmlParts is not null
             && preserved.VerbatimXmlParts.ContainsKey("xl/styles.xml");
 
-        // 跨格式兼容（D2）：仅当源为 XML-OOXML（xlsx/xlsm）时才透传保留部件。
-        // 源为 xlsb（BIFF12 二进制）时保留部件是 .bin 记录，直接混入 xlsx 包会造成结构性损坏。
+        // 源为 xlsb 时保留部件是 .bin 记录，混入 xlsx 包会损坏结构，故丢弃。
         if (preserved is not null && preserved.VerbatimXmlParts is null)
             preserved = null;
 
-        // 预扫描：注册所有字符串和样式
         if (!verbatim)
         {
             foreach (var sheet in sheets)
@@ -139,10 +126,8 @@ public static partial class XlsxWriter
             }
         }
 
-        //   构建 zip
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
-        // 预计算哪些 sheet 有批注
         var sheetsWithComments = new List<int>();
         for (int i = 0; i < sheets.Count; i++)
         {
@@ -150,10 +135,7 @@ public static partial class XlsxWriter
                 sheetsWithComments.Add(i);
         }
 
-        // 图片规划：分配 media 序号、生成 drawing/richData 部件
         var imagePlan = ImagePlan.Create(sheets, preserved);
-
-        // 超级表规划：分配全局表 id、生成 table{N}.xml、每 sheet tableParts
         var tablePlan = TablePlan.Create(sheets, preserved, stylesheet, degradationCallback);
 
         // 先写保留部件，再写重建部件；与新建图片重名的保留部件跳过。
@@ -166,7 +148,7 @@ public static partial class XlsxWriter
                 imageEntries.Add(entry);
             foreach (var kv in preserved.Parts)
             {
-                if (dropMacros && kv.Key == "xl/vbaProject.bin") continue; // 目标无宏，剥离 VBA
+                if (dropMacros && kv.Key == "xl/vbaProject.bin") continue;
                 if (imageEntries.Contains(kv.Key)) continue;
                 WriteEntry(zip, kv.Key, kv.Value);
             }
@@ -174,30 +156,24 @@ public static partial class XlsxWriter
 
         WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sheetsWithComments, properties is not null, preserved, macroEnabled, imagePlan, tablePlan, dropMacros));
         WriteXmlEntry(zip, "_rels/.rels", RootRelsXml(properties is not null, preserved));
-        // 先算 workbook.xml.rels 以取得保留 rel 的 rId 重编号映射，
-        // workbook.xml 内的 pivotCaches / externalReferences 引用须按该映射改写
+        // workbook.xml 内的 pivotCaches / externalReferences 须按 rels 重编号映射改写，故先算 rels。
         var keptRelIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
         var workbookRels = WorkbookRelsXml(sheets.Count, preserved, imagePlan, keptRelIdMap, dropMacros);
         WriteXmlEntry(zip, "xl/workbook.xml", WorkbookXml(sheets, preserved, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended, workbookProtection, keptRelIdMap, dropMacros));
         WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", workbookRels);
 
-        // 超级表部件
         foreach (var (entry, xml) in tablePlan.TableXmlParts)
             WriteXmlEntry(zip, entry, xml);
 
-        // 图片 media
         foreach (var (entry, bytes) in imagePlan.MediaEntries())
             WriteEntry(zip, entry, bytes);
 
-        // 浮动图片 drawing 部件（含既有 drawing 合并 + rels）
         foreach (var (entry, xml) in imagePlan.FloatingDrawingParts(preserved))
             WriteEntry(zip, entry, xml);
 
-        // InCell richData 部件
         foreach (var (entry, xml) in imagePlan.InCellEntries())
             WriteXmlEntry(zip, entry, xml);
 
-        // 文档属性（文件属性对话框信息）
         if (properties is not null)
         {
             WriteXmlEntry(zip, "docProps/core.xml", CorePropsXml(properties));
@@ -206,7 +182,6 @@ public static partial class XlsxWriter
 
         for (int i = 0; i < sheets.Count; i++)
         {
-            // 原样写出时跳过工作表 XML 重建，仅写出原始关系。
             if (verbatim && preserved!.VerbatimXmlParts is not null)
             {
                 var sheetRelsPath = $"xl/worksheets/_rels/sheet{i + 1}.xml.rels";
@@ -217,12 +192,9 @@ public static partial class XlsxWriter
 
             var hyperlinks = new List<(string Ref, string Target, string? Tooltip, bool IsInternal)>();
             var inCellVm = imagePlan.InCellVmBySheet(i);
-            // 该表在源文件中的 1-based 序号（0 = 本次新增/非读取来源）。
-            // 仅当 mergeSheetRels=true（表结构未变）时合并原始 rels；结构变化时不合并（旧设计）。
-            // surgical 路径独立处理保留表原始 rels，不走此分支。
+            // 用「原始序号」取 preserved.Rels，确保删/移表后仍复用正确的原有引用。
             int origSheetNum = mergeSheetRels && sheets[i].OrigIndex >= 0 ? sheets[i].OrigIndex + 1 : 0;
-            // 新增图片或保留关系包含绘图时，都写出 <drawing>。
-            // 否则 sheet XML 缺该元素，Excel 认为工作表无绘图，图表随之消失（rel 悬空）
+            // 缺 <drawing> 时 Excel 认为工作表无绘图，既有图表会因 rel 悬空而消失。
             bool hasNewFloating = imagePlan.FloatingBySheet[i].Count > 0;
             bool hasPreservedDrawing = origSheetNum > 0 && HasPreservedDrawingRel(preserved, origSheetNum);
             bool hasDrawing = hasNewFloating || hasPreservedDrawing;
@@ -231,21 +203,16 @@ public static partial class XlsxWriter
             var sheetXml = BuildSheetXml(sheets[i], sharedIndex, stylesheet, date1904, hyperlinks, inCellVm, hasDrawing, drawingRelId,
                 tablePartsXml: tablePlan.TablePartsXml(i), hasComments: hasComments);
 
-            // 批注：每张有批注的 sheet 对应一个 comments 文件 + VML legacyDrawing
             if (hasComments)
             {
                 WriteXmlEntry(zip, $"xl/comments{i + 1}.xml", CommentsXml(sheets[i].Comments!));
                 WriteXmlEntry(zip, $"xl/drawings/vmlDrawing{i + 1}.vml", VmlDrawingXml(sheets[i].Comments!));
             }
 
-            // 工作表 rels：合并保留的绘图/超链接等 rel（工作表结构未变时），追加新建超链接/批注/drawing/table
-            // 删除/移动表后 mergeSheetRels 为 false，但每个保留表仍应复用其「原始序号」对应的保留 rels，
-            // 否则 pivot/绘图/查询表等引用会成孤儿，Excel 打开报修复。
+            // 保留 rel 被重编号时，sheet XML 内引用旧 rId 的元素须按映射同步改写。
             var sheetKeptIdMap = new Dictionary<string, string>(StringComparer.Ordinal);
             var sheetRels = MergeSheetRels(i + 1, hasComments, preserved, origSheetNum, hyperlinks, hasDrawing, imagePlan,
                 tableRels: tablePlan.SheetTableRels(i), keptIdMap: sheetKeptIdMap);
-            // 保留 rel 被重新编号时，sheet XML 内引用旧 rId 的元素（<drawing r:id>、extLst 里的 <x14:slicer r:id> 等）
-            // 须按 sheetKeptIdMap 同步改写。写入器本次新生成的 rId（rIdD1/rIdH{n}/rIdC1）不在映射内，原样保留。
             sheetXml = RemapRelIds(sheetXml, sheetKeptIdMap);
             WriteXmlEntry(zip, $"xl/worksheets/sheet{i + 1}.xml", sheetXml);
             if (sheetRels is not null)
@@ -254,12 +221,8 @@ public static partial class XlsxWriter
             }
         }
 
-        // 原样写出原始样式、共享字符串和工作表部件，保留扩展样式。
-        // workbook.xml / docProps / [Content_Types] / rels 已由重建路径写出，不重复
         if (verbatim && preserved.VerbatimXmlParts is not null)
         {
-            // 仅写 styles/sharedStrings/worksheets/comments（writer 不重建的、含扩展样式的部件）
-            // 排除陈旧计算链，由 Excel 在打开时重建。
             foreach (var kv in preserved.VerbatimXmlParts)
             {
                 if (kv.Key == "xl/calcChain.xml") continue;
@@ -277,10 +240,8 @@ public static partial class XlsxWriter
     }
 
     /// <summary>
-    /// 方案 A：手术式原样写回（surgical verbatim）。
-    /// 仅从源包中"摘除"被删除的工作表部件及其引用（workbook.xml/rels/CT），其余全部逐字节保留。
-    /// 这是「打开复杂工作簿 → 删除一张普通表 → 保存」的最高保真路径：
-    /// 透视表、图表、切片器、ActiveX、customXml、connections、queryTables 全部原封不动。
+    /// 手术式原样写回（surgical verbatim）：仅从源包摘除被删表部件及其引用（workbook.xml/rels/CT），
+    /// 其余逐字节保留，透视表/图表/切片器/ActiveX/customXml/connections/queryTables 均原封不动。
     /// </summary>
     /// <param name="deletedOrigIndexes">被删表在打开时的 0-based 序号集合 </param>
     private static void WriteSurgicalXlsx(Stream stream, IReadOnlyList<SheetData> sheets,
@@ -289,43 +250,26 @@ public static partial class XlsxWriter
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
         var vb = preserved.VerbatimXmlParts!;
-        // 每个当前保留表在打开时的 1-based 序号（OrigIndex+1），以及被删除的打开序号集合
         var deletedOrigIdx = ComputeDeletedOrigIndexes(preserved, sheets);
 
-        // ── 整理待删除的部件路径集合 ──
         var deletedPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (int one in deletedOrigIdx)
         {
             deletedPaths.Add($"xl/worksheets/sheet{one + 1}.xml");
             deletedPaths.Add($"xl/worksheets/_rels/sheet{one + 1}.xml.rels");
-            // 删除表独有的批注、drawing 页等附属部件：从该表的 rels 里收集再删
-            var relsKey = $"xl/worksheets/_rels/sheet{one + 1}.xml.rels";
-            if (preserved.Rels.TryGetValue(relsKey, out var deletedRelsXml))
-            {
-                foreach (var m in ParseRels(deletedRelsXml))
-                {
-                    // 只删除「以该 sheet 为宿主」的部件（skip 相对路径解释太复杂；用包含性 fallback）
-                    // 直接将 workbook.xml.rels 中引用的、且路径含该表名的部件移除
-                }
-            }
         }
 
-        // ── 1) root rels 原样 ──
         if (preserved.Rels.TryGetValue("_rels/.rels", out var rootRels))
             WriteXmlEntry(zip, "_rels/.rels", rootRels);
         else
             WriteXmlEntry(zip, "_rels/.rels", WriterRootRels(properties is not null));
 
-        // ── 2) ContentTypes：剔除被删表的 sheet override ──
-            WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesAfterDelete(sheets, preserved, deletedOrigIdx, macroEnabled, dropMacros));
+        WriteXmlEntry(zip, "[Content_Types].xml", ContentTypesAfterDelete(sheets, preserved, deletedOrigIdx, macroEnabled, dropMacros));
 
-        // ── 3) workbook.xml：删被删表 + 重建 sheets + 清 definedNames ──
         WriteXmlEntry(zip, "xl/workbook.xml", BuildWorkbookXmlAfterDelete(sheets, preserved, macroEnabled, deletedOrigIdx, dropMacros));
 
-        // ── 4) workbook.xml.rels：删被删表 Relationship ──
         WriteXmlEntry(zip, "xl/_rels/workbook.xml.rels", BuildWorkbookRelsAfterDelete(sheets, preserved, deletedOrigIdx, dropMacros));
 
-        // ── 5) docProps 原样或重建 ──
         if (properties is not null)
         {
             WriteXmlEntry(zip, "docProps/core.xml", CorePropsXml(properties));
@@ -338,33 +282,28 @@ public static partial class XlsxWriter
                 WriteEntry(zip, "docProps/app.xml", appProp);
         }
 
-        // ── 6) styles / sharedStrings 原样 ──
         if (vb.TryGetValue("xl/styles.xml", out var stylesBytes)) WriteEntry(zip, "xl/styles.xml", stylesBytes);
         if (vb.TryGetValue("xl/sharedStrings.xml", out var sstBytes)) WriteEntry(zip, "xl/sharedStrings.xml", sstBytes);
 
-        // ── 7) 保留表 sheet XML 原样 + 各自 rels 原样 ──
         foreach (var kv in preserved.VerbatimXmlParts)
         {
             var name = kv.Key;
-            // 跳过已被上面重写的部件（workbook/styles/sst）和被删表
             if (name == "xl/workbook.xml" || name == "xl/styles.xml" || name == "xl/sharedStrings.xml") continue;
             if (name == "xl/calcChain.xml") continue;
             if (name == "[Content_Types].xml" || name == "_rels/.rels") continue;
             if (name.StartsWith("docProps/", StringComparison.Ordinal)) continue;
-            if (deletedPaths.Contains(name)) continue; // 被删表的 sheet XML
+            if (deletedPaths.Contains(name)) continue;
             WriteEntry(zip, name, kv.Value);
         }
 
-        // ── 8) 其余保留部件（pivot/drawing/activeX/media/customXml/connections/queryTables/theme 等）原样 ──
         foreach (var kv in preserved.Parts)
         {
             if (deletedPaths.Contains(kv.Key)) continue;
-            if (dropMacros && kv.Key == "xl/vbaProject.bin") continue; // 目标无宏，剥离 VBA
+            if (dropMacros && kv.Key == "xl/vbaProject.bin") continue;
             WriteEntry(zip, kv.Key, kv.Value);
         }
 
-        // ── 8b) 超级表部件：模型已读入 sheet.Tables（带原始 entry/XML），逐个逐字写回。
-        // D1 修复把表从 preserved.Parts 剔除（避免与模型重建双重写出），此处手术式路径直接复用模型原表。
+        // 超级表部件已从 preserved.Parts 剔除（避免与模型重建双重写出），此处复用模型内原表。
         foreach (var s in sheets)
         {
             if (s.Tables is null) continue;
@@ -376,13 +315,12 @@ public static partial class XlsxWriter
             }
         }
 
-        // ── 9) 所有 sheet-level rels 原样（除被删表） ──
         foreach (var kv in preserved.Rels)
         {
             var relsPath = kv.Key;
-            if (relsPath == "_rels/.rels") continue;                       // 已写
-            if (relsPath == "xl/_rels/workbook.xml.rels") continue;        // 已重建
-            if (deletedPaths.Contains(relsPath)) continue;                 // 被删表 rels
+            if (relsPath == "_rels/.rels") continue;
+            if (relsPath == "xl/_rels/workbook.xml.rels") continue;
+            if (deletedPaths.Contains(relsPath)) continue;
             WriteXmlEntry(zip, relsPath, kv.Value);
         }
     }
@@ -390,7 +328,6 @@ public static partial class XlsxWriter
     /// <summary>计算被删表的打开时 0-based 序号集合（当前 sheets 是打开表的子序列） </summary>
     private static List<int> ComputeDeletedOrigIndexes(OoxmlPreservedParts preserved, IReadOnlyList<SheetData> currentSheets)
     {
-        // 打开时表的总数 = VerbatimXmlParts 中 sheetN.xml 的数量（也可用 preserved.Parts 中其它指标）
         int openedCount = 0;
         foreach (var key in preserved.VerbatimXmlParts!.Keys)
         {
@@ -399,7 +336,6 @@ public static partial class XlsxWriter
         }
         if (openedCount == 0) return new List<int>();
 
-        // 当前保留表的 OrigIndex 集合（0-based）。OrigIndex 是打开时的序号。
         var keptOrig = new HashSet<int>();
         foreach (var s in currentSheets)
             if (s.OrigIndex >= 0) keptOrig.Add(s.OrigIndex);
@@ -421,7 +357,6 @@ public static partial class XlsxWriter
         foreach (var d in deletedOrigIdx)
             deletedSheetPaths.Add($"/xl/worksheets/sheet{d + 1}.xml");
 
-        // Default declarations
         var seenExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         sb.Append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
         sb.Append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
@@ -663,7 +598,6 @@ public static partial class XlsxWriter
 
     private static void AppendToSheet(SheetData existing, SheetData newData)
     {
-        //   合并 Headers
         var mergedHeaders = new List<string>(existing.Headers);
         if (newData.Headers is not null)
         {
@@ -675,7 +609,6 @@ public static partial class XlsxWriter
         }
         existing.Headers = mergedHeaders;
 
-        //   构建列名映射
         var newHeaderMap = new Dictionary<string, int>();
         if (newData.Headers is not null)
         {
@@ -688,7 +621,6 @@ public static partial class XlsxWriter
 
         int colCount = mergedHeaders.Count;
 
-        //   追加行
         foreach (var row in newData.Rows)
         {
             var padded = new List<Cell>(colCount);
@@ -708,8 +640,6 @@ public static partial class XlsxWriter
         }
     }
 
-    // ── Sheet 名校验 ──
-
     private static readonly char[] InvalidSheetNameChars = new[] { '\\', '/', '?', '*', '[', ']', ':' };
 
     private static void ValidateSheetName(string? sheetName)
@@ -726,8 +656,6 @@ public static partial class XlsxWriter
         }
     }
 
-    // ── 共享字符串管理 ──
-
     private static int RegisterSharedString(string? s, List<string> shared, Dictionary<string, int> index)
     {
         if (string.IsNullOrEmpty(s)) return -1;
@@ -737,8 +665,6 @@ public static partial class XlsxWriter
         index[s] = i;
         return i;
     }
-
-    // ── 工作表 XML 构建 ──
 
     private static string BuildSheetXml(SheetData sheet,
         Dictionary<string, int> sharedIndex, Stylesheet stylesheet, bool date1904,
@@ -751,11 +677,23 @@ public static partial class XlsxWriter
         sb.Append($"<worksheet xmlns=\"{MainNs}\" xmlns:r=\"{OfficeRelNs}\"");
         sb.Append(">");
 
-        // 工作表宿主 VBA 代码名：schema 要求 sheetPr 为 worksheet 第一个子元素，位于 sheetViews 之前
-        if (!string.IsNullOrEmpty(sheet.CodeName))
-            sb.Append($"<sheetPr codeName=\"{XmlEscape(sheet.CodeName)}\"/>");
+        // VBA 代码名与 tabColor 同挂 sheetPr（schema 要求 sheetPr 为 worksheet 首个子元素）。
+        bool hasCodeName = !string.IsNullOrEmpty(sheet.CodeName);
+        bool hasTabColor = !string.IsNullOrEmpty(sheet.TabColor);
+        if (hasCodeName || hasTabColor)
+        {
+            sb.Append("<sheetPr");
+            if (hasCodeName) sb.Append($" codeName=\"{XmlEscape(sheet.CodeName!)}\"");
+            if (hasTabColor)
+            {
+                sb.Append("><tabColor rgb=\"FF").Append(NormalizeColorRgb(sheet.TabColor!)).Append("\"/></sheetPr>");
+            }
+            else
+            {
+                sb.Append("/>");
+            }
+        }
 
-        // sheetView（冻结窗格）
         int freezeRows = sheet.FreezeRows;
         int freezeCols = sheet.FreezeColumns;
         if (sheet.FreezeHeader) freezeRows = Math.Max(freezeRows, 1);
@@ -779,7 +717,6 @@ public static partial class XlsxWriter
             sb.Append("<sheetViews><sheetView workbookViewId=\"0\"/></sheetViews>");
         }
 
-        // 列宽
         if (sheet.ColumnWidths is { Count: > 0 })
         {
             sb.Append("<cols>");
@@ -792,7 +729,7 @@ public static partial class XlsxWriter
 
         sb.Append("<sheetData>");
 
-        // 前置空行：数据从第 N 行开始时，第 1..N-1 行以空 <row> 占位，避免数据整体上移
+        // 数据从第 N 行开始时，前 N-1 行以空 <row> 占位，避免数据整体上移。
         int startsAt = sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber : 1;
         for (int r = 1; r < startsAt; r++)
             sb.Append($"<row r=\"{r}\"/>");
@@ -800,14 +737,13 @@ public static partial class XlsxWriter
         int rowIndex = startsAt;
         int headerStyleId = stylesheet.GetOrCreateXfId(sheet.HeaderStyle);
 
-        // 表头行
         if (sheet.Headers is { Count: > 0 })
         {
             int headerRow = rowIndex++;
             sb.Append($"<row r=\"{headerRow}\">");
             for (int col = 0; col < sheet.Headers.Count; col++)
             {
-                // 表头样式优先级: HeaderStyle > ColumnStyles > DefaultStyle
+                // 表头样式优先级：HeaderStyle > ColumnStyles > DefaultStyle
                 var headerCellStyle = sheet.HeaderStyle
                     ?? (sheet.ColumnStyles is not null && sheet.ColumnStyles.TryGetValue(col, out var cs) ? cs : null)
                     ?? sheet.DefaultStyle;
@@ -817,14 +753,12 @@ public static partial class XlsxWriter
             sb.Append("</row>");
         }
 
-        // 计算筛选 hidden 行（如果有筛选条件但没手动设 HiddenRows）
         var hiddenRows = sheet.Filter?.HiddenRows;
         if (sheet.Filter is not null && sheet.Filter.Columns.Count > 0 && hiddenRows is not null && hiddenRows.Count == 0)
         {
             hiddenRows = FilterEvaluator.EvaluateHiddenRows(sheet);
         }
 
-        // 数据行
         int dataRowIdx = 0;
         foreach (var row in sheet.Rows)
         {
@@ -832,7 +766,6 @@ public static partial class XlsxWriter
             int maxCol = row.Count - 1;
             if (maxCol < 0) { dataRowIdx++; continue; }
 
-            // 行级样式
             CellStyle? rowStyle = null;
             if (sheet.RowStyles is not null && sheet.RowStyles.TryGetValue(dataRowIdx, out var rs))
                 rowStyle = rs;
@@ -865,7 +798,7 @@ public static partial class XlsxWriter
                     hyperlinks.Add((CellRef.ToString(currentRow - 1, col), cell.Hyperlink.Target, cell.Hyperlink.Tooltip, cell.Hyperlink.IsInternal));
                 }
 
-                // InCell 图片单元格：t="e" vm 指向 metadata 中的 richData 记录
+                // InCell 图片单元格：t="e" vm 指向 metadata 的 richData 记录
                 if (inCellVm is not null && inCellVm.TryGetValue(CellRef.ToString(currentRow - 1, col), out int vm))
                 {
                     sb.Append($"<c r=\"{CellRef.ToString(currentRow - 1, col)}\" t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
@@ -878,7 +811,7 @@ public static partial class XlsxWriter
             dataRowIdx++;
         }
 
-        // 补充 InCell 图片单元格：所在行可能不在数据网格中（如空行或超出网格），需按行号补齐
+        // InCell 图片单元格可能不在数据网格内，按行号补齐。
         if (inCellVm is { Count: > 0 })
         {
             int lastRow = rowIndex - 1;
@@ -911,7 +844,7 @@ public static partial class XlsxWriter
 
         sb.Append("</sheetData>");
 
-        // 工作表保护（sheetProtection）：schema 位于 sheetData 之后
+        // 以下元素须严格按 OOXML schema 顺序写出。
         if (sheet.Protection is { IsActive: true } prot)
         {
             sb.Append("<sheetProtection" + prot.WriteHashAttributes() +
@@ -925,7 +858,8 @@ public static partial class XlsxWriter
                       $"selectUnlockedCells=\"{(prot.SelectUnlockedCells ? 1 : 0)}\"/>");
         }
 
-        // 自动筛选（autoFilter）：schema 位于 sheetProtection 之后、mergeCells 之前
+        // schema 顺序：sheetProtection → autoFilter → mergeCells → conditionalFormatting
+        //   → dataValidations → hyperlinks → drawing → legacyDrawing → tableParts → extLst
         if (sheet.Filter is not null)
         {
             string filterRange = sheet.Filter.Range;
@@ -947,7 +881,6 @@ public static partial class XlsxWriter
             }
         }
 
-        // 合并单元格（mergeCells）：schema 位于 autoFilter 之后、conditionalFormatting 之前
         if (sheet.MergedRanges is { Count: > 0 })
         {
             int headerOffset = (sheet.Headers is { Count: > 0 } ? 1 : 0) + (sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber - 1 : 0);
@@ -961,7 +894,6 @@ public static partial class XlsxWriter
             sb.Append("</mergeCells>");
         }
 
-        // 条件格式（conditionalFormatting）：schema 位于 mergeCells 之后、dataValidations 之前
         if (sheet.ConditionalFormats is { Count: > 0 })
         {
             int priority = 1;
@@ -1042,10 +974,12 @@ public static partial class XlsxWriter
                     }
                     case ConditionalFormatType.TextLength:
                     {
-                        sb.Append($"<cfRule type=\"lengthIs\"{dxfAttr} priority=\"{prio}\" operator=\"{OperatorToString(cf.Operator)}\">");
-                        AppendCfFormula(sb, cf.Formula);
+                        // Excel 以 cellIs + LEN(ref) <op> <value> 表达文本长度（lengthIs 非合法 OOXML 类型，Excel 拒开）
+                        string lenRef = CfAnchorCell(cf.Sqref);
+                        sb.Append($"<cfRule type=\"cellIs\"{dxfAttr} priority=\"{prio}\" operator=\"{OperatorToString(cf.Operator)}\">");
+                        AppendCfFormula(sb, TextLengthFormula(lenRef, cf.Operator, cf.Formula, first: true));
                         if (cf.Operator is ConditionalOperator.Between or ConditionalOperator.NotBetween)
-                            AppendCfFormula(sb, cf.Formula2);
+                            AppendCfFormula(sb, TextLengthFormula(lenRef, cf.Operator, cf.Formula2, first: false));
                         sb.Append("</cfRule>");
                         break;
                     }
@@ -1092,7 +1026,6 @@ public static partial class XlsxWriter
             }
         }
 
-        // 数据验证（dataValidations）：schema 位于 conditionalFormatting 之后、hyperlinks 之前
         if (sheet.Validations is { Count: > 0 })
         {
             sb.Append($"<dataValidations count=\"{sheet.Validations.Count}\">");
@@ -1118,7 +1051,6 @@ public static partial class XlsxWriter
             sb.Append("</dataValidations>");
         }
 
-        // 超链接（hyperlinks）：schema 位于 dataValidations 之后、drawing 之前
         if (hyperlinks is { Count: > 0 })
         {
             sb.Append("<hyperlinks>");
@@ -1138,26 +1070,22 @@ public static partial class XlsxWriter
             sb.Append("</hyperlinks>");
         }
 
-        // 浮动图片 drawing 引用（drawing）：schema 位于 hyperlinks 之后
         if (hasDrawing)
         {
             sb.Append($"<drawing r:id=\"{drawingRelId}\"/>");
         }
 
-        // VML legacyDrawing（批注形状载体）：schema 位于 drawing 之后、tableParts 之前
         if (hasComments)
         {
             sb.Append("<legacyDrawing r:id=\"rIdC1\"/>");
         }
 
-        // 超级表 tableParts（schema 位于 worksheet 末尾、extLst 之前）
         if (!string.IsNullOrEmpty(tablePartsXml))
         {
             sb.Append(tablePartsXml);
         }
 
-        // worksheet extLst（含 x14:slicerList 等）：schema 位于 worksheet 末尾、</worksheet> 之前。
-        // 切片器列表引用住在其中，丢失则切片器部件成孤儿。r:id 由调用方在合并 sheet rels 后统一重映射。
+        // 切片器列表引用住在 extLst 中，丢失则切片器成孤儿；r:id 由调用方合并 sheet rels 后重映射。
         if (!string.IsNullOrEmpty(sheet.SheetExtLstXml))
             sb.Append(sheet.SheetExtLstXml);
 
@@ -1235,8 +1163,6 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    // ── 条件格式辅助 ──
-
     private static void AppendCfFormula(StringBuilder sb, string? formula)
     {
         if (string.IsNullOrEmpty(formula)) return;
@@ -1276,7 +1202,6 @@ public static partial class XlsxWriter
     private static string TextCfFormula(ConditionalFormat cf)
     {
         var text = XmlEscape(cf.Text ?? "");
-        // 若用户显式提供 Formula 则直接用；否则按类型生成标准 Excel 公式
         if (!string.IsNullOrEmpty(cf.Formula)) return cf.Formula;
         string refCell = FirstCellOfSqref(cf.Sqref);
         return cf.Type switch
@@ -1296,6 +1221,26 @@ public static partial class XlsxWriter
         var colon = first.IndexOf(':');
         if (colon > 0) first = first.Substring(0, colon);
         return string.IsNullOrEmpty(first) ? "A1" : first;
+    }
+
+    /// <summary>条件格式公式锚点单元格（sqref 左上角），供 cellIs/文本长度等相对引用使用 </summary>
+    private static string CfAnchorCell(string sqref) => FirstCellOfSqref(sqref);
+
+    /// <summary>文本长度公式：LEN(ref) &lt;op&gt; &lt;value&gt;（Excel 原生 lengthIs 形式，first=false 时为 between 的上限运算符） </summary>
+    private static string TextLengthFormula(string refCell, ConditionalOperator op, string? value, bool first)
+    {
+        string opStr = op switch
+        {
+            ConditionalOperator.Between => first ? ">=" : "<=",
+            ConditionalOperator.NotBetween => first ? "<" : ">",
+            ConditionalOperator.Equal => "=",
+            ConditionalOperator.NotEqual => "<>",
+            ConditionalOperator.LessThan => "<",
+            ConditionalOperator.LessThanOrEqual => "<=",
+            ConditionalOperator.GreaterThanOrEqual => ">=",
+            _ => ">",
+        };
+        return $"LEN({refCell}){opStr}{value}";
     }
 
     private static void WriteTextCell(StringBuilder sb, int row1Based, int col, string text,
@@ -1322,12 +1267,10 @@ public static partial class XlsxWriter
         Dictionary<string, int> sharedIndex, Stylesheet stylesheet, CellStyle? resolvedStyle = null, bool date1904 = false)
     {
         var cellRef = CellRef.ToString(row - 1, col);
-        // 使用解析后的样式（优先级已在外部处理），或 cell 自带的样式
         int styleId = stylesheet.GetOrCreateXfId(resolvedStyle ?? cell.Style, cell.NumberFormat);
         var styleAttr = styleId > 0 ? $" s=\"{styleId}\"" : "";
 
-        // 公式单元格：写 <f> 公式文本 + <v> 缓存值（不做公式计算）
-        // 优先读取 Cell.Formula，并兼容旧代码将公式存入 Text 的形式。
+        // 公式单元格写 <f> 公式文本 + <v> 缓存值（不做公式计算）；兼容旧代码把公式存入 Text。
         var formulaText = cell.Formula ?? (cell.IsFormula ? cell.Text : null);
         if (!string.IsNullOrEmpty(formulaText))
         {
@@ -1387,14 +1330,12 @@ public static partial class XlsxWriter
         }
     }
 
-    // ── OOXML 部件构建 ──
-
     private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved, bool macroEnabled = false, ImagePlan? imagePlan = null, TablePlan? tablePlan = null, bool dropMacros = false)
     {
         var defaults = new List<(string Ext, string Ct)>();
         var overrides = new List<(string Part, string Ct)>();
 
-        // 写入器固有声明；xlsm 的主文档类型必须为 macroEnabled，否则 Excel 拒绝打开
+        // xlsm 主文档类型必须为 macroEnabled，否则 Excel 拒绝打开。
         defaults.Add(("rels", "application/vnd.openxmlformats-package.relationships+xml"));
         defaults.Add(("xml", "application/xml"));
         if (sheetsWithComments.Count > 0)
@@ -1452,14 +1393,12 @@ public static partial class XlsxWriter
             }
         }
 
-        // 超级表 table override
         if (tablePlan is not null)
         {
             foreach (var (part, ct) in tablePlan.ContentTypeOverrides())
                 overrides.Add((part, ct));
         }
 
-        // 保留的声明（排除与重建部件冲突的）
         if (preserved is not null)
         {
             foreach (var d in preserved.DefaultTypes)
@@ -1472,9 +1411,8 @@ public static partial class XlsxWriter
             {
                 if (rebuiltEntries.Contains(o.PartName.TrimStart('/'))) continue;
                 if (dropMacros && o.PartName == "/xl/vbaProject.bin") continue;
-                // 工作表/批注部件的 Override 一律由写入器按当前模型重建：
-                // 删除表后原文件中 sheet{旧N}.xml / comments{旧N}.xml 的 Override 若透传，
-                // 会声明不存在的部件 → Excel 报「文件格式或扩展名无效」拒绝打开。
+                // 工作表/批注部件的 Override 一律由写入器重建：透传旧 sheet{旧N}.xml / comments{旧N}.xml
+                // 的 Override 会声明不存在的部件，Excel 报「文件格式或扩展名无效」拒绝打开。
                 var partPath = o.PartName.TrimStart('/');
                 if (partPath.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal)) continue;
                 if (partPath.StartsWith("xl/comments", StringComparison.Ordinal)) continue;
@@ -1482,7 +1420,6 @@ public static partial class XlsxWriter
             }
         }
 
-        // 去重后输出
         var seenExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenPart = new HashSet<string>(StringComparer.Ordinal);
         var sb = new StringBuilder(512);
@@ -1501,8 +1438,6 @@ public static partial class XlsxWriter
         sb.Append("</Types>");
         return sb.ToString();
     }
-
-    // ── rels 合并（保留部件） ──
 
     internal sealed class RelInfo
     {
@@ -2039,8 +1974,6 @@ public static partial class XlsxWriter
         return sb.ToString();
     }
 
-    // ── 工具方法 ──
-
     private static void WriteXmlEntry(ZipArchive zip, string entryName, string xml)
     {
         var entry = zip.CreateEntry(entryName, CompressionLevel.Optimal);
@@ -2091,8 +2024,6 @@ public static partial class XlsxWriter
         return target.StartsWith("#", StringComparison.Ordinal) ? target.Substring(1) : target;
     }
 
-    // ── 列宽自适应 ──
-
     /// <summary>
     /// 估算并设置每列的宽度（中文字符算 2，英文/数字算 1），范围 [8, 50] 
     /// 调用此方法后再调用 <see cref="Write(string, SheetData)"/> 
@@ -2111,7 +2042,6 @@ public static partial class XlsxWriter
 
         var widths = new double[colCount];
 
-        // 表头
         if (sheet.Headers is not null)
         {
             for (int c = 0; c < sheet.Headers.Count; c++)
@@ -2121,7 +2051,6 @@ public static partial class XlsxWriter
             }
         }
 
-        // 数据行
         foreach (var row in sheet.Rows)
         {
             for (int c = 0; c < row.Count; c++)
@@ -2131,7 +2060,6 @@ public static partial class XlsxWriter
             }
         }
 
-        // 应用最小/最大限制
         var result = new List<double>(colCount);
         for (int i = 0; i < colCount; i++)
         {

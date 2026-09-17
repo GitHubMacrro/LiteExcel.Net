@@ -64,6 +64,9 @@ public enum DegradationCapability
 
     /// <summary>工作表数据范围超出目标格式上限（xls 最多 256 列 / 65536 行），超界部分被裁剪 </summary>
     SheetSize,
+
+    /// <summary>工作表标签颜色（tabColor）；目标格式 xlsb/xls 不支持时被丢弃 </summary>
+    SheetVisibility,
 }
 
 /// <summary>

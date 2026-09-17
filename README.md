@@ -1,101 +1,138 @@
 # LiteExcel
 
 [![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
-[![NuGet Downloads](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
+[![NuGet 下载量](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![CI](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A lightweight, zero-dependency .NET library for reading and writing xlsx / xlsm / xlsb / xls / csv without installing Excel.
-无需安装 Excel 即可读写 xlsx / xlsm / xlsb / xls / csv 的轻量级 .NET 库，零第三方依赖，AOT 友好。
+轻量级 .NET 库，无需安装 Excel 即可读写 xlsx / xlsm / xlsb / xls / csv 五种格式。零第三方依赖，net48 与 net8.0 双目标，AOT 友好。
 
-## Language / 语言
+> [English README](README.en.md)
 
+## 效果预览
+
+以下均为 LiteExcel 写出的文件在 Excel 中打开的实际效果：
+
+[![条件格式效果](docs/screenshots/conditional.png)](docs/screenshots/conditional.png)
+
+[![超级表与筛选效果](docs/screenshots/table_filter.png)](docs/screenshots/table_filter.png)
+
+[![图片与冻结窗格效果](docs/screenshots/image_freeze.png)](docs/screenshots/image_freeze.png)
+
+<details>
+<summary>更多效果（样式与数字格式 · 批注与数据验证 · 合并与超链接）</summary>
+
+[![样式与数字格式](docs/screenshots/style_number.png)](docs/screenshots/style_number.png)
+
+[![批注与数据验证](docs/screenshots/comment_validation.png)](docs/screenshots/comment_validation.png)
+
+[![合并与超链接](docs/screenshots/merge_link.png)](docs/screenshots/merge_link.png)
+
+</details>
+
+## 详细文档
+
+- [使用手册（中文）](docs/USAGE.zh-CN.md)：完整 API 参考与全部示例
+- [更新日志](docs/CHANGELOG.md)：版本变更记录
 - [English README](README.en.md)
-- [中文 README](README.zh-CN.md)
 
-## Preview / 效果预览
+## 特性
 
-Files written by LiteExcel, opened in Excel / 以下均为 LiteExcel 写出的文件在 Excel 中打开的效果：
+- 零第三方依赖，仅用 .NET 基础类库，引用即用，部署包内没有额外原生组件。
+- net48 与 net8.0 双目标，公开 API 全部兼容 Native AOT 与裁剪，并以原生可执行文件实测。
+- 一套对象模型覆盖五种格式；同一段代码换个格式参数即可写出 xls 或 csv。
+- 覆盖常用办公需求：样式与数字格式、合并、筛选、行高列宽、批注、数据验证、超链接、冻结窗格、图片、条件格式、超级表、命名区域、公式、文件密码、大文件流式读写。
+- 打开再保存原样保留未改动的内容：xlsx / xlsm / xlsb 的宏、图表、透视表、数据模型、外部连接等高级部件不丢失。
+- 文件级安全：打开密码与修改密码、工作表与工作簿保护（可选密码）。
+- 大文件流式读写，内存占用平稳。
+- 写出 xls / xlsb / csv 时，目标格式不支持的能力逐项显式上报，绝不静默丢弃。
 
-[![Conditional formatting / 条件格式](https://raw.githubusercontent.com/GitHubMacrro/LiteExcel.Net/main/docs/screenshots/conditional.png)](https://raw.githubusercontent.com/GitHubMacrro/LiteExcel.Net/main/docs/screenshots/conditional.png)
-
-[![Excel tables and filters / 超级表与筛选](https://raw.githubusercontent.com/GitHubMacrro/LiteExcel.Net/main/docs/screenshots/table_filter.png)](https://raw.githubusercontent.com/GitHubMacrro/LiteExcel.Net/main/docs/screenshots/table_filter.png)
-
-More screenshots are in the [中文 README](README.zh-CN.md) and the [usage guide §15 / §16](docs/USAGE.zh-CN.md). / 更多截图见[中文 README](README.zh-CN.md) 与[使用手册 §15 / §16](docs/USAGE.zh-CN.md)。
-
-## Docs / 文档
-
-- [Usage Guide / 使用手册](docs/USAGE.en.md) · [中文使用手册](docs/USAGE.zh-CN.md)
-- [Changelog / 更新日志](docs/CHANGELOG.md)
-
-## Install / 安装
+## 安装
 
 ```powershell
 dotnet add package LiteExcel
 ```
 
-## Quick Start / 快速上手
+使用本地打包的 nupkg 时，指定包目录作为源：
+
+```powershell
+dotnet add package LiteExcel --source .\packages
+```
+
+## 快速上手
+
+**对象模型读写**：新建工作簿，按自然层级写入，再次打开读取。
 
 ```csharp
 using LiteExcel;
 
-// Object-model API / 对象模型 API
 var wb = Excel.Create();
-wb.Worksheets["Sheet1"].SetValue("A1", "Name");
-wb.Worksheets["Sheet1"].SetValue("A2", "Zhang San");
+var ws = wb.Worksheets["Sheet1"];
+ws.SetValue("A1", "姓名");
+ws.SetValue("B1", "年龄");
+ws.SetValue("A2", "张三");
+ws.SetValue("B2", 25);
+ws.Range("A1:B1").Style = new CellStyle { Bold = true };
 wb.SaveAs("output.xlsx");
 
 var opened = Excel.Open("output.xlsx");
 var name = opened.Worksheets[0].Cell("A2").GetString();
-
-// Classic API / 经典 API（XlsxWriter / XlsxReader）
-var sheet = new SheetData
-{
-    SheetName = "Sheet1",
-    Headers = new() { "Name", "Age" },
-    Rows = new()
-    {
-        new Cell[] { Cell.FromText("Zhang San"), Cell.FromNumber(25) },
-    },
-};
-XlsxWriter.Write("output2.xlsx", sheet);
-var read = XlsxReader.Read("output2.xlsx", 0);
+var age = opened.Worksheets[0].Cells[2, 2].GetDouble();
 ```
 
-## Features / 特性
+`List<T>` 映射、DataTable、低层 SheetData 读写见[使用手册第 2 章](docs/USAGE.zh-CN.md#2-数据读写)与[附录 B](docs/USAGE.zh-CN.md#附录-b-低层-api-参考)。
 
-- Zero dependencies, built only on the .NET base class library / 零依赖，仅用 .NET 基础类库
-- net48 + net8.0, all public APIs Native AOT / trim compatible / 双目标，公开 API 兼容 Native AOT 与裁剪
-- One object model across five formats / 一套对象模型覆盖五种格式
-- Styles, merge, filter, row/column sizing, comments, validation, hyperlinks, freeze, images, conditional formatting, tables, formulas, passwords / 样式、合并、筛选、行高列宽、批注、数据验证、超链接、冻结、图片、条件格式、超级表、公式、文件密码
-- Open-then-save preserves macros, charts, pivot tables for xlsx / xlsm / xlsb / 打开再保存透传保留宏、图表、透视表
-- Large-file streaming read/write / 大文件流式读写
-- Capabilities the target format lacks are reported, never silently dropped / 目标格式不支持的能力显式上报，不静默丢弃
+## 能力矩阵
 
-## Capability Matrix / 能力矩阵
+图例：☑️ 支持 · ❌ 不支持 · 单元格内文字表示部分支持
 
-Legend / 图例：☑️ supported / 支持 · ❌ not supported / 不支持 · text = partial / 文字表示部分支持
-
-| Capability / 能力 | xlsx | xlsm | xlsb | xls | csv |
+| 能力 | xlsx | xlsm | xlsb | xls | csv |
 |---|---|---|---|---|---|
-| Cell read/write / 数据读写 | ☑️ | ☑️ | ☑️ | ☑️ | text only / 纯文本 |
-| Styles & number formats / 样式与数字格式 | ☑️ | ☑️ | number format only / 仅数字格式 | number format only / 仅数字格式 | ❌ |
-| Layout / 表格布局 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Auto filter / 自动筛选 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Comments / 批注 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Data validation / 数据验证 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Hyperlinks / 超链接 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Freeze panes / 冻结窗格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Images / 图片 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Conditional formatting / 条件格式 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Tables / 超级表 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Formulas / 公式 | ☑️ | ☑️ | read only / 仅读取 | read only / 仅读取 | ❌ |
-| File passwords / 文件密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
-| Charts / pivot tables / 图表 / 透视表 | passthrough / 原样保留 | passthrough / 原样保留 | passthrough / 原样保留 | ❌ | ❌ |
-| Large-file streaming / 大文件流式 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| 数据读写 | ☑️ | ☑️ | ☑️ | ☑️ | 仅文本 |
+| 样式与数字格式 | ☑️ | ☑️ | 仅数字格式 | 仅数字格式 | ❌ |
+| 表格布局（合并 / 行高 / 列宽） | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| 自动筛选 | ☑️ | ☑️ | 范围读写 | ❌ | ❌ |
+| 批注 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| 数据验证 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| 超级表 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| 命名区域 | ☑️ | ☑️ | 仅读取 | 仅读取 | ❌ |
+| 超链接 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| 冻结窗格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| 图片 | ☑️ | ☑️ | 浮动写入 | ❌ | ❌ |
+| 条件格式 | ☑️ | ☑️ | 全类型写入 | ❌ | ❌ |
+| 工作表可见性 / 标签颜色 | ☑️ | ☑️ | 可见性支持 | 可见性支持 | ❌ |
+| 公式 | ☑️ | ☑️ | 基础读写 | 基础读写 | ❌ |
+| 文件密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| 图表 / 透视表 | 原样保留 | 原样保留 | 原样保留 | ❌ | ❌ |
+| 大文件流式读 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| 大文件流式写 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 
-> Full details in the usage guide / 完整能力明细见使用手册 §20.1：[中文](docs/USAGE.zh-CN.md) · [English](docs/USAGE.en.md)
+> 完整能力明细见[使用手册 §20.1](docs/USAGE.zh-CN.md#201-格式能力矩阵)。
+
+## 兼容性
+
+- 目标框架：net48、net8.0
+- AOT：公开 API 全部兼容 Native AOT 与裁剪；`List<T>` 反射映射已标注
+
+## 已知边界
+
+1. **读取入口**：`Excel.Read<T>` 只支持 xlsx / xlsm；xls / xlsb / csv 用 `Excel.Open` 按扩展名路由。
+2. **CSV**：单工作表、纯文本，无样式，数值以文本读回。
+3. **密码与宏**：xls 不支持密码；含宏的工作簿只能存为 xlsm 或 xlsb。
+4. **图表与透视表**：只保留不编辑；xlsx / xlsm / xlsb 打开再保存会原样保留，xls / csv 会丢弃。
+5. **流式与追加**：只支持 xlsx / xlsm。
+
+## 运行 Demo
+
+仓库自带控制台示例（33 个 Demo，覆盖读写 / 样式 / 筛选 / 批注 / 密码 / 图片 / 条件格式 / 插删行列 / 公式写回等），在仓库根目录执行：
+
+```powershell
+dotnet run --project demo/LiteExcel.Demo
+```
+
+输出写入程序目录下的 `Output` 文件夹，控制台会打印完整路径。
 
 ## License
-- [License / 许可证](LICENSE)
+
+MIT [LICENSE](LICENSE)。

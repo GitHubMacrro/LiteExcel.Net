@@ -192,4 +192,45 @@ public class ConditionalFormatTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Fact]
+    public void TextLength_WritesCellIsWithLen_NotInvalidLengthIs()
+    {
+        // lengthIs 非合法 OOXML cfRule 类型（Excel 拒开）；必须以 cellIs + LEN(ref) op value 表达。
+        var file = GetTempFile();
+        try
+        {
+            var wb = Excel.Create();
+            var ws = wb.Worksheets[0];
+            ws.ConditionalFormats.Add(new ConditionalFormat
+            {
+                Type = ConditionalFormatType.TextLength,
+                Sqref = "B2:B10",
+                Operator = ConditionalOperator.GreaterThan,
+                Formula = "10",
+                Style = new CellStyle { FillColor = "#FF0000" },
+            });
+            ws.ConditionalFormats.Add(new ConditionalFormat
+            {
+                Type = ConditionalFormatType.TextLength,
+                Sqref = "C2:C10",
+                Operator = ConditionalOperator.Between,
+                Formula = "3",
+                Formula2 = "8",
+                Style = new CellStyle { FillColor = "#00FF00" },
+            });
+            wb.SaveAs(file);
+
+            string sheetXml;
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(file))
+            using (var s = zip.GetEntry("xl/worksheets/sheet1.xml")!.Open())
+            using (var r = new System.IO.StreamReader(s))
+                sheetXml = r.ReadToEnd();
+
+            Assert.DoesNotContain("lengthIs", sheetXml);
+            Assert.Contains("<cfRule type=\"cellIs\" dxfId=\"0\" priority=\"1\" operator=\"greaterThan\"><formula>LEN(B2)&gt;10</formula></cfRule>", sheetXml);
+            Assert.Contains("<formula>LEN(C2)&gt;=3</formula><formula>LEN(C2)&lt;=8</formula>", sheetXml);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

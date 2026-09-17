@@ -43,6 +43,9 @@ public sealed class IconSetInfo
     /// <summary>单元格内是否同显数值，默认 true </summary>
     public bool ShowValue { get; set; } = true;
 
+    /// <summary>是否反转图标顺序（Excel 的 reverse 属性），默认 false </summary>
+    public bool Reverse { get; set; }
+
     /// <summary>自定义阈值（图标数 - 1 个，升序）。为空则按图标数均分百分比 </summary>
     public double[]? Thresholds { get; set; }
 
@@ -83,7 +86,7 @@ public sealed class IconSetInfo
         int count = IconCount;
         var result = new double[count];
         for (int i = 0; i < count; i++)
-            result[i] = i * 100.0 / count;
+            result[i] = Math.Round(i * 100.0 / count); // Excel 默认阈值为整数（如 3 图标 → 0/33/67）
         return result;
     }
 }

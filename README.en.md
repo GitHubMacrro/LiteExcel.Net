@@ -8,13 +8,8 @@
 
 A lightweight .NET library to read and write xlsx / xlsm / xlsb / xls / csv without installing Excel. Zero third-party dependencies, targets net48 and net8.0, AOT friendly.
 
-> [中文 README](README.zh-CN.md)
+> [中文 README](README.md)
 
-## Docs
-
-- [Usage Guide](docs/USAGE.en.md): full API reference and examples
-- [Changelog](docs/CHANGELOG.md): version history
-- [中文 README](README.zh-CN.md)
 ## Preview
 
 Below are files written by LiteExcel, opened in Excel:
@@ -36,13 +31,19 @@ Below are files written by LiteExcel, opened in Excel:
 
 </details>
 
+## Docs
+
+- [Usage Guide](docs/USAGE.en.md): full API reference and examples
+- [Changelog](docs/CHANGELOG.md): version history
+- [中文 README](README.md)
+
 ## Features
 
 - Zero dependencies, built only on the .NET base class library, ready to use on reference with no extra native components in the deploy package.
 - Targets net48 and net8.0, all public APIs are Native AOT / trim compatible, verified by a native executable.
 - One object model across five formats; the same code with a different format argument writes xls or csv.
 - Covers common office needs: styles, number formats, merge, filter, row/column sizing, comments, data validation, hyperlinks, freeze panes, images, conditional formatting, tables, named ranges, formulas, file passwords, large-file streaming.
-- Open-then-save preserves untouched parts; macros, charts, and pivot tables pass through for xlsx / xlsm / xlsb.
+- Open-then-save preserves untouched parts; macros, charts, pivot tables, the data model, and external connections pass through for xlsx / xlsm / xlsb.
 - File-level security: open and modify passwords, sheet and workbook protection with optional password.
 - Streaming read and write keep memory flat for large files.
 - When writing to xls / xlsb / csv, capabilities the target format lacks are reported item by item, never silently dropped.
@@ -91,20 +92,23 @@ Legend: ☑️ supported · ❌ not supported · text in a cell means partial su
 | Cell read/write | ☑️ | ☑️ | ☑️ | ☑️ | text only |
 | Styles & number formats | ☑️ | ☑️ | number format only | number format only | ❌ |
 | Layout (merge / row height / column width) | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Auto filter | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Comments | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Data validation | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Auto filter | ☑️ | ☑️ | range read/write | ❌ | ❌ |
+| Comments | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Data validation | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Tables | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Named ranges | ☑️ | ☑️ | read only | read only | ❌ |
 | Hyperlinks | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Freeze panes | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Images | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Conditional formatting | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Tables | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| Formulas | ☑️ | ☑️ | read only | read only | ❌ |
+| Images | ☑️ | ☑️ | floating write | ❌ | ❌ |
+| Conditional formatting | ☑️ | ☑️ | all types written | ❌ | ❌ |
+| Sheet visibility / tab color | ☑️ | ☑️ | visibility yes | visibility yes | ❌ |
+| Formulas | ☑️ | ☑️ | basic read/write | basic read/write | ❌ |
 | File passwords | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Charts / pivot tables | passthrough | passthrough | passthrough | ❌ | ❌ |
-| Large-file streaming | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| Large-file streaming read | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| Large-file streaming write | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 
-> The full 26-item breakdown is in the [usage guide §20.1](docs/USAGE.en.md#201-format-capability-matrix).
+> The full breakdown is in the [usage guide §20.1](docs/USAGE.en.md#201-format-capability-matrix).
 
 ## Compatibility
 
@@ -121,15 +125,13 @@ Legend: ☑️ supported · ❌ not supported · text in a cell means partial su
 
 ## Run the Demo
 
-The repo ships a console sample with 31 demos covering read/write, styles, filters, comments, encryption, images, conditional formatting, and more. From the repo root:
+The repo ships a console sample with 33 demos covering read/write, styles, filters, comments, encryption, images, conditional formatting, row/column insert-delete, formula write-back, and more. From the repo root:
 
 ```powershell
 dotnet run --project demo/LiteExcel.Demo
 ```
 
 Output goes to an `Output` folder under the program directory; the console prints the full path.
-
-
 
 ## License
 

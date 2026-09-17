@@ -155,7 +155,10 @@ internal static class XlsBackend
             i++;
             var sheet = ParseSheet(records, ref i, sst, formats, xfIfmt, date1904);
             if (result.Count < boundSheets.Count)
+            {
                 sheet.SheetName = boundSheets[result.Count].Name;
+                sheet.SheetState = SheetVisibilityMap.ToOoxml(SheetVisibilityMap.FromBiff(boundSheets[result.Count].Type));
+            }
             result.Add(sheet);
         }
 
@@ -164,14 +167,13 @@ internal static class XlsBackend
         return result;
     }
 
-    // ── 全局记录 ──
-
     private static (string Name, byte Type) ParseBoundSheet(byte[] d)
     {
         // lbPlyPos(4) grbit(2) cch(1) grbit(1) name
         if (d.Length < 8) return ("", 0);
         int cch = d[6];
         bool highByte = (d[7] & 0x01) != 0;
+        byte hsState = (byte)(d[4] & 0x03); // grbit 低 2 位 = 可见性
         string name;
         if (highByte)
         {
@@ -183,10 +185,8 @@ internal static class XlsBackend
             int bytes = Math.Min(cch, d.Length - 8);
             name = Latin1.GetString(d, 8, bytes);
         }
-        return (name, 0);
+        return (name, hsState);
     }
-
-    // ── 命名区域（DEFINEDNAME / EXTERNSHEET）──
 
     /// <summary>EXTERNSHEET 记录：cXTI(2) + 每项 iSupBook(2) itabFirst(2) itabLast(2)。收集 itabFirst 序列（ixti → itab）。</summary>
     private static void ParseExternSheet(byte[] d, List<int> externSheets)
@@ -361,8 +361,6 @@ internal static class XlsBackend
             sst.Add(s);
         }
     }
-
-    // ── 工作表子流 ──
 
     private static SheetData ParseSheet(List<BiffRecords.Record> records, ref int i,
         List<string> sst, Dictionary<int, string> formats, List<int> xfIfmt, bool date1904)
@@ -780,8 +778,6 @@ internal static class XlsBackend
 
         PutCell(cells, d, 0, 2, -1, (r, c, dd) => cell, ref maxRow, ref maxCol);
     }
-
-    // ── 单元格类型辅助 ──
 
     private static Cell CellFromNumber(double val, int ixfe, List<int> xfIfmt,
         Dictionary<int, string> formats, bool date1904)

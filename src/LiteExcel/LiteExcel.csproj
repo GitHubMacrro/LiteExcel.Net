@@ -8,7 +8,7 @@
     <AssemblyName>LiteExcel</AssemblyName>
     <RootNamespace>LiteExcel</RootNamespace>
     <PackageId>LiteExcel</PackageId>
-    <Version>2.4.76</Version>
+    <Version>2.4.78</Version>
     <Authors>JackZ</Authors>	  
     <Description>轻量级 xlsx/xlsm/xlsb/xls/csv 读写库：文件级密码（打开/修改）、超链接、冻结窗格、图片（浮动/单元格内嵌/锚点/AltText），零第三方依赖，AOT 友好，支持 net48 和 net8.0。</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -36,7 +36,6 @@
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" Condition="Exists('..\..\README.md')" />
-    <None Include="..\..\README.zh-CN.md" Pack="true" PackagePath="\" Condition="Exists('..\..\README.zh-CN.md')" />
     <None Include="..\..\README.en.md" Pack="true" PackagePath="\" Condition="Exists('..\..\README.en.md')" />
     <None Include="..\..\docs\USAGE.zh-CN.md" Pack="true" PackagePath="docs\" Condition="Exists('..\..\docs\USAGE.zh-CN.md')" />
     <None Include="..\..\docs\USAGE.en.md" Pack="true" PackagePath="docs\" Condition="Exists('..\..\docs\USAGE.en.md')" />

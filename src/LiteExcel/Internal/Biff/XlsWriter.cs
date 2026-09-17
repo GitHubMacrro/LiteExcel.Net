@@ -120,6 +120,8 @@ internal static class XlsWriter
                 Report(DegradationCapability.Tables, $"xls 不支持超级表，工作表 '{sheet.SheetName}' 的超级表已丢弃。");
             if (ExeedsBiff8Limits(sheet))
                 Report(DegradationCapability.SheetSize, $"工作表 '{sheet.SheetName}' 的数据超出 xls 格式上限（最多 256 列 / 65536 行），超界部分已裁剪。");
+            if (!string.IsNullOrEmpty(sheet.TabColor))
+                Report(DegradationCapability.SheetVisibility, $"xls 不支持工作表标签颜色（tabColor），工作表 '{sheet.SheetName}' 的标签颜色已丢弃。");
         }
     }
 
@@ -164,7 +166,6 @@ internal static class XlsWriter
 
     private static byte[] BuildWorkbookStream(IReadOnlyList<SheetData> sheets, bool date1904)
     {
-        // ── 预扫描：SST 唯一字符串、格式→XF 表 ──
         var sst = new List<string>();
         var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         var formats = new List<string>(); // formats[k] -> ifmt = 164 + k，cell XF 索引 = 16 + k
@@ -204,7 +205,6 @@ internal static class XlsWriter
                 foreach (var cell in row)
                     ScanCell(cell);
 
-        // ── 全局子流（BOUNDSHEET 位置先占位 0，随后原地打补丁） ──
         // 记录顺序与内容对齐 Excel/SheetJS 写出
         var global = new MemoryStream();
         var boundFieldOffsets = new int[sheets.Count];
@@ -250,7 +250,8 @@ internal static class XlsWriter
         for (int i = 0; i < sheets.Count; i++)
         {
             boundFieldOffsets[i] = (int)global.Position + 4; // 记录头(4) 之后即 lbPlyPos
-            WriteRecord(global, OpBoundSheet, BoundSheet(sheets[i].SheetName, 0));
+            WriteRecord(global, OpBoundSheet, BoundSheet(sheets[i].SheetName, 0,
+                SheetVisibilityMap.ToBiff(SheetVisibilityMap.FromOoxml(sheets[i].SheetState))));
         }
 
         WriteRecord(global, OpCountry, new byte[] { 1, 0, 1, 0 });
@@ -259,7 +260,6 @@ internal static class XlsWriter
 
         var globalBytes = global.ToArray();
 
-        // ── 各工作表子流 ──
         var sheetBytes = new byte[sheets.Count][];
         int sheetStart = globalBytes.Length;
         var positions = new int[sheets.Count];
@@ -270,7 +270,6 @@ internal static class XlsWriter
             sheetStart += sheetBytes[i].Length;
         }
 
-        // ── 原地打补丁：BOUNDSHEET 位置 ──
         for (int i = 0; i < sheets.Count; i++)
             WriteU32(globalBytes, boundFieldOffsets[i], (uint)positions[i]);
 
@@ -599,8 +598,6 @@ internal static class XlsWriter
         }
     }
 
-    // ── 记录体构造 ──
-
     /// <summary>
     /// BIFF8 FORMULA (0x0006) 记录：rw(2) + col(2) + ixfe(2) + value(8) + grbit(2) + chn(4) + cce(2) + RPN。
     /// value 根据结果类型：数字=8字节double，布尔/错误=FF FF type(1) val(1) 00..00，空=FF FF 03 00..00。
@@ -679,15 +676,15 @@ internal static class XlsWriter
         return d;
     }
 
-    private static byte[] BoundSheet(string name, int position)
+    private static byte[] BoundSheet(string name, int position, int hsState = 0)
     {
-        // BIFF8 下表名恒以 Unicode 写出（对齐 Excel/SheetJS）
+        // BIFF8 表名按 Unicode 写入（对齐 Excel/SheetJS）
         var nameData = Encoding.Unicode.GetBytes(name);
         var d = new byte[8 + nameData.Length];
         WriteU32(d, 0, (uint)position);          // lbPlyPos
-        WriteU16(d, 4, 0);                       // grbit（可见）
+        WriteU16(d, 4, (ushort)(hsState & 0x0003)); // grbit 低 2 位 = hsState（0/1/2）
         d[6] = (byte)name.Length;                // cch
-        d[7] = 0x01;                             // grbit（高字节 = Unicode）
+        d[7] = 0x01;                             // grbit 高字节 = Unicode 标记
         Array.Copy(nameData, 0, d, 8, nameData.Length);
         return d;
     }
@@ -884,8 +881,6 @@ internal static class XlsWriter
         return d;
     }
 
-    // ── 基础写入 ──
-
     private static void WriteRecord(MemoryStream ms, ushort opcode, byte[] data)
     {
         ms.WriteByte((byte)(opcode & 0xFF));
@@ -900,8 +895,6 @@ internal static class XlsWriter
         d[offset] = (byte)v;
         d[offset + 1] = (byte)(v >> 8);
     }
-
-    // ── 批注记录组 ──
 
     /// <summary>
     /// 写出 BIFF8 批注记录组：MSODRAWING + OBJ + TXO + CONTINUE(文本) + CONTINUE(格式) + NOTE。
@@ -1047,8 +1040,6 @@ internal static class XlsWriter
         note[8 + author.Length] = 0x00; // null terminator
         return note;
     }
-
-    // ── Office Drawing 原子记录写入 ──
 
     private static void WriteDrawingAtom(MemoryStream ms, int ver, int instance, int type, byte[] data)
         => WriteDrawingRecord(ms, ver, instance, type, data);

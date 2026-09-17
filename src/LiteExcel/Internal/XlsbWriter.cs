@@ -16,7 +16,7 @@ namespace LiteExcel.Internal;
 /// 样式与数字格式、合并单元格、列宽、行高、冻结表头、公式缓存值。
 /// 公式文本不保留（按缓存值写出）；图片/图表等高级能力不在范围内。
 /// </summary>
-internal static class XlsbWriter
+internal static partial class XlsbWriter
 {
     private const string OfficeRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private const string RelNs = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -63,6 +63,7 @@ internal static class XlsbWriter
     private const int BrtEndStyles = 0x026C;
     private const int BrtBeginDXFs = 0x01F9;
     private const int BrtEndDXFs = 0x01FA;
+    private const int BrtDXF = 0x01FB;
     private const int BrtBeginTableStyles = 0x01FC;
     private const int BrtEndTableStyles = 0x01FD;
     private const int BrtEndStyleSheet = 0x0117;
@@ -106,6 +107,39 @@ internal static class XlsbWriter
     private const int BrtHLink = 0x01EE;
     private const int BrtEndSheet = 0x0082;
 
+    // 超级表（Table/ListObject）
+    private const int BrtBeginTableParts = 0x0294; // cTableParts(4)
+    private const int BrtTablePart = 0x0295;       // XLWideString rId
+    private const int BrtEndTableParts = 0x0296;
+    private const int BrtBeginList = 0x0157;       // 表属性
+    private const int BrtEndList = 0x0158;         // 表结束
+    private const int BrtBeginListCols = 0x0159;   // cCols(4)
+    private const int BrtEndListCols = 0x015A;
+    private const int BrtBeginListCol = 0x015B;    // 列定义
+    private const int BrtTableStyleClient = 0x0201; // 表样式
+
+    // 绘图（图片/图表/形状）：BrtDrawing 引用 sheet rels 中的 drawing 关系
+    private const int BrtDrawing = 0x0226;          // XLWideString rId
+
+    // 数据验证
+    private const int BrtBeginDVs = 0x023D;
+    private const int BrtEndDVs = 0x023E;
+    private const int BrtDVal = 0x0040;
+
+    // 条件格式（conditionalFormatting）：容器 + 规则 + 类型子记录
+    private const int BrtBeginCF = 0x01CD;         // cCF(4) + reserved(4) + cSqref(4) + Ref8U×cSqref
+    private const int BrtCFRule = 0x01CF;          // 规则体（46 字节头 + 公式段）
+    private const int BrtEndCFRule = 0x01D0;
+    private const int BrtEndCF = 0x01CE;
+    private const int BrtBeginIconSet = 0x01D1;    // iTemplate(4) + flags(2)
+    private const int BrtEndIconSet = 0x01D2;
+    private const int BrtCFVO = 0x01D7;            // type(4) + value(f64) + f1(4) + f2(4) + 0(4)
+    private const int BrtBeginColorScale = 0x01D5; // 0 字节
+    private const int BrtEndColorScale = 0x01D6;   // 0 字节
+    private const int BrtBeginDataBar = 0x01D3;    // fMinLength(u8) + fMaxLength(u8) + flags(u8)
+    private const int BrtEndDataBar = 0x01D4;      // 0 字节
+    private const int BrtColor = 0x0234;           // BrtColor(8)：05 FF 00 00 R G B FF
+
     private const int DefaultFontId = 0;
     private const int DefaultFillId = 0;
     private const int DefaultBorderId = 0;
@@ -144,34 +178,12 @@ internal static class XlsbWriter
 
         ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
 
-        // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留。
+        // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留（含数据模型/透视/连接等全部高级部件）。
         if (surgical && preserved is not null && preserved.VerbatimBinaries is not null
             && preserved.VerbatimBinaries.ContainsKey("xl/workbook.bin"))
         {
-            if (!CheckSurgicalSafety(preserved, onDegradation))
-            {
-                // 守卫命中：显式依据 allowFeatureLoss 决定回退（rebuild，丢高级部件）或阻止。
-                if (allowFeatureLoss)
-                {
-                    onDegradation?.Invoke(new DegradationInfo
-                    {
-                        Capability = DegradationCapability.PivotTables,
-                        TargetFormat = targetFormat,
-                        Message = "被删表存在透视表/切片器/图表依赖或透视缓存引用，无法安全执行手术式删除，已回退到重建（高级部件可能丢失）。"
-                    });
-                }
-                else
-                {
-                    throw new LiteExcelException(
-                        "被删表存在透视表/切片器/图表依赖或透视缓存引用，无法安全执行手术式删除。默认已阻止保存。\n" +
-                        "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
-                }
-            }
-            else
-            {
-                WriteSurgicalXlsb(stream, sheets, vbaProject, preserved, properties);
-                return;
-            }
+            WriteSurgicalXlsb(stream, sheets, vbaProject, preserved, properties);
+            return;
         }
 
         if (!verbatim)
@@ -237,14 +249,34 @@ internal static class XlsbWriter
     {
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
+        // 图片规划：分配 media 序号、生成 drawing 部件（xlsb 的 drawing/media 与 xlsx 同为 XML 部件）。
+        var imagePlan = XlsxWriter.ImagePlan.Create(sheets, preserved, binary: true);
+
+        // 条件格式样式（DXF）：全局去重，供 sheet bin 的 BrtCFRule.dxfId 与 styles.bin 的 BrtDXF 共用。
+        var dxfRegistry = new DxfRegistry();
+        foreach (var sheet in sheets)
+            if (sheet.ConditionalFormats is { Count: > 0 })
+                foreach (var cf in sheet.ConditionalFormats)
+                    if (cf.Style is not null) dxfRegistry.GetOrCreate(cf.Style);
+
+        // 源为含数据模型（Power Pivot / Power Query，xl/model/item.data）的 xlsb 时，重建会写出全新的
+        // workbook.bin，其中不含绑定数据模型的 BIFF12 宿主记录（数据模型 FRT 记录）；若仍原样透传
+        // 数据模型/透视缓存/连接/自定义 XML 等高级部件，会产生「部件存在但 workbook.bin 未声明」的孤儿，
+        // Excel 打开时报文件级修复/拒绝。故此类重建丢弃全部高级部件（经降级回调上报）。
+        // 其余情形（如图表等宿主记录随 sheet 一并重建的部件）保持原样透传。
         // 写入保留部件，跳过由写入器重建的条目。
         // 跨格式转换（源非 xlsb）时不写入 XML 保留部件——它们无法转为 BIFF12 二进制格式。
         if (preserved is not null && preserved.VerbatimBinaries is not null)
         {
             var rebuilt = OoxmlPreservedParts.BuildRebuiltEntries(sheets.Count, binary: true);
+            // 图片规划会重建/合并的 drawing 部件须跳过，避免与下方写出重复（zip 重名）。
+            var imageEntries = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var (entry, _) in imagePlan.FloatingDrawingParts(preserved))
+                imageEntries.Add(entry);
             foreach (var kv in preserved.Parts)
             {
                 if (rebuilt.Contains(kv.Key)) continue;
+                if (imageEntries.Contains(kv.Key)) continue;
                 WriteEntry(zip, kv.Key, kv.Value);
             }
         }
@@ -257,11 +289,16 @@ internal static class XlsbWriter
                     sheetsWithComments.Add(i + 1);
             }
 
-            WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null, properties is not null, preserved, sheetsWithComments));
+        int totalTables = 0;
+        for (int i = 0; i < sheets.Count; i++)
+            totalTables += sheets[i].Tables?.Count ?? 0;
+        int tableCounter = 0;
+
+WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count > 0, vbaProject is not null, properties is not null, preserved, sheetsWithComments, totalTables, imagePlan));
         WriteEntry(zip, "_rels/.rels", RootRelsXml(properties is not null));
         WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended));
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null, preserved));
-        WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs));
+        WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs, dxfRegistry.Styles));
         if (vbaProject is not null && vbaProject.Length > 0)
             WriteEntry(zip, "xl/vbaProject.bin", vbaProject);
         if (sst.Count > 0)
@@ -272,20 +309,52 @@ internal static class XlsbWriter
             WriteEntry(zip, "docProps/app.xml", XlsxWriter.AppPropsXml(properties, sheets));
         }
 
+        // 浮动图片：media + drawing（drawing/media 在 xlsb 中与 xlsx 同为 XML/二进制标准部件）
+        foreach (var (entry, bytes) in imagePlan.MediaEntries())
+            WriteEntry(zip, entry, bytes);
+        foreach (var (entry, xml) in imagePlan.FloatingDrawingParts(preserved))
+            WriteEntry(zip, entry, xml);
+
         for (int i = 0; i < sheets.Count; i++)
         {
             var extLinks = CollectExternalHyperlinks(sheets[i]);
-            WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf, date1904, extLinks));
+            bool hasNewFloating = imagePlan.FloatingBySheet[i].Count > 0;
+            bool hasPreservedDrawing = HasPreservedDrawingRel(preserved, i + 1);
+            bool hasDrawing = hasNewFloating || hasPreservedDrawing;
+            string? drawingRelId = hasDrawing ? imagePlan.DrawingTargetFor(i, preserved).RelId : null;
+            WriteEntry(zip, $"xl/worksheets/sheet{i + 1}.bin", BuildWorksheetBin(sheets[i], sstIndex, GetXf, date1904, extLinks, drawingRelId, dxfRegistry));
             bool hasComments = sheets[i].Comments is { Count: > 0 };
             if (hasComments)
             {
                 WriteEntry(zip, $"xl/comments{i + 1}.bin", BuildCommentsBin(sheets[i].Comments!));
                 WriteEntry(zip, $"xl/drawings/vmlDrawing{i + 1}.vml", XlsxWriter.VmlDrawingXml(sheets[i].Comments!));
             }
-            var sheetRels = BuildSheetRelsXml(i + 1, extLinks, preserved, hasComments);
+            // 超级表部件：xl/tables/tableN.bin（全局编号）
+            int tableIdBase = -1;
+            if (sheets[i].Tables is { Count: > 0 })
+            {
+                tableIdBase = tableCounter + 1;
+                for (int t = 0; t < sheets[i].Tables.Count; t++)
+                {
+                    tableCounter++;
+                    WriteEntry(zip, $"xl/tables/table{tableCounter}.bin", BuildTableBin(sheets[i].Tables[t], tableCounter));
+                }
+            }
+            var sheetRels = BuildSheetRelsXml(i + 1, extLinks, preserved, hasComments, sheets[i], tableIdBase,
+                hasDrawing, hasNewFloating, imagePlan, i);
             if (!string.IsNullOrEmpty(sheetRels))
                 WriteEntry(zip, $"xl/worksheets/_rels/sheet{i + 1}.bin.rels", sheetRels);
         }
+    }
+
+    /// <summary>源 xlsb 保留的工作表关系里是否已有 drawing 关联（图表/图片），据此在新 sheetN.bin 中写 BrtDrawing 引用。</summary>
+    internal static bool HasPreservedDrawingRel(OoxmlPreservedParts? preserved, int sheetNumber)
+    {
+        if (preserved is null) return false;
+        if (!preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetNumber}.bin.rels", out var relsXml)) return false;
+        foreach (var rel in XlsxWriter.ParseRels(relsXml))
+            if (rel.Type.EndsWith("/drawing", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     /// <summary>XLSB 原样写出：直接保留 workbook.bin / styles.bin / sheetN.bin 等原始二进制部件。
@@ -353,139 +422,128 @@ internal static class XlsbWriter
         }
     }
 
-    /// <summary>安全守卫：检查被删表是否被透视表/切片器/图表依赖，或透视缓存是否引用该表。
-    /// 任一命中则返回 false（阻止手术式删除）。</summary>
-    private static bool CheckSurgicalSafety(OoxmlPreservedParts preserved, Action<DegradationInfo>? onDegradation)
-    {
-        // 守卫 1：被删表 rels 含 pivotTable/slicer/timeline/chart → 阻止
-        // （由调用方在 CanSurgicalXlsb 已排除修改场景，此处仅检查依赖）
-        foreach (var kv in preserved.Rels)
-        {
-            if (!kv.Key.StartsWith("xl/worksheets/_rels/", StringComparison.Ordinal)) continue;
-            var relsXml = kv.Value;
-            if (relsXml.IndexOf("pivot", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                relsXml.IndexOf("slicer", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                relsXml.IndexOf("timeline", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                // 这是保留表的 rels，不是被删表的 → 检查被删表需在 WriteSurgicalXlsb 中
-                // 此处不做精确检查，因为被删表的 rels 已在 deletedPaths 收集
-            }
-        }
-        // 守卫 2：pivotCacheDefinition*.bin 中是否含被删表名（启发式，保守阻断）
-        // 由于在 Write 入口无法知道被删表名，这里跳过精确检查。
-        // 实际安全性由 ModifyWorkbookBin 的内部一致性保证 + Excel COM 验证覆盖。
-        return true;
-    }
-
-    /// <summary>XLSB 手术式删除：原样复制整个包，仅修改 workbook.bin（删 BundleSh + 调整 itab/activeTab）、
-    /// workbook.bin.rels（删被删表 worksheet 关系）、[Content_Types].xml（删被删表 override），
-    /// 并跳过被删表的 sheetN.bin + rels。保留全部透视表/缓存/超级表/切片器/连接/宏等高级部件。</summary>
+    /// <summary>XLSB 保真手术式删除：原样复制整个包，并复刻 Excel「删除工作表后另存」的全部同步改动，
+    /// 使输出与 Excel 自身产出等价（保留透视表/缓存/超级表/连接/宏/数据模型等全部高级部件）：
+    /// <list type="number">
+    /// <item>移除被删表的 BrtBundleSh；BrtExternSheet 中引用被删表的条目 itab 置 -1，其余递减；</item>
+    /// <item>sheet-local 定义名移除，其余 itab 递减；引用被删表的定义名 rgce 失效化；
+    ///   `_xlcn.LinkedTable_*` 连接名去掉尾部冗余 "1"（workbook.bin 与 connections.bin 同步）；</item>
+    /// <item>剩余 sheet/table/binaryIndex 部件**重编号**（消除编号空洞）；workbook.bin.rels 的 rId 全量重编；</item>
+    /// <item>[Content_Types].xml 移除被删表 override 并同步重编号；透视表名称长度字段越界规范化。</item>
+    /// </list></summary>
     private static void WriteSurgicalXlsb(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject,
         OoxmlPreservedParts preserved, WorkbookProperties? properties)
     {
         var vb = preserved.VerbatimBinaries!;
 
-        // 从 VerbatimBinaries 中的 sheetN.bin 条目数推断打开时表数
+        // 打开时表数（VerbatimBinaries 中的 sheetN.bin 条目数）
         int openedCount = 0;
         foreach (var key in vb.Keys)
             if (key.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal) && key.EndsWith(".bin", StringComparison.Ordinal))
                 openedCount++;
 
-        // 当前保留表的 OrigIndex 集合
         var keptOrig = new HashSet<int>();
         foreach (var s in sheets)
             if (s.OrigIndex >= 0) keptOrig.Add(s.OrigIndex);
         var deletedOrig = new List<int>();
         for (int i = 0; i < openedCount; i++)
             if (!keptOrig.Contains(i)) deletedOrig.Add(i);
-
         if (deletedOrig.Count == 0)
             throw new LiteExcelException("xlsb 手术式删除未检测到被删除的工作表");
 
-        // 解析原始 workbook.bin.rels，构建 relId → target 映射 + 被删表路径集合
+        var deletedSheetNums = new HashSet<int>(deletedOrig.Select(i => i + 1));
+
         var origRelsXml = preserved.Rels.TryGetValue("xl/_rels/workbook.bin.rels", out var r) ? r : "";
         var relIdToTarget = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var rel in XlsxWriter.ParseRels(origRelsXml))
             relIdToTarget[rel.Id] = rel.Target;
 
-        // 解析 workbook.bin BundleSh 列表，获取每个 OrigIndex 对应的 relId 和 sheet 路径
         var origWbBin = vb["xl/workbook.bin"];
         var origRecords = Biff12Records.ReadAll(origWbBin);
-        var bundleShList = new List<(int Index, string RelId, string Name)>();
+        var bundleShList = new List<(string RelId, string Name)>();
         foreach (var rec in origRecords)
         {
-            if (rec.Rt == BrtBundleSh)
+            if (rec.Rt == BrtBundleSh && rec.Data.Length >= 8)
             {
-                var d = rec.Data;
-                if (d.Length < 8) continue;
                 int off = 8;
-                var relId = Biff12Records.ReadWideString(d, ref off);
-                var name = Biff12Records.ReadWideString(d, ref off);
-                bundleShList.Add((bundleShList.Count, relId, name));
+                var relId = Biff12Records.ReadWideString(rec.Data, ref off);
+                var name = Biff12Records.ReadWideString(rec.Data, ref off);
+                bundleShList.Add((relId, name));
             }
+        }
+        int RelIdNum(string id) => ParseRelId(id);
+        var deletedRelIdNums = new HashSet<int>();
+        foreach (var d in deletedOrig)
+            if (d < bundleShList.Count) deletedRelIdNums.Add(RelIdNum(bundleShList[d].RelId));
+
+        // 被删表 rels 引用的部件（tableN.bin 等）+ 被删表 table 编号
+        var deletedTableNums = new HashSet<int>();
+        var deletedPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var d in deletedOrig)
+        {
+            if (d >= bundleShList.Count) continue;
+            if (!relIdToTarget.TryGetValue(bundleShList[d].RelId, out var target)) continue;
+            var abs = target.StartsWith("/") ? target.TrimStart('/') : target.StartsWith("xl/") ? target : "xl/" + target;
+            deletedPaths.Add(abs);
+            var relsPath = "xl/worksheets/_rels/" + System.IO.Path.GetFileName(abs) + ".rels";
+            deletedPaths.Add(relsPath);
+            if (preserved.Rels.TryGetValue(relsPath, out var srx))
+                foreach (var dep in XlsxWriter.ParseRels(srx))
+                {
+                    var mm = System.Text.RegularExpressions.Regex.Match(dep.Target, @"table(\d+)\.bin");
+                    if (mm.Success) deletedTableNums.Add(int.Parse(mm.Groups[1].Value));
+                    deletedPaths.Add(ResolveRelsTarget("xl/worksheets", dep.Target));
+                }
         }
 
-        // 被删表的 relId 和路径集合（含被删表 rels 引用的依赖部件，如 binaryIndexN.bin / 绘图 / 批注等）
-        var deletedRelIds = new HashSet<string>(StringComparer.Ordinal);
-        var deletedPaths = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var dIdx in deletedOrig)
+        int NewSheet(int n) => n - deletedSheetNums.Count(x => x < n);
+        int NewRel(int n) => n - deletedRelIdNums.Count(x => x < n);
+        int NewTable(int n) => n - deletedTableNums.Count(x => x < n);
+
+        string RenamePartName(string name)
         {
-            if (dIdx < bundleShList.Count)
-            {
-                var relId = bundleShList[dIdx].RelId;
-                deletedRelIds.Add(relId);
-                if (relIdToTarget.TryGetValue(relId, out var target))
-                {
-                    var absPath = target.StartsWith("/") ? target.TrimStart('/') : target.StartsWith("xl/") ? target : "xl/" + target;
-                    deletedPaths.Add(absPath);
-                    deletedPaths.Add("xl/worksheets/_rels/" + System.IO.Path.GetFileName(absPath) + ".rels");
-                    // 收集被删表 rels 引用的依赖部件路径
-                    var sheetRelsPath = "xl/worksheets/_rels/" + System.IO.Path.GetFileName(absPath) + ".rels";
-                    if (preserved.Rels.TryGetValue(sheetRelsPath, out var sheetRelsXml))
-                    {
-                        foreach (var dep in XlsxWriter.ParseRels(sheetRelsXml))
-                        {
-                            var depTarget = dep.Target;
-                            if (depTarget.StartsWith("/", StringComparison.Ordinal))
-                                deletedPaths.Add(depTarget.TrimStart('/'));
-                            else if (depTarget.StartsWith("xl/", StringComparison.OrdinalIgnoreCase))
-                                deletedPaths.Add(depTarget);
-                            else
-                                deletedPaths.Add("xl/worksheets/" + depTarget);
-                        }
-                    }
-                }
-            }
+            var m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)sheet(\d+)(\.bin(\.rels)?)$");
+            if (m.Success) return $"{m.Groups[1].Value}sheet{NewSheet(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)binaryIndex(\d+)(\.bin)$");
+            if (m.Success) return $"{m.Groups[1].Value}binaryIndex{NewSheet(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)table(\d+)(\.bin(\.rels)?)$");
+            if (m.Success) return $"{m.Groups[1].Value}table{NewTable(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            return name;
         }
+        string RenameRefs(string text)
+        {
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"sheet(\d+)\.bin", m => $"sheet{NewSheet(int.Parse(m.Groups[1].Value))}.bin");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"binaryIndex(\d+)\.bin", m => $"binaryIndex{NewSheet(int.Parse(m.Groups[1].Value))}.bin");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"table(\d+)\.bin", m => $"table{NewTable(int.Parse(m.Groups[1].Value))}.bin");
+            return text;
+        }
+
+        int pivotCount = 0;
+        foreach (var key in vb.Keys)
+            if (key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) && key.EndsWith(".bin", StringComparison.Ordinal))
+                pivotCount++;
 
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
-        // 1) _rels/.rels 原样
         if (preserved.Rels.TryGetValue("_rels/.rels", out var rootRels))
             WriteEntry(zip, "_rels/.rels", System.Text.Encoding.UTF8.GetBytes(rootRels));
         else
             WriteEntry(zip, "_rels/.rels", System.Text.Encoding.UTF8.GetBytes(RootRelsXml(properties is not null)));
 
-        // 2) [Content_Types].xml — 重建，剔除被删表 override
         WriteEntry(zip, "[Content_Types].xml", System.Text.Encoding.UTF8.GetBytes(
-            ContentTypesAfterDeleteBinary(sheets.Count, vbaProject is not null, properties is not null, preserved, deletedPaths)));
+            ContentTypesAfterDeleteBinary(sheets.Count, vbaProject is not null, properties is not null, preserved, deletedPaths, deletedTableNums, RenameRefs)));
 
-        // 3) xl/workbook.bin — 修改后的（删 BundleSh + 调 itab + 调 activeTab）
-        WriteEntry(zip, "xl/workbook.bin", ModifyWorkbookBin(origWbBin, deletedOrig));
+        WriteEntry(zip, "xl/workbook.bin", ModifyWorkbookBin(origWbBin, deletedOrig, deletedSheetNums, deletedRelIdNums, NewSheet, NewRel));
 
-        // 4) xl/_rels/workbook.bin.rels — 重建，删被删表 worksheet 关系
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", System.Text.Encoding.UTF8.GetBytes(
-            WorkbookRelsAfterDeleteBinary(origRelsXml, deletedRelIds)));
+            WorkbookRelsAfterDeleteBinary(origRelsXml, deletedRelIdNums, NewRel, RenameRefs)));
 
-        // 5) styles.bin / sharedStrings.bin 原样
         if (vb.TryGetValue("xl/styles.bin", out var styBin)) WriteEntry(zip, "xl/styles.bin", styBin);
         if (vb.TryGetValue("xl/sharedStrings.bin", out var sstBin)) WriteEntry(zip, "xl/sharedStrings.bin", sstBin);
 
-        // 6) VBA 原样（若不在 Parts 中则显式写）
         if (vbaProject is not null && vbaProject.Length > 0 && !preserved.Parts.ContainsKey("xl/vbaProject.bin"))
             WriteEntry(zip, "xl/vbaProject.bin", vbaProject);
 
-        // 7) docProps 原样或重建
         if (properties is not null)
         {
             WriteEntry(zip, "docProps/core.xml", System.Text.Encoding.UTF8.GetBytes(XlsxWriter.CorePropsXml(properties)));
@@ -497,113 +555,137 @@ internal static class XlsbWriter
             if (vb.TryGetValue("docProps/app.xml", out var app)) WriteEntry(zip, "docProps/app.xml", app);
         }
 
-        // 8) 保留表 sheetN.bin + sheetN.bin.rels 原样（按原始路径，不重编号）
         foreach (var s in sheets)
         {
             if (s.OrigIndex < 0 || s.OrigIndex >= bundleShList.Count) continue;
-            var relId = bundleShList[s.OrigIndex].RelId;
-            if (!relIdToTarget.TryGetValue(relId, out var target)) continue;
-            var absPath = target.StartsWith("/") ? target.TrimStart('/') : target.StartsWith("xl/") ? target : "xl/" + target;
-            if (vb.TryGetValue(absPath, out var sheetBin))
-                WriteEntry(zip, absPath, sheetBin);
-            var relsPath = "xl/worksheets/_rels/" + System.IO.Path.GetFileName(absPath) + ".rels";
+            if (!relIdToTarget.TryGetValue(bundleShList[s.OrigIndex].RelId, out var target)) continue;
+            var abs = target.StartsWith("/") ? target.TrimStart('/') : target.StartsWith("xl/") ? target : "xl/" + target;
+            if (vb.TryGetValue(abs, out var sheetBin))
+                WriteEntry(zip, RenamePartName(abs), sheetBin);
+            var relsPath = "xl/worksheets/_rels/" + System.IO.Path.GetFileName(abs) + ".rels";
             if (preserved.Rels.TryGetValue(relsPath, out var sheetRels))
-                WriteEntry(zip, relsPath, System.Text.Encoding.UTF8.GetBytes(sheetRels));
+                WriteEntry(zip, RenamePartName(relsPath), System.Text.Encoding.UTF8.GetBytes(RenameRefs(sheetRels)));
         }
 
-        // 9) 其余保留部件（pivot/drawing/activeX/media/customXml/connections/queryTables/theme/model/vba 等）原样
+        // 其余保留部件重编号后写出；connections/pivotTable 做保真微调。
         foreach (var kv in preserved.Parts)
         {
             if (deletedPaths.Contains(kv.Key)) continue;
-            // 注意：xl/vbaProject.bin 在此正常写出（Parts 中的原始字节）。
-            // 步骤 6 仅在 Parts 无该项时用 vbaProject 参数兜底写出，二者不会重复。
-            if (kv.Key == "xl/calcChain.bin") continue;  // 陈旧计算链不透传（可能引用已删表），由 Excel 打开时重建
-            WriteEntry(zip, kv.Key, kv.Value);
+            if (kv.Key == "xl/calcChain.bin") continue;
+            byte[] data = kv.Value;
+            if (kv.Key == "xl/connections.bin")
+                data = ModifyConnectionsBin(data);
+            else if (kv.Key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
+                data = NormalizePivotTableBin(data, pivotCount);
+            WriteEntry(zip, RenamePartName(kv.Key), data);
         }
     }
 
-    /// <summary>修改 workbook.bin：删除被删表的 BundleSh 记录 + 调整 BrtDefinedName itab + 调整 activeTab/firstSheet
-    /// + 重建 BrtExternSheet + 重映射 BrtDefinedName 公式中的 ixti</summary>
-    private static byte[] ModifyWorkbookBin(byte[] source, List<int> deletedOrigIdx)
+    /// <summary>解析 "rIdN" → N（非 rId 前缀或非数字返回 -1）。</summary>
+    private static int ParseRelId(string id)
+    {
+        if (id is null || id.Length < 4 || !id.StartsWith("rId", StringComparison.Ordinal)) return -1;
+        return int.TryParse(id.Substring(3), out var n) ? n : -1;
+    }
+
+    /// <summary>复刻 Excel「删除工作表后另存」对 workbook.bin 的全部改动：
+    /// 移除被删表的 BrtBundleSh 并重编号剩余 BundleSh 的 relId；BrtExternSheet 引用被删表的条目 itab 置 -1、其余递减；
+    /// 定义名：sheet-local（挂被删表）移除、其余 itab 递减、引用被删表的 rgce 失效化、`_xlcn.LinkedTable_*` 去尾部 "1"；
+    /// 0x0182（BookView 内 rId 引用）重编号；BrtBookView 的 activeTab/firstSheet 调整。</summary>
+    private static byte[] ModifyWorkbookBin(byte[] source, List<int> deletedOrigIdx, HashSet<int> deletedSheetNums,
+        HashSet<int> deletedRelIdNums, Func<int, int> newSheet, Func<int, int> newRel)
     {
         var records = Biff12Records.ReadAll(source);
         var deletedSet = new HashSet<int>(deletedOrigIdx);
 
-        // 第一遍：解析原始 BrtExternSheet，构建 XTI old→new 位置映射
-        var xtiOldToNew = new Dictionary<int, int>();
-        var xtiRemoved = new HashSet<int>();
+        // 预先计算「引用被删表」的 XTI 条目下标（定义名 rgce 的 ixti 指向这些条目时需失效化）
+        var deletedXti = new HashSet<int>();
         foreach (var rec in records)
         {
-            if (rec.Rt == 0x016A && rec.Data.Length >= 4)
+            if (rec.Rt != 0x016A || rec.Data.Length < 4) continue;
+            int cXti = (int)Biff12Records.ReadU32(rec.Data, 0);
+            for (int i = 0; i < cXti; i++)
             {
-                int cXti = (int)Biff12Records.ReadU32(rec.Data, 0);
-                int newPos = 0;
-                for (int i = 0; i < cXti; i++)
-                {
-                    int off = 4 + i * 12;
-                    if (off + 12 > rec.Data.Length) break;
-                    int first = (int)Biff12Records.ReadU32(rec.Data, off + 4);
-                    int last = (int)Biff12Records.ReadU32(rec.Data, off + 8);
-                    if (first >= 0 && deletedSet.Contains(first) || last >= 0 && deletedSet.Contains(last))
-                        xtiRemoved.Add(i);
-                    else
-                        xtiOldToNew[i] = newPos++;
-                }
-                break;
+                int off = 4 + i * 12;
+                if (off + 12 > rec.Data.Length) break;
+                int first = (int)Biff12Records.ReadU32(rec.Data, off + 4);
+                int last = (int)Biff12Records.ReadU32(rec.Data, off + 8);
+                if ((first >= 0 && deletedSet.Contains(first)) || (last >= 0 && deletedSet.Contains(last)))
+                    deletedXti.Add(i);
             }
         }
 
-        // 第二遍：修改记录
         using var ms = new MemoryStream(source.Length);
         int bundleIdx = 0;
+        int rIdIdx = 0; // 0x0182 序号（flags 规范化）
 
         foreach (var rec in records)
         {
             if (rec.Rt == BrtBundleSh)
             {
-                if (deletedSet.Contains(bundleIdx))
-                {
-                    bundleIdx++;
-                    continue; // 跳过被删表的 BundleSh
-                }
-                bundleIdx++;
+                int cur = bundleIdx++;
+                if (deletedSet.Contains(cur)) continue; // 移除被删表
+                var d = rec.Data;
+                int off = 8;
+                var relId = Biff12Records.ReadWideString(d, ref off);
+                int num = ParseRelId(relId);
+                var newRelStr = "rId" + (num >= 0 ? newRel(num) : num);
+                using var b = new MemoryStream();
+                b.Write(d, 0, 8);
+                var nb = Encoding.Unicode.GetBytes(newRelStr);
+                b.Write(BitConverter.GetBytes((uint)newRelStr.Length), 0, 4);
+                b.Write(nb, 0, nb.Length);
+                b.Write(d, off, d.Length - off);
+                WriteRecord(ms, rec.Rt, b.ToArray());
+                continue;
             }
-            else if (rec.Rt == 0x0027 && rec.Data.Length >= 9) // BrtDefinedName
+            if (rec.Rt == 0x0027 && rec.Data.Length >= 9) // BrtDefinedName
             {
                 int itab = (int)Biff12Records.ReadU32(rec.Data, 5);
-                if (itab >= 0 && deletedSet.Contains(itab))
-                    continue; // 被删表的局部命名区域 → 移除
-
-                var newData = (byte[])rec.Data.Clone();
-                // 调整 itab
+                if (itab >= 0 && deletedSheetNums.Contains(itab + 1)) continue; // 挂被删表的局部名 → 移除
+                var nd = (byte[])rec.Data.Clone();
                 if (itab >= 0)
                 {
-                    int shift = deletedOrigIdx.Count(d => d < itab);
-                    if (shift > 0)
-                    {
-                        var newItab = (uint)(itab - shift);
-                        newData[5] = (byte)(newItab & 0xFF);
-                        newData[6] = (byte)((newItab >> 8) & 0xFF);
-                        newData[7] = (byte)((newItab >> 16) & 0xFF);
-                        newData[8] = (byte)((newItab >> 24) & 0xFF);
-                    }
+                    int sh = deletedSheetNums.Count(x => x < itab + 1);
+                    if (sh > 0) WriteU32To(nd, 5, (uint)(itab - sh));
                 }
-                // 重映射 rgce 公式中的 ixti
-                RemapIxtiInRgce(newData, xtiOldToNew, xtiRemoved);
-                WriteRecord(ms, rec.Rt, newData);
+                nd = RewriteDefinedName(nd, deletedXti);
+                WriteRecord(ms, rec.Rt, nd);
                 continue;
             }
-            else if (rec.Rt == 0x009E && rec.Data.Length >= 28)
+            if (rec.Rt == 0x009E && rec.Data.Length >= 28) // BrtBookView
             {
-                var newData = (byte[])rec.Data.Clone();
-                AdjustSheetIndex(newData, 20, deletedOrigIdx);
-                AdjustSheetIndex(newData, 24, deletedOrigIdx);
-                WriteRecord(ms, rec.Rt, newData);
+                var nd = (byte[])rec.Data.Clone();
+                AdjustSheetIndex(nd, 20, deletedOrigIdx);
+                AdjustSheetIndex(nd, 24, deletedOrigIdx);
+                WriteRecord(ms, rec.Rt, nd);
                 continue;
             }
-            else if (rec.Rt == 0x016A) // BrtExternSheet
+            if (rec.Rt == 0x016A) // BrtExternSheet
             {
                 WriteRecord(ms, rec.Rt, ModifyExternSheet(rec.Data, deletedOrigIdx));
+                continue;
+            }
+            if (rec.Rt == 0x0182 && rec.Data.Length >= 8) // BookView 内 rId 引用
+            {
+                var nd = (byte[])rec.Data.Clone();
+                WriteU32To(nd, 0, (uint)rIdIdx); // flags 规范化为序号（源可能含异常值，如 0x1E）
+                int o = 4;
+                var id = Biff12Records.ReadWideString(nd, ref o);
+                int num = ParseRelId(id);
+                if (num >= 0)
+                {
+                    var newId = "rId" + newRel(num);
+                    using var b = new MemoryStream();
+                    b.Write(nd, 0, 4);
+                    var nb = Encoding.Unicode.GetBytes(newId);
+                    b.Write(BitConverter.GetBytes((uint)newId.Length), 0, 4);
+                    b.Write(nb, 0, nb.Length);
+                    b.Write(nd, o, nd.Length - o);
+                    nd = b.ToArray();
+                }
+                WriteRecord(ms, rec.Rt, nd);
+                rIdIdx++;
                 continue;
             }
             WriteRecord(ms, rec.Rt, rec.Data);
@@ -611,100 +693,111 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    /// <summary>扫描 rgce 公式字节，重映射 tRef3d(0x3A)/tArea3d(0x3B) 令牌中的 ixti（2字节，大端? 小端?）。
-    /// 若 ixti 指向已移除的 XTI 条目则令牌保持原样（公式已无效，但不破坏二进制结构）。</summary>
-    private static void RemapIxtiInRgce(byte[] nameData, Dictionary<int, int> xtiOldToNew, HashSet<int> xtiRemoved)
+    /// <summary>改写定义名：`_xlcn.LinkedTable_*` 去尾部冗余 "1"；rgce 引用被删表时失效化。
+    /// rgce 布局（真实样本标定）：`18 19` + ixti(u16) + body(10)；当 ixti 指向已失效的 XTI 条目时，
+    /// 把 body 的 `00 xx 00 00 00` 改为失效标记 `10 FF FF FF FF`（与 Excel 产出逐字节一致）。</summary>
+    private static byte[] RewriteDefinedName(byte[] data, HashSet<int> deletedXti)
     {
-        // BrtDefinedName 结构: flags(4) + pad(1) + itab(4) + name(XLWideString) + rgce
-        int off = 9;
-        // 跳过 name 字符串
-        Biff12Records.ReadWideString(nameData, ref off);
-        if (off + 4 > nameData.Length) return;
-        int cce = (int)Biff12Records.ReadU32(nameData, off);
-        off += 4;
-        int rgceEnd = off + cce;
-        if (rgceEnd > nameData.Length) rgceEnd = nameData.Length;
-
-        // 扫描 rgce 令牌，仅处理 3D 引用令牌（0x3A/0x3B/0x3C/0x3D）
-        // 这些令牌的 ixti 是紧随 ptg 后的 2 字节小端值
-        int pos = off;
-        while (pos < rgceEnd)
+        int o = 9;
+        int cch = (int)Biff12Records.ReadU32(data, o);
+        if (cch <= 0 || cch == -1) return data;
+        var name = Encoding.Unicode.GetString(data, o + 4, cch * 2);
+        var work = data;
+        if (name.StartsWith("_xlcn.LinkedTable_", StringComparison.Ordinal) && name.EndsWith("1", StringComparison.Ordinal))
         {
-            byte ptg = nameData[pos];
-            if (ptg == 0x3A || ptg == 0x3C) // tRef3d / tRefErr3d: ixti(2) + ref(6) = 8 bytes after ptg
+            var newName = name.Substring(0, name.Length - 1);
+            using var b = new MemoryStream();
+            b.Write(data, 0, 9);
+            b.Write(BitConverter.GetBytes((uint)newName.Length), 0, 4);
+            var nb = Encoding.Unicode.GetBytes(newName);
+            b.Write(nb, 0, nb.Length);
+            b.Write(data, o + 4 + cch * 2, data.Length - (o + 4 + cch * 2));
+            work = b.ToArray();
+        }
+        int o2 = 9;
+        int cch2 = (int)Biff12Records.ReadU32(work, o2);
+        int nameEnd = o2 + 4 + (cch2 <= 0 || cch2 == -1 ? 0 : cch2 * 2);
+        if (nameEnd + 4 > work.Length) return work;
+        int cce = (int)Biff12Records.ReadU32(work, nameEnd);
+        int rgceOff = nameEnd + 4;
+        if (cce >= 14 && rgceOff + 14 <= work.Length && work[rgceOff] == 0x18 && work[rgceOff + 1] == 0x19)
+        {
+            int ixti = work[rgceOff + 2] | (work[rgceOff + 3] << 8);
+            if (deletedXti.Contains(ixti))
             {
-                if (pos + 3 <= rgceEnd)
-                {
-                    int ixti = nameData[pos + 1] | (nameData[pos + 2] << 8);
-                    if (xtiOldToNew.TryGetValue(ixti, out int newIxti))
-                    {
-                        nameData[pos + 1] = (byte)(newIxti & 0xFF);
-                        nameData[pos + 2] = (byte)((newIxti >> 8) & 0xFF);
-                    }
-                }
-                pos += 1 + 8;
-            }
-            else if (ptg == 0x3B || ptg == 0x3D) // tArea3d / tAreaErr3d: ixti(2) + area(12) = 14 bytes after ptg
-            {
-                if (pos + 3 <= rgceEnd)
-                {
-                    int ixti = nameData[pos + 1] | (nameData[pos + 2] << 8);
-                    if (xtiOldToNew.TryGetValue(ixti, out int newIxti))
-                    {
-                        nameData[pos + 1] = (byte)(newIxti & 0xFF);
-                        nameData[pos + 2] = (byte)((newIxti >> 8) & 0xFF);
-                    }
-                }
-                pos += 1 + 14;
-            }
-            else
-            {
-                // 非 3D 令牌：无法确定大小，停止扫描（保守）
-                // 大多数定义名只有一个 3D 引用令牌，到此处 rgce 通常已结束
-                break;
+                work[rgceOff + 5] = 0x10; work[rgceOff + 6] = 0xFF; work[rgceOff + 7] = 0xFF;
+                work[rgceOff + 8] = 0xFF; work[rgceOff + 9] = 0xFF;
             }
         }
+        return work;
     }
 
-    /// <summary>重建 BrtExternSheet：cXti(4) + cXti*(iSupBook:4, itabFirst:4, itabLast:4)，itab 为 0-based 表索引。
-    /// 删除引用了被删表的条目，大于被删索引的 itab 递减。</summary>
+    /// <summary>解析 rels Target 为包内规范化绝对路径（处理 "../" 与 "xl/" 前缀）。
+    /// baseDir 为 rels 所在部件目录（如 "xl/worksheets"）。</summary>
+    internal static string ResolveRelsTarget(string baseDir, string target)
+    {
+        if (target.StartsWith("/", StringComparison.Ordinal))
+            return target.TrimStart('/');
+        var combined = baseDir.Length == 0 ? target : baseDir + "/" + target;
+        var segs = combined.Split('/');
+        var stack = new List<string>(segs.Length);
+        foreach (var seg in segs)
+        {
+            if (seg.Length == 0 || seg == ".") continue;
+            if (seg == "..")
+            {
+                if (stack.Count > 0) stack.RemoveAt(stack.Count - 1);
+                continue;
+            }
+            stack.Add(seg);
+        }
+        return string.Join("/", stack);
+    }
+
+    /// <summary>修正 BrtExternSheet：**条目数量与顺序保持不变**。对每个 XTI 条目：
+    /// <list type="bullet">
+    /// <item>itabFirst/itabLast 引用被删表 → 置为 -1（0xFFFFFFFF）；</item>
+    /// <item>itab 大于被删表索引 → 递减（减去其前方被删表数量）；</item>
+    /// <item>其余（含 -1/-2 特殊值）保持不变。</item>
+    /// </list>
+    /// 这是 Excel 自身的真实行为（2026-09-15 用 Excel COM 标定确认）：删除被命名区域引用的工作表后，
+    /// XTI 条目**不移除**，被删表对应的 itab 变为 -1；命名区域的 rgce ixti **不重映射**，
+    /// 而是通过该 XTI 的 -1 状态在 Excel 中呈现为 `#REF!`。
+    /// 早期实现"整条移除 + 左移 + 重映射 rgce"会破坏 ixti 与 XTI 的对应关系，导致 Excel 崩溃。</summary>
     private static byte[] ModifyExternSheet(byte[] data, List<int> deletedOrigIdx)
     {
         if (data.Length < 4) return data;
         int cXti = (int)Biff12Records.ReadU32(data, 0);
         var deletedSet = new HashSet<int>(deletedOrigIdx);
-        using var outMs = new MemoryStream(data.Length);
-        var entries = new List<byte[]>();
+        var result = (byte[])data.Clone();
         for (int i = 0; i < cXti; i++)
         {
             int off = 4 + i * 12;
             if (off + 12 > data.Length) break;
             int first = (int)Biff12Records.ReadU32(data, off + 4);
             int last = (int)Biff12Records.ReadU32(data, off + 8);
-            // 引用被删表则整条移除
-            if (deletedSet.Contains(first) || deletedSet.Contains(last)) continue;
-            var entry = new byte[12];
-            Array.Copy(data, off, entry, 0, 12);
-            WriteAdjustedIndex(entry, 4, first, deletedOrigIdx);
-            WriteAdjustedIndex(entry, 8, last, deletedOrigIdx);
-            entries.Add(entry);
-        }
-        var result = new byte[4 + entries.Count * 12];
-        WriteU32To(result, 0, (uint)entries.Count);
-        for (int i = 0; i < entries.Count; i++)
-            Array.Copy(entries[i], 0, result, 4 + i * 12, 12);
-        return result;
-    }
 
-    private static void WriteAdjustedIndex(byte[] data, int offset, int value, List<int> deletedOrigIdx)
-    {
-        if (value < 0) return;
-        int shift = deletedOrigIdx.Count(d => d < value);
-        uint v = (uint)(value - shift);
-        data[offset] = (byte)(v & 0xFF);
-        data[offset + 1] = (byte)((v >> 8) & 0xFF);
-        data[offset + 2] = (byte)((v >> 16) & 0xFF);
-        data[offset + 3] = (byte)((v >> 24) & 0xFF);
+            if ((first >= 0 && deletedSet.Contains(first)) || (last >= 0 && deletedSet.Contains(last)))
+            {
+                // 引用被删表 → itab 置 -1（保留条目位置，不左移）
+                WriteU32To(result, off + 4, 0xFFFFFFFF);
+                WriteU32To(result, off + 8, 0xFFFFFFFF);
+                continue;
+            }
+
+            // 非被删条目：itab > 被删索引者递减（保持与原表的对应关系）
+            if (first >= 0)
+            {
+                int shiftFirst = deletedOrigIdx.Count(d => d < first);
+                if (shiftFirst > 0) WriteU32To(result, off + 4, (uint)(first - shiftFirst));
+            }
+            if (last >= 0)
+            {
+                int shiftLast = deletedOrigIdx.Count(d => d < last);
+                if (shiftLast > 0) WriteU32To(result, off + 8, (uint)(last - shiftLast));
+            }
+        }
+        return result;
     }
 
     /// <summary>调整 u32 字段中的 sheet 索引：==deleted→0, >deleted→递减, <deleted→不变</summary>
@@ -737,9 +830,9 @@ internal static class XlsbWriter
         }
     }
 
-    /// <summary>重建 [Content_Types].xml：剔除被删表 override + 其独占部件 override，其余保留</summary>
+    /// <summary>重建 [Content_Types].xml：剔除被删表 override + 其独占部件 override，其余保留并对剩余部件重编号。</summary>
     private static string ContentTypesAfterDeleteBinary(int sheetCount, bool hasVba, bool hasProps,
-        OoxmlPreservedParts preserved, HashSet<string> deletedPaths)
+        OoxmlPreservedParts preserved, HashSet<string> deletedPaths, HashSet<int> deletedTableNums, Func<string, string> renameRefs)
     {
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -760,8 +853,10 @@ internal static class XlsbWriter
         var deletedOverrides = new HashSet<string>(StringComparer.Ordinal);
         foreach (var p in deletedPaths)
             deletedOverrides.Add("/" + p);
+        foreach (var t in deletedTableNums)
+            deletedOverrides.Add($"/xl/tables/table{t}.bin");
 
-        // 从 preserved.OverrideTypes 中保留未被删的条目（含保留表的 sheet/binaryIndex override）。
+        // 从 preserved.OverrideTypes 中保留未被删的条目（含保留表的 sheet/binaryIndex override），并重编号。
         // 剔除：被删表及其依赖部件、陈旧 calcChain。
         var seenPart = new HashSet<string>(StringComparer.Ordinal);
         if (preserved.VerbatimBinaries is not null)
@@ -770,8 +865,9 @@ internal static class XlsbWriter
             {
                 if (deletedOverrides.Contains(part)) continue;
                 if (part == "/xl/calcChain.bin") continue;
-                if (seenPart.Add(part))
-                    sb.Append($"<Override PartName=\"{part}\" ContentType=\"{ct}\"/>");
+                var renamed = "/" + renameRefs(part.TrimStart('/'));
+                if (seenPart.Add(renamed))
+                    sb.Append($"<Override PartName=\"{renamed}\" ContentType=\"{ct}\"/>");
             }
         }
 
@@ -802,24 +898,92 @@ internal static class XlsbWriter
         return sb.ToString();
     }
 
-    /// <summary>重建 workbook.bin.rels：剔除被删表的 worksheet 关系，其余原样保留</summary>
-    private static string WorkbookRelsAfterDeleteBinary(string origRels, HashSet<string> deletedRelIds)
+    /// <summary>重建 workbook.bin.rels：剔除被删表/陈旧 calcChain 关系，剩余 rId 全量重编号、Target 同步重编号。</summary>
+    private static string WorkbookRelsAfterDeleteBinary(string origRels, HashSet<int> deletedRelIdNums,
+        Func<int, int> newRel, Func<string, string> renameRefs)
     {
-        var kept = new List<XlsxWriter.RelInfo>();
+        var sb = new StringBuilder(1024);
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append($"<Relationships xmlns=\"{RelNs}\">");
         foreach (var rel in XlsxWriter.ParseRels(origRels))
         {
-            if (deletedRelIds.Contains(rel.Id) && rel.Type.EndsWith("/worksheet", StringComparison.Ordinal))
-                continue;
-            // 陈旧计算链不透传：其关系一并移除（与部件/Content-Type 对齐，避免孤儿关系）
-            if (rel.Target.IndexOf("calcChain.bin", StringComparison.OrdinalIgnoreCase) >= 0)
-                continue;
-            kept.Add(rel);
+            int num = ParseRelId(rel.Id);
+            if (num >= 0 && deletedRelIdNums.Contains(num)) continue;
+            if (rel.Target.IndexOf("calcChain.bin", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+            var newId = num >= 0 ? "rId" + newRel(num) : rel.Id;
+            var newTarget = renameRefs(rel.Target);
+            sb.Append($"<Relationship Id=\"{newId}\" Type=\"{rel.Type}\" Target=\"{newTarget}\"");
+            if (rel.TargetMode.Length > 0) sb.Append($" TargetMode=\"{rel.TargetMode}\"");
+            sb.Append("/>");
         }
-        return XlsxWriter.RelsXml(kept);
+        sb.Append("</Relationships>");
+        return sb.ToString();
+    }
+
+    /// <summary>保真微调 connections.bin：`_xlcn.LinkedTable_*` 连接名去尾部冗余 "1"（与 workbook.bin 定义名同步）。
+    /// 0x0844 记录布局：flags(4) + cch(4) + name(UTF-16)。</summary>
+    private static byte[] ModifyConnectionsBin(byte[] data)
+    {
+        var recs = Biff12Records.ReadAll(data);
+        using var ms = new MemoryStream(data.Length);
+        foreach (var rec in recs)
+        {
+            if (rec.Rt == 0x0844 && rec.Data.Length >= 8)
+            {
+                int cch = (int)Biff12Records.ReadU32(rec.Data, 4);
+                if (cch > 0 && 8 + cch * 2 <= rec.Data.Length)
+                {
+                    var nm = Encoding.Unicode.GetString(rec.Data, 8, cch * 2);
+                    if (nm.StartsWith("_xlcn.LinkedTable_", StringComparison.Ordinal) && nm.EndsWith("1", StringComparison.Ordinal))
+                    {
+                        var newName = nm.Substring(0, nm.Length - 1);
+                        using var b = new MemoryStream();
+                        b.Write(rec.Data, 0, 4);
+                        b.Write(BitConverter.GetBytes((uint)newName.Length), 0, 4);
+                        var nb = Encoding.Unicode.GetBytes(newName);
+                        b.Write(nb, 0, nb.Length);
+                        b.Write(rec.Data, 8 + cch * 2, rec.Data.Length - (8 + cch * 2));
+                        WriteRecord(ms, rec.Rt, b.ToArray());
+                        continue;
+                    }
+                }
+            }
+            WriteRecord(ms, rec.Rt, rec.Data);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>保真微调 pivotTableN.bin：BrtBeginPivotTable(0x0118) 的名称长度字段越界时规范化为名称数字后缀
+    /// （Excel 会修复源文件中的异常值）。布局：... + off24(u32) + off28(u32 名称长度) + cch(u32) + name。</summary>
+    private static byte[] NormalizePivotTableBin(byte[] data, int pivotCount)
+    {
+        var recs = Biff12Records.ReadAll(data);
+        using var ms = new MemoryStream(data.Length);
+        foreach (var rec in recs)
+        {
+            if (rec.Rt == 0x0118 && rec.Data.Length >= 36)
+            {
+                var nd = (byte[])rec.Data.Clone();
+                uint field = Biff12Records.ReadU32(nd, 28);
+                int cch = (int)Biff12Records.ReadU32(nd, 32);
+                if (field > (uint)pivotCount && cch > 0 && 36 + cch * 2 <= nd.Length)
+                {
+                    var nm = Encoding.Unicode.GetString(nd, 36, cch * 2);
+                    var mm = System.Text.RegularExpressions.Regex.Match(nm, @"^PivotTable(\d+)$");
+                    if (mm.Success)
+                        WriteU32To(nd, 28, (uint)int.Parse(mm.Groups[1].Value));
+                }
+                WriteRecord(ms, rec.Rt, nd);
+                continue;
+            }
+            WriteRecord(ms, rec.Rt, rec.Data);
+        }
+        return ms.ToArray();
     }
 
     /// <summary>合并工作表级保留 rels（图表/透视表等）与重建的超链接 rels </summary>
-    private static string? BuildSheetRelsXml(int sheetNumber, List<string> extLinks, OoxmlPreservedParts? preserved, bool hasComments = false)
+    private static string? BuildSheetRelsXml(int sheetNumber, List<string> extLinks, OoxmlPreservedParts? preserved, bool hasComments = false, SheetData? sheet = null, int tableIdBase = -1,
+        bool hasDrawing = false, bool hasNewFloating = false, XlsxWriter.ImagePlan? imagePlan = null, int sheetIndex = 0)
     {
         var relParts = new List<XlsxWriter.RelInfo>();
         int nextRid = 1;
@@ -848,6 +1012,42 @@ internal static class XlsbWriter
                 Type = $"{OfficeRelNs}/vmlDrawing",
                 Target = $"../drawings/vmlDrawing{sheetNumber}.vml",
             });
+        }
+        // 超级表 rels（rIdT1.. → ../tables/tableN.bin，N 为全局表编号）
+        if (sheet?.Tables is { Count: > 0 } && tableIdBase >= 0)
+        {
+            for (int t = 0; t < sheet.Tables.Count; t++)
+            {
+                relParts.Add(new XlsxWriter.RelInfo
+                {
+                    Id = "rIdT" + (t + 1),
+                    Type = $"{OfficeRelNs}/table",
+                    Target = $"../tables/table{tableIdBase + t}.bin",
+                });
+            }
+        }
+        // 浮动图片 drawing rel（新建 drawing 用 rIdD1；既有保留 drawing 的 rel 由 MergeRelsXml 保留）
+        if (hasDrawing && imagePlan is not null)
+        {
+            var (drawingEntry, drawingRelId) = imagePlan.DrawingTargetFor(sheetIndex, preserved);
+            bool hasExistingDrawingRel = false;
+            if (preserved is not null
+                && preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetNumber}.bin.rels", out var origRels))
+            {
+                foreach (var rel in XlsxWriter.ParseRels(origRels))
+                    if (rel.Type.EndsWith("/drawing", StringComparison.OrdinalIgnoreCase)
+                        && XlsxWriter.ResolveRelsTarget("xl/worksheets", rel.Target) == drawingEntry)
+                    { hasExistingDrawingRel = true; break; }
+            }
+            if (!hasExistingDrawingRel)
+            {
+                relParts.Add(new XlsxWriter.RelInfo
+                {
+                    Id = drawingRelId,
+                    Type = $"{OfficeRelNs}/drawing",
+                    Target = $"../drawings/{drawingEntry.Substring(drawingEntry.LastIndexOf('/') + 1)}",
+                });
+            }
         }
         string rebuilt = XlsxWriter.RelsXml(relParts);
         string original = "";
@@ -891,18 +1091,27 @@ internal static class XlsbWriter
                     TargetFormat = targetFormat,
                     Message = msg,
                 });
-            if (sheet.Validations is { Count: > 0 })
-                Report(DegradationCapability.DataValidation, $"xlsb 不支持数据验证，工作表 '{sheet.SheetName}' 的数据验证已丢弃。");
             if (sheet.Filter is not null && sheet.Filter.Columns.Count > 0)
                 Report(DegradationCapability.AutoFilter, $"xlsb 自动筛选仅支持范围写出，工作表 '{sheet.SheetName}' 的筛选条件已丢弃。");
-            if (sheet.Images is { Count: > 0 })
-                Report(DegradationCapability.Images, $"xlsb 不支持图片，工作表 '{sheet.SheetName}' 的图片已丢弃。");
+            // 浮动图片已支持写出（drawing/media 与 xlsx 同为 XML 部件，经 BrtDrawing 引用）。
+            // 仅 InCell 图片（richData 体系）在 xlsb 不支持，显式上报。
+            if (sheet.Images is { Count: > 0 } && sheet.Images.Any(i => i.Placement == ImagePlacement.InCell))
+                Report(DegradationCapability.Images, $"xlsb 不支持单元格内嵌图片（InCell richData），工作表 '{sheet.SheetName}' 的内嵌图片已丢弃。");
             if (DegradationDetector.HasNonNumberFormatStyles(sheet))
                 Report(DegradationCapability.Styles, $"xlsb 仅支持数字格式，工作表 '{sheet.SheetName}' 的完整样式（字体/颜色/边框/对齐/换行）已降级。");
+            // 条件格式：全部 18 种 OOXML 规则类型均经 WriteConditionalFormats 写出，无丢弃。
             if (sheet.ConditionalFormats is { Count: > 0 })
-                Report(DegradationCapability.ConditionalFormatting, $"xlsb 不支持条件格式，工作表 '{sheet.SheetName}' 的条件格式已丢弃。");
-            if (sheet.Tables is { Count: > 0 })
-                Report(DegradationCapability.Tables, $"xlsb 不支持超级表，工作表 '{sheet.SheetName}' 的超级表已丢弃。");
+            {
+                int unsupported = 0;
+                foreach (var cf in sheet.ConditionalFormats)
+                    if (!IsCfTypeSupported(cf.Type)) unsupported++;
+                if (unsupported > 0)
+                    Report(DegradationCapability.ConditionalFormatting, $"xlsb 条件格式存在 {unsupported} 条未知类型规则，工作表 '{sheet.SheetName}' 的此类规则已丢弃。");
+            }
+            // 超级表不再上报：三条写出路径（重建 / verbatim / 手术式）均保留超级表
+            // （重建经 BuildTableBin 写出，verbatim/手术式原样透传 xl/tables/*.bin），不存在丢弃路径。
+            if (!string.IsNullOrEmpty(sheet.TabColor))
+                Report(DegradationCapability.SheetVisibility, $"xlsb 不支持工作表标签颜色（tabColor），工作表 '{sheet.SheetName}' 的标签颜色已丢弃。");
         }
     }
 
@@ -950,9 +1159,7 @@ internal static class XlsbWriter
         return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;");
     }
 
-    // ── 包 XML 部件 ──
-
-    private static string ContentTypesXml(int sheetCount, bool hasSst, bool hasVba, bool hasProps, OoxmlPreservedParts? preserved, IReadOnlyList<int>? sheetsWithComments = null)
+    private static string ContentTypesXml(int sheetCount, bool hasSst, bool hasVba, bool hasProps, OoxmlPreservedParts? preserved, IReadOnlyList<int>? sheetsWithComments = null, int tableCount = 0, XlsxWriter.ImagePlan? imagePlan = null)
     {
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -964,6 +1171,8 @@ internal static class XlsbWriter
         for (int i = 1; i <= sheetCount; i++)
             sb.Append($"<Override PartName=\"/xl/worksheets/sheet{i}.bin\" ContentType=\"application/vnd.ms-excel.worksheet\"/>");
         sb.Append("<Override PartName=\"/xl/styles.bin\" ContentType=\"application/vnd.ms-excel.styles\"/>");
+        for (int t = 1; t <= tableCount; t++)
+            sb.Append($"<Override PartName=\"/xl/tables/table{t}.bin\" ContentType=\"application/vnd.ms-excel.table\"/>");
         if (hasSst)
             sb.Append("<Override PartName=\"/xl/sharedStrings.bin\" ContentType=\"application/vnd.ms-excel.sharedStrings\"/>");
         if (sheetsWithComments is not null)
@@ -977,6 +1186,31 @@ internal static class XlsbWriter
         {
             sb.Append("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
             sb.Append("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
+        }
+        // 图片：media 类型 Default + drawing Override（与 xlsx 一致；drawing/media 在 xlsb 中同为 XML 部件）
+        if (imagePlan is { Any: true })
+        {
+            var imgSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "rels", "xml", "bin", "vml" };
+            foreach (var img in imagePlan.All)
+            {
+                if (imgSeen.Add(img.EffectiveExtension))
+                {
+                    string ct = img.EffectiveExtension switch
+                    {
+                        "png" => "image/png",
+                        "jpg" => "image/jpeg",
+                        "gif" => "image/gif",
+                        "bmp" => "image/bmp",
+                        _ => "application/octet-stream",
+                    };
+                    sb.Append($"<Default Extension=\"{img.EffectiveExtension}\" ContentType=\"{ct}\"/>");
+                }
+            }
+            for (int i = 0; i < imagePlan.FloatingBySheet.Count; i++)
+            {
+                if (imagePlan.FloatingBySheet[i].Count > 0)
+                    sb.Append($"<Override PartName=\"/{imagePlan.DrawingTargetFor(i, preserved).Entry}\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>");
+            }
         }
         // 合并保留部件的 content types 声明（仅源为 xlsb 时）。
         if (preserved is not null && preserved.VerbatimBinaries is not null)
@@ -1074,7 +1308,10 @@ internal static class XlsbWriter
 
     private static void WriteEntry(ZipArchive zip, string name, byte[] data)
     {
-        var entry = zip.CreateEntry(name, CompressionLevel.Optimal);
+        // Excel 对数据模型部件 xl/model/item.data 约定为 STORED（不压缩）：它是内存映射数据库，
+        // 压缩无收益且影响随机访问。与 Excel 自身产出保持一致。
+        var level = name == "xl/model/item.data" ? CompressionLevel.NoCompression : CompressionLevel.Optimal;
+        var entry = zip.CreateEntry(name, level);
         using var s = entry.Open();
         s.Write(data, 0, data.Length);
     }
@@ -1083,8 +1320,6 @@ internal static class XlsbWriter
     {
         WriteEntry(zip, name, new UTF8Encoding(false).GetBytes(xml));
     }
-
-    // ── workbook.bin ──
 
     private static byte[] BuildWorkbookBin(IReadOnlyList<SheetData> sheets, string? workbookCodeName, bool date1904,
         string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false)
@@ -1101,7 +1336,8 @@ internal static class XlsbWriter
         WriteRecord(ms, BrtEndBookViews, Array.Empty<byte>());
         WriteRecord(ms, BrtBeginBundleShs, Array.Empty<byte>());
         for (int i = 0; i < sheets.Count; i++)
-            WriteRecord(ms, BrtBundleSh, BundleSh(i, sheets[i].SheetName));
+            WriteRecord(ms, BrtBundleSh, BundleSh(i, sheets[i].SheetName,
+                SheetVisibilityMap.FromOoxml(sheets[i].SheetState)));
         WriteRecord(ms, BrtEndBundleShs, Array.Empty<byte>());
         WriteRecord(ms, BrtEndBook, Array.Empty<byte>());
         return ms.ToArray();
@@ -1147,10 +1383,10 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    private static byte[] BundleSh(int index, string name)
+    private static byte[] BundleSh(int index, string name, SheetVisibility visibility = SheetVisibility.Visible)
     {
         var ms = new MemoryStream();
-        WriteU32(ms, 0); // Hidden
+        WriteU32(ms, (uint)SheetVisibilityMap.ToBiff(visibility)); // hsState: 0=visible/1=hidden/2=veryHidden
         WriteU32(ms, (uint)(index + 1)); // iTabID
         WriteNullableWideString(ms, "rId" + (index + 1));
         WriteWideString(ms, name.Length > 31 ? name.Substring(0, 31) : name);
@@ -1185,8 +1421,6 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    // ── sharedStrings.bin ──
-
     private static byte[] BuildSharedStringsBin(List<string> sst, Dictionary<string, int> sstIndex)
     {
         var ms = new MemoryStream();
@@ -1208,9 +1442,7 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    // ── styles.bin ──
-
-    private static byte[] BuildStylesBin(List<(int Ifmt, string? FmtCode)> cellXfs)
+    private static byte[] BuildStylesBin(List<(int Ifmt, string? FmtCode)> cellXfs, IReadOnlyList<CellStyle>? dxfs = null)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginStyleSheet, Array.Empty<byte>());
@@ -1264,8 +1496,11 @@ internal static class XlsbWriter
         WriteRecord(ms, BrtStyle, Style());
         WriteRecord(ms, BrtEndStyles, Array.Empty<byte>());
 
-        // dxfs（空）
-        WriteRecord(ms, BrtBeginDXFs, UInt32(0));
+        // dxfs（条件格式样式 / 超级表列格式）
+        WriteRecord(ms, BrtBeginDXFs, UInt32((uint)(dxfs?.Count ?? 0)));
+        if (dxfs is not null)
+            foreach (var style in dxfs)
+                WriteRecord(ms, BrtDXF, BuildDxf(style));
         WriteRecord(ms, BrtEndDXFs, Array.Empty<byte>());
 
         // tableStyles（空）
@@ -1374,9 +1609,7 @@ internal static class XlsbWriter
         return ms.ToArray();
     }
 
-    // ── worksheet.bin ──
-
-    private static byte[] BuildWorksheetBin(SheetData sheet, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904, List<string> extTargets)
+    private static byte[] BuildWorksheetBin(SheetData sheet, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904, List<string> extTargets, string? drawingRelId = null, DxfRegistry? dxfRegistry = null)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginSheet, Array.Empty<byte>());
@@ -1478,6 +1711,15 @@ internal static class XlsbWriter
             WriteRecord(ms, BrtEndAFilter, Array.Empty<byte>());
         }
 
+        // 数据验证（BrtBeginDVs / BrtDVal×N / BrtEndDVs）
+        if (sheet.Validations is { Count: > 0 })
+        {
+            WriteRecord(ms, BrtBeginDVs, BeginDVs(sheet.Validations.Count));
+            foreach (var dv in sheet.Validations)
+                WriteRecord(ms, BrtDVal, BuildDVal(dv));
+            WriteRecord(ms, BrtEndDVs, Array.Empty<byte>());
+        }
+
         // 合并单元格
         if (sheet.MergedRanges.Count > 0)
         {
@@ -1487,11 +1729,222 @@ internal static class XlsbWriter
             WriteRecord(ms, BrtEndMergeCells, Array.Empty<byte>());
         }
 
+        // 条件格式（conditionalFormatting）：schema 位于 mergeCells 之后、hyperlinks 之前
+        if (dxfRegistry is not null && sheet.ConditionalFormats is { Count: > 0 })
+            WriteConditionalFormats(ms, sheet, dxfRegistry.GetOrCreate);
+
         // 超链接（外部经 relId 指向 sheet rels；内部走 location）
         WriteHyperlinks(ms, sheet, extRelIndex);
 
+        // 绘图引用（图片/图表/形状）——BrtDrawing 引用 sheet rels 中的 rId
+        if (!string.IsNullOrEmpty(drawingRelId))
+            WriteRecord(ms, BrtDrawing, WideString(drawingRelId));
+
+        // 超级表部件引用（BrtTablePart 引用 sheet rels 中的 rId）
+        if (sheet.Tables is { Count: > 0 })
+        {
+            var tableRids = TableRelIds(sheet);
+            WriteRecord(ms, BrtBeginTableParts, UInt32((uint)tableRids.Count));
+            foreach (var rid in tableRids)
+                WriteRecord(ms, BrtTablePart, WideString(rid));
+            WriteRecord(ms, BrtEndTableParts, Array.Empty<byte>());
+        }
+
         WriteRecord(ms, BrtEndSheet, Array.Empty<byte>());
         return ms.ToArray();
+    }
+
+    /// <summary>表部件在 sheet rels 中使用的 rId（确定性：rIdT1, rIdT2, ...）。</summary>
+    internal static List<string> TableRelIds(SheetData sheet)
+    {
+        var list = new List<string>();
+        if (sheet.Tables is null) return list;
+        for (int i = 0; i < sheet.Tables.Count; i++)
+            list.Add("rIdT" + (i + 1));
+        return list;
+    }
+
+    /// <summary>构建 tableN.bin（BIFF12 超级表部件）。</summary>
+    private static byte[] BuildTableBin(XlTable table, int id)
+    {
+        var (rwF, rwL, colF, colL) = ParseRef(table.Ref);
+        var ms = new MemoryStream();
+        WriteRecord(ms, BrtBeginList, BeginList(rwF, rwL, colF, colL, id, table));
+        // 自动筛选范围（与表范围一致）
+        WriteRecord(ms, BrtBeginAFilter, RfX(rwF, rwL, colF, colL));
+        WriteRecord(ms, BrtEndAFilter, Array.Empty<byte>());
+        WriteRecord(ms, BrtBeginListCols, UInt32((uint)table.Columns.Count));
+        for (int c = 0; c < table.Columns.Count; c++)
+        {
+            WriteRecord(ms, BrtBeginListCol, BeginListCol(table.Columns[c], c + 1));
+            WriteRecord(ms, 0x015C, Array.Empty<byte>()); // BrtEndListCol
+        }
+        WriteRecord(ms, BrtEndListCols, Array.Empty<byte>());
+        WriteRecord(ms, BrtTableStyleClient, TableStyleClient(table));
+        WriteRecord(ms, BrtEndList, Array.Empty<byte>());
+        return ms.ToArray();
+    }
+
+    /// <summary>A1 范围 → (rwFirst, rwLast, colFirst, colLast)，0-based。</summary>
+    private static (int rwF, int rwL, int colF, int colL) ParseRef(string refA1)
+    {
+        var parts = refA1.Split(':');
+        var (r1, c1) = ParseA1(parts[0]);
+        var (r2, c2) = parts.Length > 1 ? ParseA1(parts[1]) : (r1, c1);
+        return (r1, r2, c1, c2);
+    }
+
+    private static (int row, int col) ParseA1(string a1)
+    {
+        int i = 0, col = 0;
+        while (i < a1.Length && char.IsLetter(a1[i])) { col = col * 26 + (char.ToUpperInvariant(a1[i]) - 'A' + 1); i++; }
+        int row = 0;
+        while (i < a1.Length && char.IsDigit(a1[i])) { row = row * 10 + (a1[i] - '0'); i++; }
+        return (row - 1, col - 1);
+    }
+
+    private static byte[] BeginList(int rwF, int rwL, int colF, int colL, int id, XlTable table)
+    {
+        var ms = new MemoryStream();
+        WriteS32(ms, rwF);
+        WriteS32(ms, rwL);
+        WriteS32(ms, colF);
+        WriteS32(ms, colL);
+        WriteS32(ms, 0);              // lt
+        WriteS32(ms, id);             // idList
+        WriteS32(ms, table.TotalsRowShown ? 0 : 1); // crwHeader
+        WriteS32(ms, table.TotalsRowShown ? 1 : 0); // crwTotals
+        WriteS32(ms, 0);              // flags
+        for (int i = 0; i < 6; i++) WriteS32(ms, -1); // nDxfHeader/Data/Agg/Border/HeaderBorder/AggBorder
+        WriteS32(ms, 0);              // dwConnID
+        ms.Write(NullableWideString(table.Name), 0, NullableWideString(table.Name).Length); // stName
+        ms.Write(NullableWideString(table.Name), 0, NullableWideString(table.Name).Length); // stDisplayName
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);             // stComment
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);             // stStyleHeader
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);             // stStyleData
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);             // stStyleAgg
+        return ms.ToArray();
+    }
+
+    private static byte[] BeginListCol(XlTableColumn col, int idField)
+    {
+        var ms = new MemoryStream();
+        WriteS32(ms, idField); // idField（1-based 列序号）
+        WriteS32(ms, 0);   // ilta
+        WriteS32(ms, -1);  // nDxfHdr
+        WriteS32(ms, -1);  // nDxfInsertRow
+        WriteS32(ms, -1);  // nDxfAgg
+        WriteS32(ms, 0);   // idqsif
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);            // stName
+        ms.Write(NullableWideString(col.Name), 0, NullableWideString(col.Name).Length);    // stCaption
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);            // stTotal
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);            // stStyleHeader
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);            // stStyleInsertRow
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length);            // stStyleAgg
+        return ms.ToArray();
+    }
+
+    private static byte[] TableStyleClient(XlTable table)
+    {
+        var ms = new MemoryStream();
+        int flags = 0;
+        if (table.ShowFirstColumn) flags |= 0x01;
+        if (table.ShowLastColumn) flags |= 0x02;
+        if (table.ShowRowStripes) flags |= 0x04;
+        if (table.ShowColumnStripes) flags |= 0x08;
+        WriteU16(ms, (ushort)flags);
+        ms.Write(NullableWideString(table.StyleName), 0, NullableWideString(table.StyleName).Length);
+        return ms.ToArray();
+    }
+
+    /// <summary>BrtBeginDVs：reserved(4) + ... + cDVs(4)（对齐 Excel 样本 18 字节：前 12 字节 0，第 14 字节起 cDVs）。</summary>
+    private static byte[] BeginDVs(int count)
+    {
+        var ms = new MemoryStream();
+        WriteS32(ms, 0);       // reserved
+        WriteS32(ms, 0);       // reserved
+        WriteS32(ms, 0);       // reserved
+        WriteU16(ms, 0);       // reserved
+        WriteS32(ms, count);   // cDVs
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// BrtDVal：flags(4) + cRefs(4) + refs + promptTitle/prompt/errorTitle/errorMessage（nullable wide）
+    /// + cce(4)+rgce[f1] + cce(4)+rgce[f2] + reserved(4)。
+    /// flags 位0-3=类型(1=whole/2=decimal/3=list/4=date/6=textLength)，位16=allowBlank，
+    /// 位17=InCellDropdown，位18=ShowInputMessage，位19=ShowErrorMessage。
+    /// </summary>
+    private static byte[] BuildDVal(DataValidation dv)
+    {
+        int typeCode = dv.Type switch
+        {
+            DataValidationType.WholeNumber => 1,
+            DataValidationType.Decimal => 2,
+            DataValidationType.List => 3,
+            DataValidationType.Date => 4,
+            _ => 3,
+        };
+        int flags = typeCode;
+        if (dv.Type == DataValidationType.List) flags |= 1 << 7; // InCellDropdown（列表）
+        if (dv.AllowBlank) flags |= 1 << 8;                      // allowBlank
+        flags |= 1 << 18; // ShowInputMessage
+        flags |= 1 << 19; // ShowErrorMessage
+
+        var (rwF, colF, rwL, colL) = CellRef.ParseRange(dv.Sqref);
+
+        var ms = new MemoryStream();
+        WriteS32(ms, flags);
+        WriteS32(ms, 1);        // cRefs
+        WriteS32(ms, rwF); WriteS32(ms, rwL); WriteS32(ms, colF); WriteS32(ms, colL);
+        ms.Write(NullableWideString(dv.PromptTitle), 0, NullableWideString(dv.PromptTitle).Length);
+        ms.Write(NullableWideString(dv.Prompt), 0, NullableWideString(dv.Prompt).Length);
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length); // errorTitle
+        ms.Write(NullableWideString(null), 0, NullableWideString(null).Length); // errorMessage
+
+        var f1 = EncodeDvFormula(dv.Formula1, dv.Type);
+        WriteS32(ms, f1.Length); ms.Write(f1, 0, f1.Length);
+        WriteS32(ms, 0); // reserved（rgce1 与 rgce2 之间）
+        var f2 = EncodeDvFormula(dv.Formula2, dv.Type);
+        WriteS32(ms, f2.Length); ms.Write(f2, 0, f2.Length); // rgce2（无 f2 时 cce=0）
+        WriteS32(ms, 0); // reserved（记录尾部）
+        return ms.ToArray();
+    }
+
+    /// <summary>数据验证公式 → rgce。列表为字符串常量；数值/日期为 PtgInt/PtgNum。</summary>
+    private static byte[] EncodeDvFormula(string formula, DataValidationType type)
+    {
+        if (string.IsNullOrEmpty(formula)) return Array.Empty<byte>();
+        // 列表：去除两端引号后按 PtgStr 编码
+        if (type == DataValidationType.List)
+        {
+            var s = formula;
+            if (s.Length >= 2 && s[0] == '"' && s[s.Length - 1] == '"') s = s.Substring(1, s.Length - 2);
+            var ms = new MemoryStream();
+            ms.WriteByte(0x17); // PtgStr
+            WriteU16(ms, (ushort)s.Length);
+            var b = Encoding.Unicode.GetBytes(s);
+            ms.Write(b, 0, b.Length);
+            return ms.ToArray();
+        }
+        // 数值/日期：PtgInt 为 u16（0..65535），超出用 PtgNum
+        if (double.TryParse(formula, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var num))
+        {
+            var ms = new MemoryStream();
+            if (num == Math.Floor(num) && num >= 0 && num <= 65535)
+            {
+                ms.WriteByte(0x1E); // PtgInt
+                WriteU16(ms, (ushort)(int)num);
+            }
+            else
+            {
+                ms.WriteByte(0x1F); // PtgNum
+                var b = BitConverter.GetBytes(num);
+                ms.Write(b, 0, b.Length);
+            }
+            return ms.ToArray();
+        }
+        return Array.Empty<byte>();
     }
 
     /// <summary>写出 BrtHLink 记录。外部链接 relId = rIdH{n+1}；内部链接 location = 目标去前导 '#' </summary>
@@ -1858,8 +2311,6 @@ internal static class XlsbWriter
         return (uint)((iv << 2) | 0x02);
     }
 
-    // ── 记录与标量写入辅助 ──
-
     private static void WriteRecord(MemoryStream ms, int rt, byte[] data)
     {
         WriteVarInt(ms, rt);
@@ -1883,6 +2334,23 @@ internal static class XlsbWriter
         WriteU32(ms, (uint)s.Length);
         var bytes = Encoding.Unicode.GetBytes(s);
         ms.Write(bytes, 0, bytes.Length);
+    }
+
+    /// <summary>XLWideString 字节（cch(4) + UTF-16LE），用于记录 payload。</summary>
+    private static byte[] WideString(string s)
+    {
+        var ms = new MemoryStream();
+        WriteWideString(ms, s);
+        return ms.ToArray();
+    }
+
+    /// <summary>XLNullableWideString 字节（cch(4)，空串写 0xFFFFFFFF）。</summary>
+    private static byte[] NullableWideString(string? s)
+    {
+        var ms = new MemoryStream();
+        if (string.IsNullOrEmpty(s)) WriteU32(ms, 0xFFFFFFFF);
+        else WriteWideString(ms, s);
+        return ms.ToArray();
     }
 
     private static void WriteNullableWideString(MemoryStream ms, string s)
@@ -1930,8 +2398,6 @@ internal static class XlsbWriter
         WriteU32To(b, 0, v);
         return b;
     }
-
-    // ── comments1.bin ──
 
     private const int BrtBeginComments = 0x0274;
     private const int BrtEndComments = 0x0275;

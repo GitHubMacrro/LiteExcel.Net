@@ -50,8 +50,45 @@ public sealed class Worksheet
     /// <summary>读取时捕获的 workbook.xml 中 sheet 元素原始 sheetId（内部使用，写出时透传保留） </summary>
     internal string SheetId { get; set; } = "";
 
-    /// <summary>读取时捕获的 sheet 元素 state 属性（hidden / veryHidden，内部使用） </summary>
-    internal string? SheetState { get; set; }
+    private SheetVisibility _visible = SheetVisibility.Visible;
+    private string? _tabColor;
+
+    /// <summary>
+    /// 工作表可见性（默认 <see cref="SheetVisibility.Visible"/>）。
+    /// 支持 xlsx/xlsm/xlsb/xls 读写。设为 Hidden/VeryHidden 时须保证工作簿至少保留一张可见表。
+    /// </summary>
+    public SheetVisibility Visible
+    {
+        get => _visible;
+        set
+        {
+            if (_visible == value) return;
+            if (value != SheetVisibility.Visible && ParentCollection is { } parent)
+            {
+                // Excel 要求工作簿至少保留一张可见表
+                bool otherVisible = parent.Any(w => !ReferenceEquals(w, this) && w._visible == SheetVisibility.Visible);
+                if (!otherVisible)
+                    throw new LiteExcelException("不能隐藏工作簿中最后一张可见工作表。");
+            }
+            _visible = value;
+            IsModified = true;
+        }
+    }
+
+    /// <summary>
+    /// 工作表标签颜色（<c>#RRGGBB</c> 或 <c>RRGGBB</c>，null = 无自定义颜色）。
+    /// 仅 xlsx/xlsm 支持写出；xlsb/xls 写出时经降级上报（<see cref="DegradationCapability.SheetVisibility"/>）。
+    /// </summary>
+    public string? TabColor
+    {
+        get => _tabColor;
+        set
+        {
+            if (_tabColor == value) return;
+            _tabColor = value;
+            IsModified = true;
+        }
+    }
 
     /// <summary>打开时的工作表序号（0-based；-1 = 本次新建/非读取来源）。
     /// 用于删除/移动工作表后，从 preserved 取对应该表的原始 rels（pivot/绘图/查询表等），避免结构变化时误丢。 </summary>
@@ -142,8 +179,6 @@ public sealed class Worksheet
             return max;
         }
     }
-
-    // ── 单元格访问 ──
 
     /// <summary>添加一张浮动图片（以 row/column 左上角为锚点，默认按图片原始尺寸显示） </summary>
     public WorksheetImage AddImage(byte[] data, int row, int column, double? widthPx = null, double? heightPx = null,
@@ -276,8 +311,6 @@ public sealed class Worksheet
         cell.SetValue(value);
     }
 
-    // ── 数据导入 ──
-
     /// <summary>
     /// 把 List&lt;T&gt; 导入本工作表：清空现有内容后从 A1 重建（首行为表头，与 <see cref="Excel.Write{T}"/> 一致）。
     /// </summary>
@@ -329,8 +362,6 @@ public sealed class Worksheet
 
         RebindOwners();
     }
-
-    // ── 超级表 ──
 
     /// <summary>
     /// 创建超级表（Excel 内置表）。覆盖区首行作为表头列名，至少需要表头 + 1 行数据。
@@ -431,10 +462,6 @@ public sealed class Worksheet
         if (sd.ColumnWidths is not null)
             ColumnWidths = sd.ColumnWidths.Select((w, i) => (i, w)).ToDictionary(x => x.i, x => x.w);
     }
-
-    // ── 合并 ──
-
-    // ── 插入/删除行列 ──
 
     /// <summary>
     /// 在指定行号处插入 count 行空行（1-based）。
@@ -556,8 +583,6 @@ public sealed class Worksheet
         ShiftImagesCols(deleteAt, count, deleting: true);
         ShiftTablesCols(deleteAt, count, deleting: true);
     }
-
-    // ── 偏移辅助 ──
 
     private void ShiftDictKeys(Dictionary<int, double>? dict, int at, int count, bool deleting)
     {
@@ -817,8 +842,6 @@ public sealed class Worksheet
     private void ShiftTablesRows(int at, int count, bool deleting) { }
     private void ShiftTablesCols(int at, int count, bool deleting) { }
 
-    // ── 合并 ──
-
     /// <summary>合并区域（1-based，含端点）。例如 Merge(1, 1, 2, 2) 合并 A1:B2 </summary>
     public void Merge(int firstRow, int firstCol, int lastRow, int lastCol)
     {
@@ -853,8 +876,6 @@ public sealed class Worksheet
             }
         }
     }
-
-    // ── 内部网格操作 ──
 
     internal Cell? TryGetCell(int row1, int col1)
     {
@@ -912,7 +933,8 @@ public sealed class Worksheet
             FirstRowNumber = FirstRowNumber,
             SheetExtLstXml = SheetExtLstXml,
             SheetId = SheetId,
-            SheetState = SheetState,
+            SheetState = SheetVisibilityMap.ToOoxml(_visible),
+            TabColor = _tabColor,
             OrigIndex = OrigIndex,
             ColumnWidths = ToColumnWidthsList(ColumnWidths),
             Comments = Comments,
@@ -976,7 +998,6 @@ public sealed class Worksheet
             FirstRowNumber = sheet.FirstRowNumber,
             SheetExtLstXml = sheet.SheetExtLstXml,
             SheetId = sheet.SheetId,
-            SheetState = sheet.SheetState,
             Comments = sheet.Comments,
             Validations = sheet.Validations,
             Filter = sheet.Filter,
@@ -984,6 +1005,9 @@ public sealed class Worksheet
             Protection = sheet.Protection,
             OrigIndex = sheet.OrigIndex,
         };
+        // 可见性/标签颜色：直接写私有字段，避免触发 IsModified（读取不应视为修改）。
+        ws._visible = SheetVisibilityMap.FromOoxml(sheet.SheetState);
+        ws._tabColor = sheet.TabColor;
 
         if (sheet.Tables is { Count: > 0 })
         {

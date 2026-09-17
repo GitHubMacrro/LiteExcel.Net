@@ -179,8 +179,6 @@ internal static class FormulaParser
         return stack.Count == 1 ? stack[0] : null;
     }
 
-    // ── 辅助 ──
-
     /// <summary>ptg → 规范化 token 类（对齐 SheetJS PtgDupes）。</summary>
     private static int Token(int ptg)
     {

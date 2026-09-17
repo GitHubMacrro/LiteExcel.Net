@@ -119,6 +119,10 @@ public static class Excel
                     wbXB.PreservedParts = OoxmlPreservedParts.Capture(capZip, sheetsX.Count, binary: true);
                     SetAdvancedXlsbSheets(wbXB, wbXB.PreservedParts, sheetsX.Count);
                     wbXB.Properties.CopyFrom(XlsxReader.ReadProperties(capZip));
+                    // 定义名称读回（rgce 仅支持单引用/区域/常量；复合表达式跳过）
+                    var (xlsbNames, _) = XlsbBackend.ReadDefinedNames(capZip, sheetsX.Select(s => s.SheetName).ToList());
+                    foreach (var nr in xlsbNames)
+                        wbXB.Names.Add(nr);
                 }
                 wbXB.VbaProjectBytes = XlsbBackend.ReadVbaProject(path);
                 wbXB.WorkbookCodeName = XlsbBackend.ReadWorkbookCodeName(path);
@@ -456,8 +460,6 @@ public static class Excel
         };
     }
 
-    // ── 写出 ──
-
     /// <summary>写出工作簿（按工作簿当前格式写 .xlsx/.xlsm；或按 options 指定） </summary>
     public static void Write(string path, Workbook workbook, ExcelWriteOptions? options = null)
     {
@@ -515,8 +517,6 @@ public static class Excel
             configure?.Invoke(opt);
         });
     }
-
-    // ── 读取便利 ──
 
     /// <summary>读取指定工作表为 List&lt;T&gt;（反射映射，已标注 DAM，AOT/裁剪安全）。默认第一张表，首行作为表头 </summary>
     public static List<T> Read<
@@ -799,8 +799,6 @@ public static class Excel
         foreach (var nr in names)
             wb.Names.Add(nr);
     }
-
-    // ── 内部辅助 ──
 
     private static void ApplyWriteOptions(Workbook workbook, ExcelWriteOptions options)
     {

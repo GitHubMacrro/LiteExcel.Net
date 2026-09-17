@@ -17,6 +17,8 @@ internal static class XlsbBackend
     // workbook.bin
     private const int BrtBundleSh = 0x009C;   // 工作表清单条目
     private const int BrtWbProp = 0x0099;     // 工作簿属性（date1904 标志）
+    private const int BrtExternSheet = 0x016A; // 外部表引用（ixti → itab 映射）
+    private const int BrtDefinedName = 0x0027; // 定义名称
     private const int BrtFileSharing = 0x0224;      // 写保护（旧式）
     private const int BrtFileSharingIso = 0x02A4;   // 写保护（ISO 盐化哈希）
 
@@ -30,6 +32,17 @@ internal static class XlsbBackend
     private const int BrtXf = 0x002F;         // 单元格样式 XF
     private const int BrtBeginCellXfs = 0x0269;
     private const int BrtEndCellXfs = 0x026A;
+
+    // table（超级表）部件记录
+    private const int BrtBeginList = 0x0157;        // 表属性
+    private const int BrtBeginListCol = 0x015B;     // 列定义
+    private const int BrtTableStyleClient = 0x0201; // 表样式
+    // worksheet 表引用
+    private const int BrtTablePart = 0x0295;        // 表部件引用（XLWideString rId）
+    // 数据验证
+    private const int BrtBeginDVs = 0x023D;         // cDVs(4) + reserved(4) + ...
+    private const int BrtEndDVs = 0x023E;
+    private const int BrtDVal = 0x0040;             // 单条数据验证
 
     // worksheet.bin
     private const int BrtRowHdr = 0x0000;
@@ -228,7 +241,9 @@ internal static class XlsbBackend
                 throw new LiteExcelException($"缺少工作表文件: {sheetPaths[i]}");
             var rels = ReadSheetHyperlinkRels(zip, sheetPaths[i]);
             var sd = ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, date1904, rels);
+            sd.SheetState = SheetVisibilityMap.ToOoxml(SheetVisibilityMap.FromBiff(sheets[i].HsState));
             ReadCommentsForSheet(zip, sheetPaths[i], sd);
+            ReadTablesForSheet(zip, sheetPaths[i], data, sd);
             result.Add(sd);
         }
 
@@ -236,8 +251,6 @@ internal static class XlsbBackend
             throw new LiteExcelException("这不是有效的 .xlsb 文件（未找到任何工作表）");
         return result;
     }
-
-    // ── 包部件 ──
 
     private static byte[]? ReadEntry(ZipArchive zip, string name)
     {
@@ -250,7 +263,7 @@ internal static class XlsbBackend
     }
 
     /// <summary>将工作簿清单中的 rId 映射到实际工作表部件路径。</summary>
-    private static List<string> MapSheetPaths(ZipArchive zip, List<(string Name, string RelId)> sheets)
+    private static List<string> MapSheetPaths(ZipArchive zip, List<(string Name, string RelId, int HsState)> sheets)
     {
         var relMap = new Dictionary<string, string>();
         var relsEntry = zip.GetEntry("xl/_rels/workbook.bin.rels");
@@ -296,7 +309,7 @@ internal static class XlsbBackend
     /// 为流式读取预加载工作簿级共享数据：工作表清单、SST、样式、日期系统。
     /// 返回 (sheets, sst, formats, cellXfs, date1904)。
     /// </summary>
-    public static (List<(string Name, string RelId)> sheets, List<string> sst,
+    public static (List<(string Name, string RelId, int HsState)> sheets, List<string> sst,
         Dictionary<int, string> formats, List<int> cellXfs, bool date1904)
         PrepareStreaming(ZipArchive zip)
     {
@@ -316,18 +329,16 @@ internal static class XlsbBackend
     }
 
     /// <summary>将工作簿清单中的 rId 映射到实际工作表部件路径（公开给流式读取器）。</summary>
-    public static List<string> MapSheetPathsPublic(ZipArchive zip, List<(string Name, string RelId)> sheets)
+    public static List<string> MapSheetPathsPublic(ZipArchive zip, List<(string Name, string RelId, int HsState)> sheets)
         => MapSheetPaths(zip, sheets);
 
-    // ── workbook.bin ──
-
-    private static (List<(string Name, string RelId)> Sheets, bool Date1904) ParseWorkbook(byte[] wb)
+    private static (List<(string Name, string RelId, int HsState)> Sheets, bool Date1904) ParseWorkbook(byte[] wb)
     {
         var records = Biff12Records.ReadAll(wb);
         if (records.Count == 0)
             throw new LiteExcelException("这不是有效的 .xlsb 文件（workbook.bin 为空）");
 
-        var sheets = new List<(string, string)>();
+        var sheets = new List<(string, string, int)>();
         bool date1904 = false;
 
         foreach (var rec in records)
@@ -338,10 +349,11 @@ internal static class XlsbBackend
                 {
                     var d = rec.Data;
                     if (d.Length < 8) break;
+                    uint hsState = Biff12Records.ReadU32(d, 0);
                     int off = 8; // Hidden(4) + iTabID(4)
                     var relId = Biff12Records.ReadWideString(d, ref off);
                     var name = Biff12Records.ReadWideString(d, ref off);
-                    sheets.Add((name, relId));
+                    sheets.Add((name, relId, (int)hsState));
                     break;
                 }
                 case BrtWbProp:
@@ -356,7 +368,67 @@ internal static class XlsbBackend
         return (sheets, date1904);
     }
 
-    // ── sharedStrings.bin ──
+    /// <summary>从已打开的 zip 读取定义名称（供 Excel.cs 打开路径复用同一文件快照）。</summary>
+    public static (List<NamedRange> Names, bool HasUnsupported) ReadDefinedNames(ZipArchive zip, List<string> sheetNames)
+    {
+        var wbBytes = ReadEntry(zip, "xl/workbook.bin");
+        if (wbBytes is null) return (new List<NamedRange>(), false);
+        return ParseDefinedNames(wbBytes, sheetNames);
+    }
+
+    /// <summary>
+    /// 解析 workbook.bin 的定义名称（BrtDefinedName）。rgce 仅解码单引用/区域/常量；
+    /// 复合表达式跳过（不产出错误引用）。返回 (名称, 是否含未支持项)。
+    /// </summary>
+    public static (List<NamedRange> Names, bool HasUnsupported) ParseDefinedNames(byte[] wb, List<string> sheetNames)
+    {
+        var records = Biff12Records.ReadAll(wb);
+        var result = new List<NamedRange>();
+        bool unsupported = false;
+
+        // 先扫 BrtExternSheet 构建 ixti → sheet 名
+        var sheetNameByIxti = new List<string>();
+        foreach (var rec in records)
+        {
+            if (rec.Rt != BrtExternSheet || rec.Data.Length < 4) continue;
+            int cXti = (int)Biff12Records.ReadU32(rec.Data, 0);
+            for (int i = 0; i < cXti; i++)
+            {
+                int o = 4 + i * 12;
+                if (o + 12 > rec.Data.Length) break;
+                int itabFirst = (int)Biff12Records.ReadU32(rec.Data, o + 4);
+                // itab 为 0-based sheet 索引；越界（如 -1 表示删除的表）记为空
+                sheetNameByIxti.Add(itabFirst >= 0 && itabFirst < sheetNames.Count ? sheetNames[itabFirst] : "");
+            }
+            break;
+        }
+
+        foreach (var rec in records)
+        {
+            if (rec.Rt != BrtDefinedName || rec.Data.Length < 13) continue;
+            var d = rec.Data;
+            int itab = (int)Biff12Records.ReadU32(d, 5);
+            int off = 9;
+            var name = Biff12Records.ReadWideString(d, ref off);
+            if (off + 4 > d.Length) continue;
+            int cce = (int)Biff12Records.ReadU32(d, off); off += 4;
+            if (cce < 0 || off + cce > d.Length) continue;
+            var rgce = new byte[cce];
+            Array.Copy(d, off, rgce, 0, cce);
+
+            var reference = RgceDecoder.Decode(rgce, sheetNameByIxti);
+            if (reference is null) { unsupported = true; continue; }
+
+            result.Add(new NamedRange
+            {
+                Name = name,
+                Reference = reference,
+                LocalSheetId = itab, // 0-based；-1 = 全局
+            });
+        }
+
+        return (result, unsupported);
+    }
 
     private static List<string> ParseSharedStrings(byte[] data)
     {
@@ -379,8 +451,6 @@ internal static class XlsbBackend
         }
         return result;
     }
-
-    // ── styles.bin ──
 
     private static (Dictionary<int, string> Formats, List<int> CellXfs) ParseStyles(byte[] data)
     {
@@ -417,7 +487,181 @@ internal static class XlsbBackend
         return (formats, cellXfs);
     }
 
-    // ── worksheet.bin ──
+    /// <summary>
+    /// 读取工作表的超级表：从 sheetN.bin 的 BrtTablePart(0x0295) 取 relId，
+    /// 经 sheetN.bin.rels 定位 xl/tables/tableN.bin，解析 BrtBeginList/BrtBeginListCol/BrtTableStyleClient。
+    /// </summary>
+    private static void ReadTablesForSheet(ZipArchive zip, string sheetPath, byte[] sheetBin, SheetData sheet)
+    {
+        // 收集表部件 relId（BrtTablePart 位于 BrtBeginTableParts 段内）
+        var tableRelIds = new List<string>();
+        int pos = 0;
+        while (pos < sheetBin.Length)
+        {
+            int rt = Biff12Records.ReadVarInt(sheetBin, ref pos);
+            int cb = Biff12Records.ReadVarInt(sheetBin, ref pos);
+            if (cb < 0 || pos + cb > sheetBin.Length) break;
+            if (rt == BrtTablePart)
+            {
+                var d = sheetBin;
+                int off = pos;
+                var rid = Biff12Records.ReadWideString(d, ref off);
+                if (!string.IsNullOrEmpty(rid)) tableRelIds.Add(rid);
+            }
+            pos += cb;
+        }
+        if (tableRelIds.Count == 0) return;
+
+        // sheet rels：relId → table 部件路径
+        var slash = sheetPath.LastIndexOf('/');
+        var dir = slash < 0 ? "" : sheetPath.Substring(0, slash);
+        var file = slash < 0 ? sheetPath : sheetPath.Substring(slash + 1);
+        var relsPath = $"{dir}/_rels/{file}.rels";
+        var relsEntry = zip.GetEntry(relsPath);
+        if (relsEntry is null) return;
+
+        var relMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            var rels = XElement.Load(relsEntry.Open());
+            var relNs = rels.Name.Namespace;
+            foreach (var rel in rels.Elements(relNs + "Relationship"))
+            {
+                var id = rel.Attribute("Id")?.Value;
+                var type = rel.Attribute("Type")?.Value ?? "";
+                var target = rel.Attribute("Target")?.Value;
+                if (id is not null && target is not null && type.EndsWith("/table", StringComparison.Ordinal))
+                    relMap[id] = target;
+            }
+        }
+        catch { return; }
+
+        foreach (var rid in tableRelIds)
+        {
+            if (!relMap.TryGetValue(rid, out var target)) continue;
+            var entry = ResolveTableTarget(sheetPath, target);
+            var te = zip.GetEntry(entry);
+            if (te is null) continue;
+            byte[] bin;
+            using (var s = te.Open())
+            using (var ms = new MemoryStream()) { s.CopyTo(ms); bin = ms.ToArray(); }
+            try
+            {
+                var tbl = ParseTableBin(bin);
+                if (tbl is not null)
+                {
+                    tbl.OriginEntry = entry;
+                    sheet.Tables.Add(tbl);
+                }
+            }
+            catch { /* 单个表失败不影响整表 */ }
+        }
+    }
+
+    /// <summary>解析 tableN.bin（BIFF12）→ XlTable。</summary>
+    private static XlTable? ParseTableBin(byte[] data)
+    {
+        XlTable? tbl = null;
+        int pos = 0;
+        while (pos < data.Length)
+        {
+            int rt = Biff12Records.ReadVarInt(data, ref pos);
+            int cb = Biff12Records.ReadVarInt(data, ref pos);
+            if (cb < 0 || pos + cb > data.Length) break;
+            int off = pos;
+
+            switch (rt)
+            {
+                case BrtBeginList:
+                {
+                    // rwFirst(4) rwLast(4) colFirst(4) colLast(4) lt(4) idList(4)
+                    // crwHeader(4) crwTotals(4) flags(4) nDxf*6(4*6) dwConnID(4) stName stDisplayName ...
+                    int rwF = Biff12Records.ReadS32(data, off); off += 4;
+                    int rwL = Biff12Records.ReadS32(data, off); off += 4;
+                    int colF = Biff12Records.ReadS32(data, off); off += 4;
+                    int colL = Biff12Records.ReadS32(data, off); off += 4;
+                    off += 4; // lt
+                    off += 4; // idList
+                    int crwHeader = Biff12Records.ReadS32(data, off); off += 4;
+                    int crwTotals = Biff12Records.ReadS32(data, off); off += 4;
+                    off += 4;  // flags
+                    off += 4 * 6; // nDxf*
+                    off += 4;  // dwConnID
+                    var name = ReadNullableWide(data, ref off) ?? "";
+                    off += 4; // stDisplayName cch 由 ReadNullableWide 已消费；此处不再解析
+                    tbl = new XlTable
+                    {
+                        Name = name,
+                        Ref = CellRefText(colF, rwF) + ":" + CellRefText(colL, rwL),
+                        TotalsRowShown = crwTotals != 0,
+                        AutoFilter = true,
+                    };
+                    _ = crwHeader;
+                    break;
+                }
+                case BrtBeginListCol:
+                {
+                    // idField(4) ilta(4) nDxfHdr(4) nDxfInsertRow(4) nDxfAgg(4) idqsif(4) stName stCaption ...
+                    off += 4;      // idField
+                    off += 4 * 4;  // ilta + 3×nDxf
+                    off += 4;      // idqsif
+                    ReadNullableWide(data, ref off);            // stName
+                    var cap = ReadNullableWide(data, ref off) ?? ""; // stCaption
+                    if (tbl is not null && cap.Length > 0)
+                        tbl.AddColumn(new XlTableColumn { Name = cap });
+                    break;
+                }
+                case BrtTableStyleClient:
+                {
+                    if (data.Length - off >= 2)
+                    {
+                        int flags = data[off] | (data[off + 1] << 8);
+                        off += 2;
+                        var styleName = ReadNullableWide(data, ref off);
+                        if (tbl is not null && !string.IsNullOrEmpty(styleName))
+                        {
+                            tbl.CustomStyleName = styleName;
+                            if (styleName.StartsWith("TableStyle", StringComparison.Ordinal)
+                                && Enum.TryParse<TableStyleStyle>(styleName.Substring("TableStyle".Length), out var parsed))
+                                tbl.Style = parsed;
+                            tbl.ShowFirstColumn = (flags & 0x01) != 0;
+                            tbl.ShowLastColumn = (flags & 0x02) != 0;
+                            tbl.ShowRowStripes = (flags & 0x04) != 0;
+                            tbl.ShowColumnStripes = (flags & 0x08) != 0;
+                        }
+                    }
+                    break;
+                }
+            }
+            pos += cb;
+        }
+        return tbl;
+    }
+
+    /// <summary>解析 sheet rels 中的 table Target → 包内绝对路径（相对 xl/worksheets 或 xl/…）。</summary>
+    private static string ResolveTableTarget(string sheetPath, string target)
+    {
+        if (target.StartsWith("/", StringComparison.Ordinal)) return target.TrimStart('/');
+        if (target.StartsWith("../", StringComparison.Ordinal)) return "xl/" + target.Substring(3);
+        var slash = sheetPath.LastIndexOf('/');
+        var dir = slash < 0 ? "xl" : sheetPath.Substring(0, slash);
+        return dir + "/" + target;
+    }
+
+    /// <summary>XLNullableWideString：cch(4)，0xFFFFFFFF 为 null。</summary>
+    private static string? ReadNullableWide(byte[] d, ref int off)
+    {
+        if (off + 4 > d.Length) return null;
+        uint cch = Biff12Records.ReadU32(d, off); off += 4;
+        if (cch == 0xFFFFFFFF) return null;
+        if (cch > 0x7FFF || off + (int)cch * 2 > d.Length) return null;
+        var s = System.Text.Encoding.Unicode.GetString(d, off, (int)cch * 2);
+        off += (int)cch * 2;
+        return s;
+    }
+
+    /// <summary>0-based 列/行 → A1 单元格引用（用于表 Ref 构造）。</summary>
+    private static string CellRefText(int col, int row) => RgceDecoder.ColumnName(col) + (row + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>读取工作表 rels 中 hyperlink 关系（外部超链接 rId → Target）</summary>
     private static Dictionary<string, string> ReadSheetHyperlinkRels(ZipArchive zip, string sheetPath)
@@ -576,6 +820,9 @@ internal static class XlsbBackend
                     break;
                 case BrtBeginAFilter:
                     ParseBeginAFilter(d, sheet);
+                    break;
+                case BrtDVal:
+                    ParseDVal(d, sheet);
                     break;
             }
         }
@@ -791,7 +1038,94 @@ internal static class XlsbBackend
 
     private static int ReadS32(byte[] d, int off) => Biff12Records.ReadS32(d, off);
 
-    // ── comments1.bin (BIFF12) ──
+    /// <summary>数组切片（net48 无 Range 语法）。</summary>
+    private static byte[] Slice(byte[] d, int off, int len)
+    {
+        var r = new byte[len];
+        Array.Copy(d, off, r, 0, len);
+        return r;
+    }
+
+    /// <summary>
+    /// BrtDVal：flags(4) + cRefs(4) + cRefs×(rwFirst,rwLast,colFirst,colLast)(各4)
+    /// + promptTitle + prompt + errorTitle + errorMessage（XLNullableWideString）
+    /// + cce(4) + rgce[formula1] + (可选)cce(4) + rgce[formula2] + reserved(4)。
+    /// flags 位 0-3 = 类型：1=whole 2=decimal 3=list 4=date 5=time 6=textLength 7=custom。
+    /// </summary>
+    private static void ParseDVal(byte[] d, SheetData sheet)
+    {
+        if (d.Length < 8) return;
+        int o = 0;
+        int flags = ReadS32(d, o); o += 4;
+        int typeCode = flags & 0xF;
+        int cRefs = ReadS32(d, o); o += 4;
+        if (cRefs < 0 || o + cRefs * 16 > d.Length) return;
+
+        var refs = new List<string>(cRefs);
+        for (int i = 0; i < cRefs; i++)
+        {
+            int rwF = ReadS32(d, o); int rwL = ReadS32(d, o + 4);
+            int colF = ReadS32(d, o + 8); int colL = ReadS32(d, o + 12);
+            o += 16;
+            refs.Add(CellRef.ToString(rwF, colF) + ":" + CellRef.ToString(rwL, colL));
+        }
+        if (o + 16 > d.Length) return;
+        var promptTitle = ReadNullableWide(d, ref o);
+        var prompt = ReadNullableWide(d, ref o);
+        var errorTitle = ReadNullableWide(d, ref o);
+        var errorMsg = ReadNullableWide(d, ref o);
+
+        string? f1 = null, f2 = null;
+        if (o + 4 <= d.Length)
+        {
+            int cce1 = ReadS32(d, o); o += 4;
+            if (cce1 >= 0 && o + cce1 <= d.Length)
+            {
+                f1 = RgceDecoder.Decode(Slice(d, o, cce1), Array.Empty<string>()) ?? DecodeDvLiteral(d, o, cce1);
+                o += cce1;
+            }
+        }
+        o += 4; // reserved（rgce1 与 rgce2 之间）
+        if (o + 4 <= d.Length)
+        {
+            int cce2 = ReadS32(d, o); o += 4;
+            if (cce2 > 0 && o + cce2 <= d.Length)
+                f2 = RgceDecoder.Decode(Slice(d, o, cce2), Array.Empty<string>()) ?? DecodeDvLiteral(d, o, cce2);
+        }
+
+        var dv = new DataValidation
+        {
+            Type = typeCode switch
+            {
+                1 => DataValidationType.WholeNumber,
+                2 => DataValidationType.Decimal,
+                4 => DataValidationType.Date,
+                3 => DataValidationType.List,
+                _ => DataValidationType.List, // 6=textLength 等无对应模型，按列表占位（值仍可读）
+            },
+            Sqref = string.Join(" ", refs),
+            Formula1 = f1 ?? "",
+            Formula2 = f2,
+            AllowBlank = (flags & (1 << 8)) != 0,
+            PromptTitle = promptTitle ?? errorTitle,
+            Prompt = prompt ?? errorMsg,
+        };
+        sheet.Validations ??= new List<DataValidation>();
+        sheet.Validations.Add(dv);
+    }
+
+    /// <summary>列表验证的公式是字符串常量（PtgStr 0x17），RgceDecoder 只支持单令牌，此处直接解字符串。</summary>
+    private static string? DecodeDvLiteral(byte[] d, int off, int cce)
+    {
+        if (cce >= 3 && d[off] == 0x17)
+        {
+            int cch = d[off + 1] | (d[off + 2] << 8);
+            if (off + 3 + cch * 2 <= d.Length)
+                return "\"" + System.Text.Encoding.Unicode.GetString(d, off + 3, cch * 2) + "\"";
+        }
+        return null;
+    }
+
     private const int BrtBeginComments = 0x0274;
     private const int BrtEndComments = 0x0275;
     private const int BrtBeginCommentAuthors = 0x0276;

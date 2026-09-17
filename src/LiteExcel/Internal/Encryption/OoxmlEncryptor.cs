@@ -29,7 +29,7 @@ internal static class OoxmlEncryptor
     /// <summary>加密 zip 包，返回完整 CFB 文件字节（含 EncryptionInfo/EncryptedPackage/Version 流） </summary>
     public static byte[] Encrypt(byte[] plainZip, string password)
     {
-        // 1. 派生密钥
+        // 派生密钥
         var encKeySalt = RandomBytes(SaltSize);
         var iterated = IteratedHash(encKeySalt, password);
 
@@ -37,23 +37,19 @@ internal static class OoxmlEncryptor
         var k2 = DeriveKey(iterated, BlkEncVerifierHashValue);
         var k3 = DeriveKey(iterated, BlkEncKeyValue);
 
-        // 2. verifier + secret key
         var verifierInput = RandomBytes(SaltSize);
         using (var h = SHA512.Create())
         {
             var verifierHash = h.ComputeHash(verifierInput);
 
-            // 3. 加密各段
             var encVerifierInput = EncryptCbc(verifierInput, k1, encKeySalt);
             var encVerifierHash = EncryptCbc(verifierHash, k2, encKeySalt);
             var secretKey = RandomBytes(KeyBits / 8);
             var encKeyValue = EncryptCbc(secretKey, k3, encKeySalt);
 
-            // 4. 加密 payload（分段）
             var keyDataSalt = RandomBytes(SaltSize);
             var encryptedPayload = EncryptPayload(plainZip, secretKey, keyDataSalt);
 
-            // 5. data integrity（HMAC）
             var hmacSalt = RandomBytes(HashSize);
             var iv1 = HashForKey(keyDataSalt, BlkDataIntegrity1);
             var iv2 = HashForKey(keyDataSalt, BlkDataIntegrity2);
@@ -65,7 +61,7 @@ internal static class OoxmlEncryptor
             }
             var encHmacValue = EncryptCbc(hmacValue, secretKey, iv2);
 
-            // 6. 组装 EncryptionInfo XML（带 Agile 版本头：major=4 minor=4 flags=0x40）
+            // Agile 版本头：major=4 minor=4 flags=0x40
             var encInfoXml = BuildEncryptionInfoXml(encKeySalt, keyDataSalt, encVerifierInput,
                 encVerifierHash, encKeyValue, encHmacKey, encHmacValue);
             var encInfoBytes = new byte[8 + encInfoXml.Length];
@@ -75,14 +71,13 @@ internal static class OoxmlEncryptor
             encInfoBytes[6] = 0x00; encInfoBytes[7] = 0x00;
             Encoding.UTF8.GetBytes(encInfoXml, 0, encInfoXml.Length, encInfoBytes, 8);
 
-            // 7. 组装 CFB：EncryptedPackage + EncryptionInfo + DataSpaces 骨架
             return Cfb.EncryptedCfbWriter.Build(encryptedPayload, encInfoBytes);
         }
     }
 
     private static byte[] EncryptPayload(byte[] plain, byte[] secretKey, byte[] keyDataSalt)
     {
-        // 结构：前 8 字节 = 明文长度（小端 int64），然后分段加密
+        // 前 8 字节 = 明文长度（小端 int64），其后为分段加密数据。
         using var outMs = new MemoryStream();
         var sizeBytes = BitConverter.GetBytes((long)plain.Length);
         outMs.Write(sizeBytes, 0, 8);
@@ -128,8 +123,6 @@ internal static class OoxmlEncryptor
                $"encryptedVerifierHashValue=\"{Convert.ToBase64String(encVerifierHash)}\" " +
                $"encryptedKeyValue=\"{Convert.ToBase64String(encKeyValue)}\" /></keyEncryptor></keyEncryptors></encryption>";
     }
-
-    // ── 密码派生（与 AgileDecryptor 对称） ──
 
     private static byte[] IteratedHash(byte[] salt, string password)
     {

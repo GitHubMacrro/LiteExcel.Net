@@ -147,4 +147,31 @@ public class FormulaTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Theory]
+    [InlineData("=A1>=B1", "A1>=B1")]
+    [InlineData("=A1<=B1", "A1<=B1")]
+    [InlineData("=A1<>B1", "A1<>B1")]
+    [InlineData("=A1>B1", "A1>B1")]
+    [InlineData("=A1<B1", "A1<B1")]
+    [InlineData("=A1=B1", "A1=B1")]
+    public void Xlsb_ComparisonOperators_RoundTrip(string input, string expected)
+    {
+        // 回归：多字符运算符（>= <= <>）此前在词法分析中被静默丢弃，导致公式错写。
+        var file = Path.Combine(Path.GetTempPath(), $"formula_op_xlsb_{Guid.NewGuid():N}.xlsb");
+        try
+        {
+            var wb = Excel.Create(ExcelFormat.Xlsb);
+            var ws = wb.Worksheets[0];
+            ws.SetValue("A1", 1);
+            ws.SetValue("B1", 2);
+            ws.Cell("C1").SetValue(Cell.FromFormula(input));
+            wb.SaveAs(file);
+
+            var read = Excel.Open(file);
+            Assert.True(read.Worksheets[0].Cell("C1").IsFormula);
+            Assert.Equal(expected, read.Worksheets[0].Cell("C1").Formula);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
 }

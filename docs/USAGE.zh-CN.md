@@ -1334,12 +1334,26 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("临时")).ToList(
 
 #### 保真性
 
-删除工作表后保存，采用**手术式原样写回**：仅摘除被删表及其引用，其余工作表、透视表、超级表、切片器、连接、查询表、宏代码等高级部件原样保留。
+删除工作表后保存，与 Excel 自身「删除工作表后另存」的结果等价：被删表及其引用被摘除，其余工作表、透视表、透视缓存、超级表、连接、数据模型、VBA 宏、标签颜色等**全部完整保留**（xlsb 亦同）。机制说明见 [§20.5 打开-保存保真](#205-打开-保存保真)。
 
-- **xlsx / xlsm**：完整保留其余高级部件（透视表/图表/切片器/ActiveX/宏）。
-- **xlsb**：删除 XLSB 工作表后保存为 xlsb，同样完整保留透视表、透视缓存、超级表、切片器、连接、数据模型和 VBA 宏；同步调整工作表清单、命名区域作用域、外部表引用与活动表索引。
+- **xlsx / xlsm**：完整保留其余高级部件（透视表 / 图表 / 切片器 / ActiveX / 宏）。
+- **xlsb**：删除 XLSB 工作表后保存为 xlsb，同样完整保留透视表、透视缓存、超级表、连接、数据模型和 VBA 宏。
 - **xlsb → xlsm**：透视表等二进制部件保留（超级表转为重建）。
-- 若被删表是某透视表/切片器的数据源，或某透视缓存引用该表，无法安全执行手术式删除；此时默认回退到重建（高级部件可能丢失）并记录到 `SaveDegradations`，设 `workbook.AllowFeatureLossOnSave = false` 可改为抛异常阻止。
+
+## 7.7 工作表可见性与标签颜色
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+wb.Worksheets["明细"].Visible = SheetVisibility.Hidden;      // 隐藏（用户可在 Excel 取消隐藏）
+wb.Worksheets["参数"].Visible = SheetVisibility.VeryHidden;  // 深度隐藏（仅 VBA/编辑器可恢复）
+wb.Worksheets["汇总"].TabColor = "FF0000";                   // 标签颜色 #RRGGBB / RRGGBB
+wb.SaveAs("out.xlsx");
+```
+
+- `Visible`：`Visible`（默认）/ `Hidden` / `VeryHidden`。**xlsx / xlsm / xlsb / xls 四格式读写**。
+- `TabColor`：xlsx / xlsm 读写；**xlsb / xls 不支持标签颜色**，写出时经 `DegradationCapability.SheetVisibility` 上报后丢弃。
+- 守卫：把工作簿**最后一张可见表**设为隐藏会抛 `LiteExcelException`（Excel 要求至少保留一张可见表）。
+- 修改可见性/标签颜色会标记工作表为已修改，从而正确禁用 xlsb 的原样（verbatim）保存路径，确保变更真正落盘。
 
 ---
 
@@ -1818,7 +1832,7 @@ Console.WriteLine($"{ws.FreezeRows} rows, {ws.FreezeColumns} cols");
 本章介绍图片的添加：浮动图片、单元格内嵌图片、高精度锚点，以及打开文件后读回图片。
 
 > ⚠️ **重要限制**
-> 图片仅支持 xlsx / xlsm。写出到 xls / xlsb / csv 时图片被丢弃，经 `OnDegradation` 上报（见第 22 章）。
+> 浮动图片支持 xlsx / xlsm / xlsb 写出；单元格内嵌图片（InCell）仅支持 xlsx / xlsm。写出到 xls / csv 时图片被丢弃，写出到 xlsb 时 InCell 图片被丢弃，均经 `OnDegradation` 上报（见第 22 章）。
 
 ## 📑 目录
 
@@ -1991,7 +2005,7 @@ Embed: A1 InCell 70 bytes
 本章介绍数据验证（下拉列表、数值 / 日期区间）的写出、验证类型，以及读回。
 
 > ⚠️ **重要限制**
-> 数据验证仅支持 xlsx / xlsm 写出。写出到其他格式时验证被丢弃，经 `OnDegradation` 上报（见第 22 章）。
+> 数据验证支持 xlsx / xlsm / xlsb 写出。写出到其他格式时验证被丢弃，经 `OnDegradation` 上报（见第 22 章）。
 
 ## 📑 目录
 
@@ -2081,8 +2095,10 @@ WholeNumber B1:B10 1 100
 
 本章介绍条件格式的写出与读回：单元格值比较、公式条件、色阶、数据条、长尾类型、图标集。
 
-> ⚠️ **重要限制**
-> 条件格式仅支持 xlsx / xlsm 读写。写出到其他格式时条件格式被丢弃，经 `OnDegradation` 上报（见第 22 章）。
+> ⚠️ **格式支持**
+> - **xlsx / xlsm**：全部类型读写。
+> - **xlsb**：重建写出支持**全部 18 种 OOXML 规则类型**（cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / containsText / beginsWith / endsWith / notContainsText / uniqueValues / duplicateValues / containsBlanks / notContainsBlanks / containsErrors / notContainsErrors / timePeriod / textLength），含 `Style` 的 dxf 填充/字体/边框；无类型丢弃。
+> - **xls / csv**：不支持条件格式，写出时全部丢弃并上报。
 
 ## 📑 目录
 
@@ -2311,7 +2327,7 @@ IconSet I2:I100
 本章介绍超级表（Table / ListObject）的创建、样式、列格式、删除与读回。
 
 > ⚠️ **重要限制**
-> 超级表仅支持 xlsx / xlsm 读写。写出到其他格式时超级表被丢弃，经 `OnDegradation` 上报（见第 22 章）。
+> 超级表支持 xlsx / xlsm / xlsb 读写。写出到其他格式时超级表被丢弃，经 `OnDegradation` 上报（见第 22 章）。
 
 ## 📑 目录
 
@@ -2449,7 +2465,7 @@ Products A1:B3 样式=TableStyleMedium2
 本章介绍命名区域（definedNames）的读回与写出保留。
 
 > ⚠️ **重要限制**
-> 命名区域支持范围：**xlsx / xlsm** 完整读回（`workbook.xml` 的 `definedNames`）；**xls** 支持简单单元格/区域引用（PtgRef3d / PtgArea3d），复杂公式类命名区域会跳过；**xlsb 暂不支持**。写出到不支持该能力的格式时命名区域会**静默丢失**，经 `OnDegradation` 上报。
+> 命名区域支持范围：**xlsx / xlsm** 完整读回（`workbook.xml` 的 `definedNames`）；**xlsb** 支持读回（`BrtDefinedName` + `BrtExternSheet`，简单单元格/区域引用，复杂表达式跳过）；**xls** 支持简单单元格/区域引用（PtgRef3d / PtgArea3d），复杂公式类命名区域会跳过。xlsb / xls 写出均不支持命名区域。写出到不支持该能力的格式时命名区域会**静默丢失**，经 `OnDegradation` 上报。
 
 ## 📑 目录
 
@@ -2767,7 +2783,7 @@ True structure=True hasPwd=False
 | 20.2 | [xls / xlsb 的读写降级](#202-xls--xlsb-的读写降级) | 样式与公式降级 |
 | 20.3 | [CSV 行为](#203-csv-行为) | 单表 / 分隔符 / 能力限制 |
 | 20.4 | [加密文件格式限制](#204-加密文件格式限制) | 仅 xlsx/xlsm/xlsb |
-| 20.5 | [保真回写](#205-保真回写) | 未映射部件透传保留 |
+| 20.5 | [打开-保存保真](#205-打开-保存保真) | 未改动内容原样保留 |
 
 ---
 
@@ -2784,13 +2800,15 @@ True structure=True hasPwd=False
 | 自动筛选 | ☑️ | ☑️ | 范围读写 | ❌ | ❌ |
 | 行高 / 列宽 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 批注 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| 数据验证 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
+| 数据验证 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | 超链接 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 冻结窗格 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| 图片（浮动 / 单元格内嵌） | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| 条件格式 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| 超级表 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-| 命名区域 | ☑️ | ☑️ | ❌ | 仅读取 | ❌ |
+| 图片（浮动 / 单元格内嵌） | ☑️ | ☑️ | 浮动写入 | ❌ | ❌ |
+| 条件格式 | ☑️ | ☑️ | 全类型写入 | ❌ | ❌ |
+| 超级表 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| 命名区域 | ☑️ | ☑️ | 仅读取 | 仅读取 | ❌ |
+| 工作表可见性（隐藏/深度隐藏） | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
+| 工作表标签颜色 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 文档属性 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | 打开 / 修改密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | 插入 / 删除行列 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
@@ -2829,11 +2847,15 @@ Excel.Write("matrix.csv", wb, new ExcelWriteOptions
 
 ## 20.2 xls / xlsb 的读写降级
 
-xls / xlsb 写出时：样式降级为仅保留 `NumberFormat`（规避 BIFF 手写风险）；批注 / 数据验证 / 条件格式 / 图片 / 超级表 / 命名区域被丢弃；公式文本不保留，按缓存值写出。这些降级经 `OnDegradation` 显式上报（见第 22 章）。
+xls / xlsb 写出时按格式与路径区分：
+
+- **xlsb 重建写出**（新建 / 编辑单元格后保存）：样式降级为仅保留 `NumberFormat`；批注 / 数据验证 / 超级表 / 浮动图片已支持写出；条件格式支持全部 18 种 OOXML 规则类型（cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / 文本类 / 空值类 / 错误类 / uniqueValues / duplicateValues / timePeriod / textLength）；命名区域仅读回、不写出；**InCell 图片**被丢弃；公式文本不保留，按缓存值写出。丢弃项经 `OnDegradation` 显式上报（见第 22 章）。
+- **xlsb 打开-保存 / 删表**（verbatim / 手术式）：单元格与全部保留部件原样透传，条件格式 / 图片 / 透视表 / 图表 / 切片器等**完整保留**，无降级上报。
+- **xls 写出**：样式降级为仅保留 `NumberFormat`；批注支持写出；数据验证 / 超级表 / 条件格式 / 图片 / 命名区域被丢弃；公式文本不保留，按缓存值写出。这些降级经 `OnDegradation` 显式上报（见第 22 章）。
 
 > **xls 工作表尺寸上限**：`xls`（BIFF8）最多 256 列 / 65536 行。超出上限的数据（含远超数据范围的列宽声明）在写出时被裁剪，经 `DegradationCapability.SheetSize` 上报。
 
-xls / xlsb 读回时：样式仅保留 `NumberFormat`；批注 / 数据验证 / 条件格式 / 图片 / 超级表等高级能力不读回；可解析的公式会还原为 A1 文本填入 `Cell.Formula`（数组公式 / 3D 引用 / 名称等无法解析时仅保留缓存值）。
+xls / xlsb 读回时：样式仅保留 `NumberFormat`；xlsb 读回批注 / 数据验证 / 超级表 / 命名区域，xls 读回批注；条件格式 / 图片不读回；可解析的公式会还原为 A1 文本填入 `Cell.Formula`（数组公式 / 3D 引用 / 名称等无法解析时仅保留缓存值）。
 
 读取 xls 文件（样式仅保留数字格式）：
 
@@ -2932,9 +2954,11 @@ catch (LiteExcelException ex)
 无法写出 Csv：Csv 格式不支持文件级密码（打开密码/修改密码）。请使用 xlsx/xlsm/xlsb 保存，或先移除密码。
 ```
 
-## 20.5 保真回写
+## 20.5 打开-保存保真
 
-打开 xlsx / xlsm / xlsb 时，未映射的 OOXML 部件（宏 / 主题 / 绘图 / 图表 / 透视表等）被捕获并在保存时按二进制透传，避免静默删除。改表名不再丢 drawing 关联；追加数据不再丢宏 / 图表。
+打开已有文件再保存时，未改动的内容会被**原样保留**，不会因为库不认识它而丢失。这包括宏、图表、透视表、透视缓存、超级表、切片器、外部连接、数据模型、自定义 XML、工作表标签颜色、样式等高级部件。改表名不再丢图表关联；追加数据不再丢宏。
+
+删除工作表后保存也走同一套保真逻辑：被删表及其引用被摘除，其余内容完整保留，结果与 Excel 自身「删除工作表后另存」等价（xlsb 同样完整保留透视表 / 连接 / 数据模型 / VBA / 标签颜色）。
 
 保真不只是留下部件字节，引用它们的元素同样要保留，否则部件成孤儿、Excel 视同不存在。以下引用均随保存原样回写，关系编号被重排时同步改写：
 
@@ -3336,6 +3360,9 @@ PivotTables
 RichData
 ConditionalFormatting
 Tables
+Macros
+SheetSize
+SheetVisibility
 ```
 
 ## 22.2 降级信息 DegradationInfo

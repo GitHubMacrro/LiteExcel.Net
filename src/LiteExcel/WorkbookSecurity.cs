@@ -104,8 +104,6 @@ public sealed class WorkbookSecurity
         ReadOnlyRecommended = false;
     }
 
-    // ── 内部访问（仅供保存管线使用，不对外暴露密码明文） ──
-
     internal string? GetOpenPassword() => _openPassword;
 
     internal string? GetModifyPassword() => _modifyPassword;

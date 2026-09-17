@@ -117,8 +117,6 @@ internal static class AgileDecryptor
         return result;
     }
 
-    // ── 解析 ──
-
     private static byte[] ParseEncryptionInfo(byte[] encInfo)
     {
         // 头 8 字节：major(2) minor(2) flags(4)；XML 从 offset 8 开始
@@ -202,8 +200,6 @@ internal static class AgileDecryptor
         return h.ComputeHash(combined).Take(16).ToArray();
     }
 
-    // ── 密码派生 ──
-
     /// <summary>自定义迭代哈希：H = SHA(salt + pwd_UTF16LE)；for i: H = SHA(le32(i) + H) </summary>
     private static byte[] IteratedHash(byte[] salt, string password, string algo, int spin)
     {
@@ -234,8 +230,6 @@ internal static class AgileDecryptor
         var full = h.ComputeHash(combined);
         return full.Take(keyBits / 8).ToArray();
     }
-
-    // ── AES-CBC ──
 
     private static byte[] DecryptCbc(byte[] data, byte[] key, byte[] iv)
     {

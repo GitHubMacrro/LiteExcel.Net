@@ -180,9 +180,12 @@ public class CodeNamePreservationTests
             var sheetPr = doc.Root.Element(ns + "sheetPr");
             Assert.NotNull(sheetPr);
             Assert.Equal("Sheet1", sheetPr!.Attribute("codeName")?.Value);
-            // 无关属性与子元素不透传（当前只保留绑定所需的 codeName）
+            // 无关属性 filterMode 不透传
             Assert.Null(sheetPr.Attribute("filterMode"));
-            Assert.Empty(sheetPr.Elements());
+            // tabColor 自 2.4.76 起作为一等能力保留（不再丢弃）
+            var tabColor = sheetPr.Element(ns + "tabColor");
+            Assert.NotNull(tabColor);
+            Assert.Equal("FFFF0000", tabColor!.Attribute("rgb")?.Value);
         }
         finally { if (File.Exists(src)) File.Delete(src); if (File.Exists(dst)) File.Delete(dst); }
     }

@@ -32,8 +32,6 @@ public static partial class XlsxReader
         50, 51, 52, 53, 54, 55, 56, 57, 58,
     };
 
-    // ── 公开 API：文件路径重载 ──
-
     /// <summary>打开文件流并在进入 zip 前检测加密（CFB 容器 + EncryptionInfo），避免误报 zip 损坏 </summary>
     private static FileStream OpenFileStreamChecked(string path)
     {
@@ -94,7 +92,7 @@ public static partial class XlsxReader
     {
         if (onProgress is null) throw new ArgumentNullException(nameof(onProgress));
 
-        //   快速扫描获取总数据行数（仅遍历 <row> 元素计数，不解析单元格）
+        // 快速扫描总数据行数（仅计数 <row>，不解析单元格）
         int totalDataRows;
         using (var fsScan = OpenFileStreamChecked(path))
         using (var zipScan = new ZipArchive(fsScan, ZipArchiveMode.Read))
@@ -146,8 +144,6 @@ public static partial class XlsxReader
             }
         }
     }
-
-    // ── 公开 API：Stream 重载 ──
 
     /// <summary>列出所有工作表名 </summary>
     public static List<string> GetSheetNames(Stream stream)
@@ -408,7 +404,6 @@ public static partial class XlsxReader
         var el = parent.Element(name);
         return string.IsNullOrEmpty(el?.Value) ? null : el.Value.Trim();
     }
-    // ── 内部实现 ──
 
     private sealed class SheetInfo
     {
@@ -541,14 +536,12 @@ public static partial class XlsxReader
             s_workbookProtection = wp;
         }
 
-        // 读取 sheet 列表
         var sheetsEl = workbook.Element(ns + "sheets");
         if (sheetsEl is null) return result;
 
         var sheetElements = sheetsEl.Elements(ns + "sheet").ToList();
         if (sheetElements.Count == 0) return result;
 
-        // 读取 relationships
         var relsEntry = zip.GetEntry("xl/_rels/workbook.xml.rels");
         var relMap = new Dictionary<string, string>();
         if (relsEntry is not null)
@@ -583,9 +576,7 @@ public static partial class XlsxReader
             result.Add(new SheetInfo { Name = name, Path = sheetPath, SheetId = sheetId, State = state });
         }
 
-        // 把 date1904 标记附加到每个 SheetInfo... 用静态字段更简单
-        // 实际上，date1904 是工作簿级别的，不是 sheet 级别的
-        // 我们在 ReadWorksheet 时传入
+        // date1904 是工作簿级属性，经静态字段传给 ReadWorksheet（设计债 D1，随大版本清理）。
         s_globalDate1904 = date1904;
 
         return result;
@@ -694,6 +685,15 @@ public static partial class XlsxReader
                 if (!string.IsNullOrEmpty(codeNameAttr))
                     sheet.CodeName = codeNameAttr;
             }
+            else if (reader.LocalName == "tabColor")
+            {
+                var rgb = reader.GetAttribute("rgb");
+                if (!string.IsNullOrEmpty(rgb))
+                {
+                    // OOXML rgb 为 AARRGGBB，取后 6 位 RRGGBB
+                    sheet.TabColor = rgb.Length == 8 ? rgb.Substring(2) : rgb;
+                }
+            }
             else if (reader.LocalName == "sheetProtection")
             {
                 var prot = new SheetProtection
@@ -748,7 +748,6 @@ public static partial class XlsxReader
             }
             else if (reader.LocalName == "row")
             {
-                // Read row attributes before ReadSubtree
                 var rAttr = reader.GetAttribute("r");
                 var hiddenAttr = reader.GetAttribute("hidden");
                 var htAttr = reader.GetAttribute("ht");
@@ -852,10 +851,9 @@ public static partial class XlsxReader
             }
         }
 
-        // Convert hidden XML row numbers to 0-based data row indices
         if (hiddenRowNumbers.Count > 0 && sheet.Filter is not null)
         {
-            // 隐藏行同样按 Rows（数据行）0-based 换算：表头偏移 + 数据区起始偏移（FirstRowNumber-1）
+            // 隐藏行按 Rows（数据行）0-based 换算：表头偏移 + 数据区起始偏移（FirstRowNumber-1）
             int headerOffset = (sheet.Headers.Count > 0 ? 1 : 0) + (sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber - 1 : 0);
             foreach (var xmlRowNum in hiddenRowNumbers)
             {
@@ -1149,8 +1147,6 @@ public static partial class XlsxReader
 
         row[colIdx].Hyperlink = link;
     }
-
-    // ── 批注读取 ──
 
     private static void ReadCommentsForSheet(ZipArchive zip, string sheetPath, SheetData sheet)
     {
@@ -1907,7 +1903,6 @@ public static partial class XlsxReader
                     cf.IconSet = iset;
                     break;
                 }
-                // ── 2.4.4 长尾类型 ──
                 case "containsText":
                 case "beginsWith":
                 case "endsWith":
