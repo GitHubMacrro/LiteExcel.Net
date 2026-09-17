@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- **XLSB 手术式删表遗漏 rId 重编号（`0x046D` / `0x0430`）**：删除工作表后 `xl/workbook.bin.rels` 会整体重编号，但 `workbook.bin` 内嵌的透视缓存引用 `0x046D`（→ `pivotCacheDefinitionN.bin`）与切片缓存引用 `0x0430`（→ `slicerCacheN.bin`）此前未同步重编号，致其指向错部件（实测指向 `slicerCacheN.bin` / `theme1.xml`）；Excel 打开判为断链并删除 `pivotTable1/2.bin`、`slicerCache2/3.bin`、`slicer1.bin` 及一条工作簿属性记录（"已删除的部件/记录"修复提示）。现按 `newRel` 映射重写这两类记录内嵌的 rId（布局 `flags(u32) + cch(u16) + rId(UTF16) [+ 尾部 u32]`，`cch` 为 **u16**，区别于 `0x0182` 的 u32）。
+- **XLSB 透视表 `cacheId` 归位错误**：`BrtBeginPivotTable`(0x0118) 的 `cacheId`(off28) 此前在越界时按透视表名的数字后缀猜测；其真实语义是「该透视表 rels 指向的 `pivotCacheDefinitionN` 在 workbook 缓存引用序列（`0x0182` / `0x046D` 出现顺序）中的 **0 基索引**」。脏值会被 Excel 判为断链并删除该透视表（实测 `pivotTable1/2.bin`）。现由透视表 rels 解析缓存目标、查得索引后写回该字段。
 - **`lengthIs` 非法 OOXML 类型（xlsx / xlsb）**：`ConditionalFormatType.TextLength` 此前在 xlsx 写出为 `<cfRule type="lengthIs">`——`lengthIs` **不在 OOXML `ST_CfType` 枚举**中，Excel 打开含该规则的文件会直接拒绝（经真实 Excel COM 逐字节对照确证：仅把 Excel 原生文件的 `cellIs` 改为 `lengthIs` 即拒开）。现改为 Excel 原生形式 `cellIs` + `LEN(ref) <op> <value>`（between/notBetween 输出两条公式），xlsx 与 xlsb 一致。
 - **`FormulaEncoder` 多字符运算符丢失**：词法分析中 `>=` / `<=` / `<>` 匹配后未加入 token 即 `continue`，导致这些比较运算符被静默丢弃、公式编码错误（影响所有 BIFF8/BIFF12 公式与条件格式）。现正确产出 `PtgGe`/`PtgLe`/`PtgNe`。
 - **`FormulaFtab` 变参函数表补全**：`SEARCH`(82) / `LEFT`(115) / `RIGHT`(116) 补入 `VarArgFuncs`，使文本类条件格式公式（`SEARCH`/`LEFT`/`RIGHT`）编码为 `PtgFuncVar` 而非 `PtgFunc`（后者会导致 Excel 拒开文件）。
@@ -32,7 +34,9 @@
 - 新增 `XlsbConditionalFormatTests`（cellIs / between 双公式 / iconSet 模板+子记录 / expression 锚点相对引用 / top10 标志 / colorScale 2 色与 3 色 / dataBar 头+CFVO+颜色 / textLength→cellIs+LEN / duplicate / timePeriod / dxf 填充 / dxf 边框边类型 / 未知类型降级 / 全类型不降级，共 14 项）。
 - 新增 `ConditionalFormatTests.TextLength_WritesCellIsWithLen_NotInvalidLengthIs`（xlsx 回归）。
 - 新增 `FormulaTests.Xlsb_ComparisonOperators_RoundTrip`（`>=` `<=` `<>` `>` `<` `=` 编码回归，6 例）。
-- 全量 **707** 测试通过。
+- 新增 `DeleteSheetTests.Delete_XlsbSurgical_RenumbersPivotAndSlicerCacheRefs`（`0x046D`/`0x0430` 内嵌 rId 随 rels 递减的回归）。
+- 新增 `DeleteSheetTests.Delete_XlsbSurgical_RepairsPivotTableCacheId`（透视表 `cacheId` 按 rels 归位的回归）。
+- 全量 **709** 测试通过。
 
 ## [2.4.77] - 2026-09-15
 

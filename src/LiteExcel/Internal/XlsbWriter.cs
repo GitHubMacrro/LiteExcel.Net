@@ -460,6 +460,35 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
 
         var origWbBin = vb["xl/workbook.bin"];
         var origRecords = Biff12Records.ReadAll(origWbBin);
+
+        // workbook.bin 中透视缓存引用记录（0x0182 / 0x046D）按出现顺序 → 缓存部件路径的 0 基索引。
+        // 透视表 BrtBeginPivotTable 的 cacheId 即其 rels 指向的缓存在该列表中的位置（真实 Excel 行为）。
+        var cacheIndexByTarget = new Dictionary<string, int>(StringComparer.Ordinal);
+        int cacheOrder = 0;
+        foreach (var rec in origRecords)
+        {
+            if (rec.Rt != 0x0182 && rec.Rt != 0x046D) continue;
+            string relId;
+            if (rec.Rt == 0x0182) // flags(u32) + cch(u32) + rId(UTF16)
+            {
+                int o = 4;
+                relId = Biff12Records.ReadWideString(rec.Data, ref o);
+            }
+            else // 0x046D：flags(u32) + cch(u16) + rId(UTF16) + 尾部(u32)
+            {
+                if (rec.Data.Length < 6) continue;
+                int cch = Biff12Records.ReadU16(rec.Data, 4);
+                if (6 + cch * 2 > rec.Data.Length) continue;
+                relId = Encoding.Unicode.GetString(rec.Data, 6, cch * 2);
+            }
+            if (relId.Length == 0 || !relIdToTarget.TryGetValue(relId, out var cacheTarget)) continue;
+            var cacheAbs = cacheTarget.StartsWith("/", StringComparison.Ordinal) ? cacheTarget.TrimStart('/')
+                : cacheTarget.StartsWith("xl/", StringComparison.Ordinal) ? cacheTarget
+                : "xl/" + cacheTarget;
+            if (!cacheIndexByTarget.ContainsKey(cacheAbs))
+                cacheIndexByTarget[cacheAbs] = cacheOrder++;
+        }
+
         var bundleShList = new List<(string RelId, string Name)>();
         foreach (var rec in origRecords)
         {
@@ -518,11 +547,6 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             return text;
         }
 
-        int pivotCount = 0;
-        foreach (var key in vb.Keys)
-            if (key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) && key.EndsWith(".bin", StringComparison.Ordinal))
-                pivotCount++;
-
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
         if (preserved.Rels.TryGetValue("_rels/.rels", out var rootRels))
@@ -576,7 +600,11 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             if (kv.Key == "xl/connections.bin")
                 data = ModifyConnectionsBin(data);
             else if (kv.Key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
-                data = NormalizePivotTableBin(data, pivotCount);
+            {
+                var cacheAbs = PivotTableCacheTarget(kv.Key, preserved);
+                int cacheId = cacheAbs is not null && cacheIndexByTarget.TryGetValue(cacheAbs, out var ci) ? ci : -1;
+                if (cacheId >= 0) data = NormalizePivotTableBin(data, cacheId);
+            }
             WriteEntry(zip, RenamePartName(kv.Key), data);
         }
     }
@@ -686,6 +714,30 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                 }
                 WriteRecord(ms, rec.Rt, nd);
                 rIdIdx++;
+                continue;
+            }
+            if ((rec.Rt == 0x046D || rec.Rt == 0x0430) && rec.Data.Length >= 6) // 透视/切片缓存 rId 引用
+            {
+                // 布局：flags(u32) + cch(u16) + rId(UTF16) [+ 尾部字节]。仅重编号 rId，其余原样保留。
+                int cch = Biff12Records.ReadU16(rec.Data, 4);
+                int strEnd = 6 + cch * 2;
+                if (strEnd <= rec.Data.Length)
+                {
+                    int num = ParseRelId(Encoding.Unicode.GetString(rec.Data, 6, cch * 2));
+                    if (num >= 0)
+                    {
+                        var newId = "rId" + newRel(num);
+                        using var b = new MemoryStream();
+                        b.Write(rec.Data, 0, 4);
+                        var nb = Encoding.Unicode.GetBytes(newId);
+                        b.Write(BitConverter.GetBytes((ushort)newId.Length), 0, 2);
+                        b.Write(nb, 0, nb.Length);
+                        b.Write(rec.Data, strEnd, rec.Data.Length - strEnd);
+                        WriteRecord(ms, rec.Rt, b.ToArray());
+                        continue;
+                    }
+                }
+                WriteRecord(ms, rec.Rt, rec.Data);
                 continue;
             }
             WriteRecord(ms, rec.Rt, rec.Data);
@@ -953,9 +1005,10 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         return ms.ToArray();
     }
 
-    /// <summary>保真微调 pivotTableN.bin：BrtBeginPivotTable(0x0118) 的名称长度字段越界时规范化为名称数字后缀
-    /// （Excel 会修复源文件中的异常值）。布局：... + off24(u32) + off28(u32 名称长度) + cch(u32) + name。</summary>
-    private static byte[] NormalizePivotTableBin(byte[] data, int pivotCount)
+    /// <summary>保真微调 pivotTableN.bin：把 BrtBeginPivotTable(0x0118) 的 cacheId(off28) 归位为其 rels
+    /// 指向的透视缓存在 workbook.bin 缓存引用序列中的 0 基索引。源文件该字段常为脏值（Excel 打开时按 rels 重算），
+    /// 保持原值会被 Excel 判为断链并删除透视表。布局：... + off24(u32) + off28(u32 cacheId) + off32(u32 cch) + name。</summary>
+    private static byte[] NormalizePivotTableBin(byte[] data, int cacheId)
     {
         var recs = Biff12Records.ReadAll(data);
         using var ms = new MemoryStream(data.Length);
@@ -964,21 +1017,30 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             if (rec.Rt == 0x0118 && rec.Data.Length >= 36)
             {
                 var nd = (byte[])rec.Data.Clone();
-                uint field = Biff12Records.ReadU32(nd, 28);
-                int cch = (int)Biff12Records.ReadU32(nd, 32);
-                if (field > (uint)pivotCount && cch > 0 && 36 + cch * 2 <= nd.Length)
-                {
-                    var nm = Encoding.Unicode.GetString(nd, 36, cch * 2);
-                    var mm = System.Text.RegularExpressions.Regex.Match(nm, @"^PivotTable(\d+)$");
-                    if (mm.Success)
-                        WriteU32To(nd, 28, (uint)int.Parse(mm.Groups[1].Value));
-                }
+                if (Biff12Records.ReadU32(nd, 28) != (uint)cacheId)
+                    WriteU32To(nd, 28, (uint)cacheId);
                 WriteRecord(ms, rec.Rt, nd);
                 continue;
             }
             WriteRecord(ms, rec.Rt, rec.Data);
         }
         return ms.ToArray();
+    }
+
+    /// <summary>解析透视表部件 rels，返回其引用的透视缓存部件包内绝对路径（如 "xl/pivotCache/pivotCacheDefinition3.bin"）；无则 null。</summary>
+    private static string? PivotTableCacheTarget(string pivotPartPath, OoxmlPreservedParts preserved)
+    {
+        var dir = pivotPartPath.Substring(0, pivotPartPath.LastIndexOf('/'));
+        var fileName = pivotPartPath.Substring(pivotPartPath.LastIndexOf('/') + 1);
+        var relsPath = dir + "/_rels/" + fileName + ".rels";
+        string? relsXml = null;
+        if (preserved.Rels.TryGetValue(relsPath, out var r)) relsXml = r;
+        else if (preserved.Parts.TryGetValue(relsPath, out var bytes)) relsXml = Encoding.UTF8.GetString(bytes);
+        if (relsXml is null) return null;
+        foreach (var rel in XlsxWriter.ParseRels(relsXml))
+            if (rel.Type.EndsWith("/pivotCacheDefinition", StringComparison.OrdinalIgnoreCase))
+                return ResolveRelsTarget(dir, rel.Target);
+        return null;
     }
 
     /// <summary>合并工作表级保留 rels（图表/透视表等）与重建的超链接 rels </summary>

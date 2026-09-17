@@ -409,4 +409,121 @@ public class DeleteSheetTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Fact]
+    public void Delete_XlsbSurgical_RenumbersPivotAndSlicerCacheRefs()
+    {
+        // 回归（真实 raw_repro.xlsb 修复）：删表后 workbook.bin 内嵌的透视缓存(0x046D)/切片缓存(0x0430)
+        // rId 引用必须随 workbook.bin.rels 一起重编号，否则指向错部件 → Excel 打开时判为断链并删除
+        // pivotTableN.bin / slicerCacheN.bin / slicerN.bin。
+        // 布局：5 张表(rId1..5) + theme(rId6) + 5 个 pivotCache(rId7..11) + 3 个 slicerCache(rId12..14)。
+        var spec = new XlsbTestFile.WorkbookSpec();
+        for (int i = 0; i < 5; i++) spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S" + i });
+        for (int i = 1; i <= 5; i++)
+            spec.ExtraParts[$"xl/pivotCache/pivotCacheDefinition{i}.bin"] = new byte[] { 0 };
+        for (int i = 1; i <= 3; i++)
+            spec.ExtraParts[$"xl/slicerCaches/slicerCache{i}.bin"] = new byte[] { 0 };
+        spec.ExtraRels["xl/_rels/workbook.bin.rels"] = "";
+        for (int i = 1; i <= 5; i++)
+            spec.ExtraRels["xl/_rels/workbook.bin.rels"] +=
+                $"<Relationship Id=\"rId{6 + i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"pivotCache/pivotCacheDefinition{i}.bin\"/>";
+        for (int i = 1; i <= 3; i++)
+            spec.ExtraRels["xl/_rels/workbook.bin.rels"] +=
+                $"<Relationship Id=\"rId{11 + i}\" Type=\"http://schemas.microsoft.com/office/2007/relationships/slicerCache\" Target=\"slicerCaches/slicerCache{i}.bin\"/>";
+        spec.ExtraRels["xl/_rels/workbook.bin.rels"] +=
+            "<Relationship Id=\"rId6\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>";
+        spec.ExtraParts["xl/theme/theme1.xml"] = new byte[] { 0 };
+        // 0x0182 引用 pivotCache1..4；0x046D 引用 pivotCache5；0x0430 引用 slicerCache1..3
+        for (int i = 1; i <= 4; i++) spec.CacheRefs.Add(new XlsbTestFile.CacheRefSpec { Rt = 0x0182, Flags = (uint)(i - 1), RelId = 6 + i });
+        spec.CacheRefs.Add(new XlsbTestFile.CacheRefSpec { Rt = 0x046D, Flags = 8, RelId = 11, Trailing = 4 });
+        for (int i = 1; i <= 3; i++) spec.CacheRefs.Add(new XlsbTestFile.CacheRefSpec { Rt = 0x0430, Flags = 8, RelId = 11 + i });
+
+        var file = XlsbTestFile.Build(spec);
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            Assert.Equal(5, opened.Worksheets.Count);
+            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+
+            byte[] wb;
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(outPath))
+            {
+                using var s = zip.GetEntry("xl/workbook.bin")!.Open();
+                using var ms = new MemoryStream();
+                s.CopyTo(ms);
+                wb = ms.ToArray();
+            }
+
+            // 删除 S1(rId2) 后，rId3..14 全部 -1：theme rId6→rId5，pivotCache rId7..11→rId6..10，
+            // slicerCache rId12..14→rId11..13。
+            var cacheRefs = XlsbTestFile.ReadRelIds(wb, new[] { 0x0182, 0x046D, 0x0430 });
+            Assert.Equal(new[] { "rId6", "rId7", "rId8", "rId9", "rId10", "rId11", "rId12", "rId13" }, cacheRefs);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
+
+    [Fact]
+    public void Delete_XlsbSurgical_RepairsPivotTableCacheId()
+    {
+        // 回归（真实 raw_repro.xlsb 修复）：BrtBeginPivotTable(0x0118) 的 cacheId(off28) 必须归位为
+        // 其 rels 指向的缓存在 workbook.bin 缓存引用序列中的 0 基索引；源文件的脏值（如名称后缀）会被
+        // Excel 判为断链并删除该透视表。
+        var spec = new XlsbTestFile.WorkbookSpec();
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S0" });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S1" });
+        spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S2" });
+        for (int i = 1; i <= 2; i++)
+            spec.ExtraParts[$"xl/pivotCache/pivotCacheDefinition{i}.bin"] = new byte[] { 0 };
+        spec.ExtraRels["xl/_rels/workbook.bin.rels"] = "";
+        for (int i = 1; i <= 2; i++)
+            spec.ExtraRels["xl/_rels/workbook.bin.rels"] +=
+                $"<Relationship Id=\"rId{3 + i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"pivotCache/pivotCacheDefinition{i}.bin\"/>";
+        spec.ExtraRels["xl/_rels/workbook.bin.rels"] +=
+            "<Relationship Id=\"rId6\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>";
+        spec.ExtraParts["xl/theme/theme1.xml"] = new byte[] { 0 };
+        // 0x0182 引用 pivotCache1(rId4)、pivotCache2(rId5)
+        spec.CacheRefs.Add(new XlsbTestFile.CacheRefSpec { Rt = 0x0182, Flags = 0, RelId = 4 });
+        spec.CacheRefs.Add(new XlsbTestFile.CacheRefSpec { Rt = 0x0182, Flags = 1, RelId = 5 });
+        // 透视表1 引用 pivotCache2（脏 cacheId=99），透视表2 引用 pivotCache1（脏 cacheId=99）
+        spec.ExtraParts["xl/pivotTables/pivotTable1.bin"] = XlsbTestFile.BuildPivotTableBin(99, "PivotTable2");
+        spec.ExtraRels["xl/pivotTables/_rels/pivotTable1.bin.rels"] =
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"../pivotCache/pivotCacheDefinition2.bin\"/>";
+        spec.ExtraParts["xl/pivotTables/pivotTable2.bin"] = XlsbTestFile.BuildPivotTableBin(99, "PivotTable1");
+        spec.ExtraRels["xl/pivotTables/_rels/pivotTable2.bin.rels"] =
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"../pivotCache/pivotCacheDefinition1.bin\"/>";
+
+        var file = XlsbTestFile.Build(spec);
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+
+            byte[] Read(string name)
+            {
+                using var zip = System.IO.Compression.ZipFile.OpenRead(outPath);
+                using var s = zip.GetEntry(name)!.Open();
+                using var ms = new MemoryStream();
+                s.CopyTo(ms);
+                return ms.ToArray();
+            }
+
+            // pivotCacheDefinition2 在缓存序列中排第 1（0 基）→ pivotTable1.cacheId = 1
+            Assert.Equal(1, XlsbTestFile.ReadPivotTableCacheId(Read("xl/pivotTables/pivotTable1.bin")));
+            // pivotCacheDefinition1 排第 0 → pivotTable2.cacheId = 0
+            Assert.Equal(0, XlsbTestFile.ReadPivotTableCacheId(Read("xl/pivotTables/pivotTable2.bin")));
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
 }

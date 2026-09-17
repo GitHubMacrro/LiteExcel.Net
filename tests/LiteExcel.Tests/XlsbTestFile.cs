@@ -91,6 +91,24 @@ internal static class XlsbTestFile
 
         /// <summary>是否写出 BrtExternSheet（每个表一条 XTI 条目，itab=i）。</summary>
         public bool HasExternSheet;
+
+        /// <summary>额外的 workbook.bin rId 引用记录（透视缓存 0x0182/0x046D、切片缓存 0x0430）。</summary>
+        public List<CacheRefSpec> CacheRefs { get; } = new();
+
+        /// <summary>额外写入的 zip 部件（原样字节，不重建）。</summary>
+        public Dictionary<string, byte[]> ExtraParts { get; } = new();
+
+        /// <summary>额外关系 XML 片段（键为 .rels 路径，值为 &lt;Relationship/&gt; 片段）。workbook.bin.rels 会就地合并。</summary>
+        public Dictionary<string, string> ExtraRels { get; } = new();
+    }
+
+    /// <summary>workbook.bin 中内嵌 rId 的缓存引用记录规格。</summary>
+    public sealed class CacheRefSpec
+    {
+        public int Rt;         // 0x0182 / 0x046D / 0x0430
+        public uint Flags;     // 0x0182 的 cacheId；0x046D / 0x0430 的首字段
+        public int RelId;      // 引用的 workbook.bin.rels rId 编号
+        public uint Trailing;  // 仅 0x046D：尾部 u32
     }
 
     public static string Build(WorkbookSpec spec)
@@ -110,6 +128,17 @@ internal static class XlsbTestFile
 
             if (spec.HasDataModelPart)
                 WriteEntry(zip, "xl/model/item.data", new byte[] { 0x00, 0x01, 0x02, 0x03 });
+
+            foreach (var kv in spec.ExtraParts)
+                WriteEntry(zip, kv.Key, kv.Value);
+            foreach (var kv in spec.ExtraRels)
+            {
+                if (kv.Key == "xl/_rels/workbook.bin.rels") continue; // 已就地合并
+                WriteEntry(zip, kv.Key, Encoding.UTF8.GetBytes(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                    "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+                    kv.Value + "</Relationships>"));
+            }
         }
         return TempFile(ms.ToArray());
     }
@@ -139,6 +168,8 @@ internal static class XlsbTestFile
             sb.Append($"<Relationship Id=\"rId{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i}.bin\"/>");
         if (spec.HasDataModelPart)
             sb.Append($"<Relationship Id=\"rId{spec.Sheets.Count + 1}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/powerPivotData\" Target=\"model/item.data\"/>");
+        if (spec.ExtraRels.TryGetValue("xl/_rels/workbook.bin.rels", out var extra))
+            sb.Append(extra);
         sb.Append("</Relationships>");
         return Encoding.UTF8.GetBytes(sb.ToString());
     }
@@ -209,6 +240,69 @@ internal static class XlsbTestFile
         return v;
     }
 
+    /// <summary>构造最小透视表部件：单条 BrtBeginPivotTable(0x0118)。
+    /// 布局：off24=0(u32) + off28=cacheId(u32) + off32=cch(u32) + off36=name(UTF-16)。</summary>
+    public static byte[] BuildPivotTableBin(uint cacheId, string name)
+    {
+        using var ms = new MemoryStream();
+        using (var b = new MemoryStream())
+        {
+            for (int i = 0; i < 24; i++) b.WriteByte(0); // off0..23
+            WriteU32(b, 0);        // off24
+            WriteU32(b, cacheId);  // off28 = cacheId
+            WriteWideString(b, name); // off32 = cch + name
+            WriteRecord(ms, 0x0118, b.ToArray());
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>读取 xlsb 部件中全部记录的内嵌 rId（UTF-16 "rIdN"），按出现顺序返回。</summary>
+    public static List<string> ReadRelIds(byte[] part) => ReadRelIds(part, null);
+
+    /// <summary>读取指定记录类型（null = 全部）内嵌的 rId，按出现顺序返回。</summary>
+    public static List<string> ReadRelIds(byte[] part, int[]? recordTypes)
+    {
+        var result = new List<string>();
+        int pos = 0;
+        while (pos < part.Length)
+        {
+            int rt = ReadVarInt(part, ref pos);
+            int cb = ReadVarInt(part, ref pos);
+            if (cb < 0 || pos + cb > part.Length) break;
+            bool want = recordTypes is null || System.Array.IndexOf(recordTypes, rt) >= 0;
+            if (want)
+            {
+                for (int i = pos; i < pos + cb - 6; i++)
+                {
+                    if (part[i] == 0x72 && part[i + 1] == 0 && part[i + 2] == 0x49 && part[i + 3] == 0 && part[i + 4] == 0x64 && part[i + 5] == 0)
+                    {
+                        int j = i + 6; var num = new StringBuilder();
+                        while (j < pos + cb - 1 && part[j] >= 0x30 && part[j] <= 0x39 && part[j + 1] == 0) { num.Append((char)part[j]); j += 2; }
+                        if (num.Length > 0) { result.Add("rId" + num); break; }
+                    }
+                }
+            }
+            pos += cb;
+        }
+        return result;
+    }
+
+    /// <summary>读取透视表部件 BrtBeginPivotTable 的 cacheId（off28）；无则返回 -1。</summary>
+    public static long ReadPivotTableCacheId(byte[] part)
+    {
+        int pos = 0;
+        while (pos < part.Length)
+        {
+            int rt = ReadVarInt(part, ref pos);
+            int cb = ReadVarInt(part, ref pos);
+            if (cb < 0 || pos + cb > part.Length) break;
+            if (rt == 0x0118 && cb >= 32)
+                return (uint)(part[pos + 28] | (part[pos + 29] << 8) | (part[pos + 30] << 16) | (part[pos + 31] << 24));
+            pos += cb;
+        }
+        return -1;
+    }
+
     private static void WriteU32(byte[] b, int o, uint v)
     {
         b[o] = (byte)v; b[o + 1] = (byte)(v >> 8); b[o + 2] = (byte)(v >> 16); b[o + 3] = (byte)(v >> 24);
@@ -256,6 +350,23 @@ internal static class XlsbTestFile
             WriteWideString(b, spec.DataModelName);
             WriteU32(b, 0);                  // cce = 0（无 rgce）
             WriteRecord(ms, 0x0027, b.ToArray()); // BrtDefinedName
+        }
+        foreach (var cr in spec.CacheRefs)
+        {
+            using var b = new MemoryStream();
+            if (cr.Rt == 0x0182) // flags(u32) + cch(u32) + rId(UTF16)
+            {
+                WriteU32(b, cr.Flags);
+                WriteWideString(b, $"rId{cr.RelId}");
+            }
+            else // 0x046D / 0x0430：flags(u32) + cch(u16) + rId(UTF16) [+ 尾部 u32]
+            {
+                WriteU32(b, cr.Flags);
+                WriteU16(b, (ushort)($"rId{cr.RelId}").Length);
+                foreach (var ch in $"rId{cr.RelId}") { b.WriteByte((byte)(ch & 0xFF)); b.WriteByte((byte)((ch >> 8) & 0xFF)); }
+                if (cr.Rt == 0x046D) WriteU32(b, cr.Trailing);
+            }
+            WriteRecord(ms, cr.Rt, b.ToArray());
         }
         WriteRecord(ms, BrtEndBook, Empty());
         return ms.ToArray();
