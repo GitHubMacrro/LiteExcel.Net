@@ -35,7 +35,7 @@ public class XlsbPivotCacheTranscoderTests
 
         var xml = XlsbPivotCacheTranscoder.ToXml(info);
         Assert.Contains("pivotCacheDefinition", xml);
-        Assert.Contains("<cacheSource type=\"external\">", xml);
+        Assert.Contains("<cacheSource type=\"external\" connectionId=\"12\"/>", xml);
         Assert.Contains("cacheFields count=\"2\"", xml);
         Assert.Contains("name=\"[T].[A]\"", xml);
         Assert.Contains("caption=\"A\"", xml);
@@ -70,5 +70,39 @@ public class XlsbPivotCacheTranscoderTests
         Assert.Equal(2, info.Hierarchies[0].Count);
         Assert.Equal(130, info.Hierarchies[0].MemberValueDatatype);
         Assert.Equal("[BUSP_PRODUCTGROUPSFORSELECT]", info.Hierarchies[0].DimensionUniqueName);
+
+        // OLAP 尾部元素（数据模型）：dimensions / measureGroups / maps
+        Assert.Equal(8, info.Dimensions.Count);
+        Assert.Equal("BUSP_PRODUCTGROUPSFORSELECT", info.Dimensions[0].Name);
+        Assert.True(info.Dimensions[7].Measure);
+        Assert.Equal(7, info.MeasureGroups.Count);
+        Assert.Equal("BUSP_PRODUCTGROUPSFORSELECT", info.MeasureGroups[0].Name);
+        Assert.Equal(7, info.Maps.Count);
+
+        var xml = XlsbPivotCacheTranscoder.ToXml(info);
+        Assert.Contains("<dimensions count=\"8\">", xml);
+        Assert.Contains("<dimension measure=\"1\" name=\"Measures\"", xml);
+        Assert.Contains("<measureGroups count=\"7\">", xml);
+        Assert.Contains("<map measureGroup=\"0\" dimension=\"0\"/>", xml);
+    }
+
+    [Fact]
+    public void PivotCache_TranscodesDateAndMeasureHierarchies_WhenRealFileAvailable()
+    {
+        var path = @"D:\AiStory\Test\raw_repro.xlsb";
+        if (!File.Exists(path)) return;
+        using var zip = System.IO.Compression.ZipFile.OpenRead(path);
+        var e = zip.GetEntry("xl/pivotCache/pivotCacheDefinition3.bin");
+        if (e is null) return;
+        using var ms = new MemoryStream();
+        using (var s = e.Open()) s.CopyTo(ms);
+
+        var info = XlsbPivotCacheTranscoder.Parse(ms.ToArray());
+        var xml = XlsbPivotCacheTranscoder.ToXml(info);
+
+        Assert.Contains("<sharedItems containsSemiMixedTypes=\"0\" containsNonDate=\"0\" containsDate=\"1\"", xml);
+        Assert.Contains("<d v=\"2026-09-08", xml);
+        Assert.Contains("<x15:cachedUniqueName index=\"0\"", xml);
+        Assert.Contains("oneField=\"1\"", xml);
     }
 }

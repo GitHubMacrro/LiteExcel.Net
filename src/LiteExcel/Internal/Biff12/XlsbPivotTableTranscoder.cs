@@ -66,6 +66,7 @@ internal static class XlsbPivotTableTranscoder
 
     internal sealed class PivotLine
     {
+        public int RowIndex;
         public byte ItemType;
         public int DataIndex;
         public readonly List<uint> Entries = new();
@@ -224,6 +225,7 @@ internal static class XlsbPivotTableTranscoder
     {
         var line = new PivotLine();
         if (d.Length < 12) return line;
+        line.RowIndex = Biff12Records.ReadU16(d, 0);
         line.ItemType = d[2];
         line.DataIndex = Biff12Records.ReadS32(d, 8);
         return line;
@@ -483,10 +485,12 @@ internal static class XlsbPivotTableTranscoder
     private static void AppendLines(StringBuilder sb, string tag, List<PivotLine> lines)
     {
         if (lines.Count == 0) return;
+        string indexAttr = tag == "rowItems" ? "r" : "i";
         sb.Append($"<{tag} count=\"{lines.Count}\">");
         foreach (var line in lines)
         {
-            sb.Append("<i>");
+            if (line.RowIndex != 0) sb.Append($"<i {indexAttr}=\"{line.RowIndex}\">");
+            else sb.Append("<i>");
             foreach (var e in line.Entries)
                 sb.Append(e == 0 ? "<x/>" : $"<x v=\"{e}\"/>");
             sb.Append("</i>");

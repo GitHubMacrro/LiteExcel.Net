@@ -259,6 +259,13 @@ internal sealed class OoxmlPreservedParts
             else if (kv.Key.StartsWith("xl/drawings/_rels/drawing", StringComparison.Ordinal) && kv.Key.EndsWith(".rels", StringComparison.Ordinal))
                 result.Parts[kv.Key] = kv.Value;
         }
+
+        // 透视表（Stage D 接线）：pivotCacheDefinitionN.bin / pivotTableN.bin → .xml，
+        // 合成 workbook <pivotCaches>，并把 cacheId 映射为缓存列表位置（真实 Excel 行为）。
+        // 注意：当前转码尚未覆盖全部 OLAP cacheField 变体（数值/日期 sharedItems、slicerData 缓存），
+        // 启用前须确保 Excel 能无修复打开；暂以环境变量门控（默认关闭）。
+        if (Environment.GetEnvironmentVariable("LITEXCEL_ENABLE_PIVOT_WIRING") == "1")
+            TranscodePivotParts(result, targetMap);
         foreach (var kv in Parts)
         {
             if (!kv.Key.StartsWith("xl/queryTables/queryTable", StringComparison.Ordinal)) continue;
@@ -293,6 +300,70 @@ internal sealed class OoxmlPreservedParts
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 跨格式可直通的格式无关部件（xlsb / xlsx 中同构）。
+    /// 注意：`xl/drawings/drawing*.xml` 是 xlsb 专有的 ActiveX 图形表达（xdr:graphicFrame + com14:compatSp），
+    /// 混入 xlsx 会被 Excel 拒绝（0x800A03EC）；须由后续阶段的 drawing 转码处理，此处排除。
+    /// 仅保留 `xl/drawings/vmlDrawing*`。
+    /// </summary>
+    private void TranscodePivotParts(OoxmlPreservedParts result, Dictionary<string, string> targetMap)
+    {
+        bool hasCache = false, hasTable = false;
+        foreach (var kv in Parts)
+        {
+            if (kv.Key.StartsWith("xl/pivotCache/pivotCacheDefinition", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
+            {
+                var xmlPath = kv.Key.Substring(0, kv.Key.Length - 4) + ".xml";
+                var xml = Biff12.XlsbPivotCacheTranscoder.ToXml(Biff12.XlsbPivotCacheTranscoder.Parse(kv.Value));
+                result.Parts[xmlPath] = Encoding.UTF8.GetBytes(xml);
+                targetMap[kv.Key] = xmlPath;
+                result.OverrideTypes.Add(("/" + xmlPath, "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"));
+                hasCache = true;
+            }
+        }
+        if (!hasCache) return;
+
+        // cacheId 映射：workbook.bin 的 0x0182/0x046D 顺序 = xlsx cacheId；flags = pivotTable idCache。
+        List<Biff12.XlsbPivotWiring.CacheRef> caches = new();
+        if (VerbatimBinaries is not null && VerbatimBinaries.TryGetValue("xl/workbook.bin", out var wbBin))
+        {
+            string relsXml = Rels.TryGetValue("xl/_rels/workbook.bin.rels", out var rx) ? rx : "";
+            var relMap = Biff12.XlsbPivotWiring.RelIdToTarget(relsXml);
+            caches = Biff12.XlsbPivotWiring.ParseCacheRefs(wbBin, relMap);
+        }
+        var cacheIdByFlags = new Dictionary<uint, int>();
+        for (int i = 0; i < caches.Count; i++)
+            if (!cacheIdByFlags.ContainsKey(caches[i].Flags))
+                cacheIdByFlags[caches[i].Flags] = i;
+
+        foreach (var kv in Parts)
+        {
+            if (!kv.Key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) || !kv.Key.EndsWith(".bin", StringComparison.Ordinal))
+                continue;
+            var info = Biff12.XlsbPivotTableTranscoder.Parse(kv.Value);
+            int cacheId = cacheIdByFlags.TryGetValue(info.CacheId, out var pos) ? pos : (int)info.CacheId;
+            var xmlPath = kv.Key.Substring(0, kv.Key.Length - 4) + ".xml";
+            var xml = Biff12.XlsbPivotWiring.PatchCacheId(Biff12.XlsbPivotTableTranscoder.ToXml(info), cacheId);
+            result.Parts[xmlPath] = Encoding.UTF8.GetBytes(xml);
+            targetMap[kv.Key] = xmlPath;
+            result.OverrideTypes.Add(("/" + xmlPath, "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"));
+            hasTable = true;
+        }
+
+        // pivotTable 自身的 rels（指向 pivotCacheDefinition）：.bin.rels → .xml.rels，目标 .bin → .xml。
+        foreach (var kv in Parts)
+        {
+            if (!kv.Key.StartsWith("xl/pivotTables/_rels/pivotTable", StringComparison.Ordinal) || !kv.Key.EndsWith(".bin.rels", StringComparison.Ordinal))
+                continue;
+            var newKey = kv.Key.Substring(0, kv.Key.Length - ".bin.rels".Length) + ".xml.rels";
+            result.Parts[newKey] = Encoding.UTF8.GetBytes(FilterRelsToAvailableParts(
+                Encoding.UTF8.GetString(kv.Value), RelsBaseDir(newKey), result.Parts, targetMap));
+        }
+
+        if (hasTable && caches.Count > 0)
+            result.PivotCachesXml = Biff12.XlsbPivotWiring.BuildPivotCachesXml(caches);
     }
 
     /// <summary>
