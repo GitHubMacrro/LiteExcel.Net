@@ -260,12 +260,14 @@ internal sealed class OoxmlPreservedParts
                 result.Parts[kv.Key] = kv.Value;
         }
 
-        // 透视表（Stage D 接线）：pivotCacheDefinitionN.bin / pivotTableN.bin → .xml，
-        // 合成 workbook <pivotCaches>，并把 cacheId 映射为缓存列表位置（真实 Excel 行为）。
-        // 注意：当前转码尚未覆盖全部 OLAP cacheField 变体（数值/日期 sharedItems、slicerData 缓存），
+        // 透视表（Stage D 接线）+ 切片器（Stage E 接线）：二者必须一起启用（透视表强依赖切片器）。
+        // 注意：当前转码尚未覆盖全部变体（如 pivotFields 翻倍怪癖、formats/extLst、非 OLAP 切片器），
         // 启用前须确保 Excel 能无修复打开；暂以环境变量门控（默认关闭）。
         if (Environment.GetEnvironmentVariable("LITEXCEL_ENABLE_PIVOT_WIRING") == "1")
+        {
             TranscodePivotParts(result, targetMap);
+            TranscodeSlicerParts(result, targetMap);
+        }
         foreach (var kv in Parts)
         {
             if (!kv.Key.StartsWith("xl/queryTables/queryTable", StringComparison.Ordinal)) continue;
@@ -338,12 +340,14 @@ internal sealed class OoxmlPreservedParts
             if (!cacheIdByFlags.ContainsKey(caches[i].Flags))
                 cacheIdByFlags[caches[i].Flags] = i;
 
+        var usedCacheIds = new HashSet<int>();
         foreach (var kv in Parts)
         {
             if (!kv.Key.StartsWith("xl/pivotTables/pivotTable", StringComparison.Ordinal) || !kv.Key.EndsWith(".bin", StringComparison.Ordinal))
                 continue;
             var info = Biff12.XlsbPivotTableTranscoder.Parse(kv.Value);
             int cacheId = cacheIdByFlags.TryGetValue(info.CacheId, out var pos) ? pos : (int)info.CacheId;
+            usedCacheIds.Add(cacheId);
             var xmlPath = kv.Key.Substring(0, kv.Key.Length - 4) + ".xml";
             var xml = Biff12.XlsbPivotWiring.PatchCacheId(Biff12.XlsbPivotTableTranscoder.ToXml(info), cacheId);
             result.Parts[xmlPath] = Encoding.UTF8.GetBytes(xml);
@@ -363,7 +367,80 @@ internal sealed class OoxmlPreservedParts
         }
 
         if (hasTable && caches.Count > 0)
-            result.PivotCachesXml = Biff12.XlsbPivotWiring.BuildPivotCachesXml(caches);
+        {
+            result.PivotCachesXml = Biff12.XlsbPivotWiring.BuildPivotCachesXml(caches, usedCacheIds);
+            _pivotCachesExt = Biff12.XlsbPivotWiring.BuildPivotCachesExtLstXml(caches, usedCacheIds);
+        }
+    }
+
+    private string? _pivotCachesExt;
+
+    /// <summary>Stage E 接线：slicerCacheN.bin / slicerN.bin → .xml + CT Override + workbook extLst + sheet rels 目标重写。</summary>
+    private void TranscodeSlicerParts(OoxmlPreservedParts result, Dictionary<string, string> targetMap)
+    {
+        var slicerCacheRels = new List<(string RelId, string XmlPath)>();
+        bool any = false;
+        foreach (var kv in Parts)
+        {
+            if (kv.Key.StartsWith("xl/slicerCaches/slicerCache", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
+            {
+                var xmlPath = kv.Key.Substring(0, kv.Key.Length - 4) + ".xml";
+                var info = Biff12.XlsbSlicerTranscoder.ParseCache(kv.Value);
+                result.Parts[xmlPath] = Encoding.UTF8.GetBytes(Biff12.XlsbSlicerTranscoder.ToSlicerCacheXml(info));
+                targetMap[kv.Key] = xmlPath;
+                result.OverrideTypes.Add(("/" + xmlPath, "application/vnd.ms-excel.slicerCache+xml"));
+                any = true;
+            }
+            else if (kv.Key.StartsWith("xl/slicers/slicer", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
+            {
+                var xmlPath = kv.Key.Substring(0, kv.Key.Length - 4) + ".xml";
+                var list = Biff12.XlsbSlicerTranscoder.ParseSlicers(kv.Value);
+                result.Parts[xmlPath] = Encoding.UTF8.GetBytes(Biff12.XlsbSlicerTranscoder.ToSlicerXml(list));
+                targetMap[kv.Key] = xmlPath;
+                result.OverrideTypes.Add(("/" + xmlPath, "application/vnd.ms-excel.slicer+xml"));
+                any = true;
+            }
+        }
+        if (!any) return;
+
+        // workbook extLst x14 slicerCaches：由 workbook.bin.rels 中 slicerCache 关系顺序合成。
+        if (Rels.TryGetValue("xl/_rels/workbook.bin.rels", out var wbRels))
+        {
+            foreach (var m in System.Text.RegularExpressions.Regex.Matches(wbRels,
+                "<Relationship Id=\"([^\"]+)\"[^>]*/slicerCache\"[^>]*Target=\"([^\"]+)\""))
+            {
+                var id = ((System.Text.RegularExpressions.Match)m).Groups[1].Value;
+                var target = ((System.Text.RegularExpressions.Match)m).Groups[2].Value;
+                var part = target.StartsWith("xl/", StringComparison.Ordinal) ? target : "xl/" + target.TrimStart('/');
+                var xmlPath = part.EndsWith(".bin", StringComparison.Ordinal) ? part.Substring(0, part.Length - 4) + ".xml" : part;
+                slicerCacheRels.Add((id, xmlPath));
+            }
+        }
+        if (slicerCacheRels.Count > 0 || _pivotCachesExt is not null)
+        {
+            var sb = new StringBuilder();
+            sb.Append("<extLst>");
+            if (_pivotCachesExt is not null) sb.Append(_pivotCachesExt);
+            if (slicerCacheRels.Count > 0)
+            {
+                sb.Append("<ext uri=\"{BBE1A952-AA13-448e-AADC-164F8A28A991}\" " +
+                          "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:slicerCaches>");
+                foreach (var (id, _) in slicerCacheRels)
+                    sb.Append($"<x14:slicerCache r:id=\"{id}\"/>");
+                sb.Append("</x14:slicerCaches></ext>");
+            }
+            sb.Append("</extLst>");
+            result.WorkbookExtLstXml = sb.ToString();
+        }
+
+        // sheet rels：slicer 关系目标 .bin → .xml。
+        foreach (var kv in Rels)
+        {
+            if (!kv.Key.StartsWith("xl/worksheets/_rels/", StringComparison.Ordinal)) continue;
+            if (kv.Value.IndexOf("/slicer\"", StringComparison.Ordinal) < 0) continue;
+            var newKey = RenameBinaryRelsKey(kv.Key);
+            result.Rels[newKey] = FilterRelsToAvailableParts(kv.Value, RelsBaseDir(newKey), result.Parts, targetMap);
+        }
     }
 
     /// <summary>

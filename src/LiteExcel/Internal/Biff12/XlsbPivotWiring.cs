@@ -97,13 +97,33 @@ internal static class XlsbPivotWiring
     }
 
     /// <summary>合成 workbook &lt;pivotCaches&gt;：cacheId = 位置，r:id = 原 workbook.bin 关系 Id（写出时经 keptIdMap 重映射）。</summary>
-    public static string BuildPivotCachesXml(IReadOnlyList<CacheRef> caches)
+    /// <summary>合成 workbook &lt;pivotCaches&gt;：仅包含被透视表引用的缓存（cacheId = 位置）。
+    /// slicerData 缓存（无透视表引用）改由 <see cref="BuildPivotCachesExtLstXml"/> 写入 x14 extLst（真实 Excel 行为）。</summary>
+    public static string BuildPivotCachesXml(IReadOnlyList<CacheRef> caches, IReadOnlyCollection<int> usedCacheIds)
     {
         var sb = new StringBuilder();
         sb.Append("<pivotCaches>");
         for (int i = 0; i < caches.Count; i++)
-            sb.Append($"<pivotCache cacheId=\"{i}\" r:id=\"{caches[i].RelId}\"/>");
+        {
+            if (usedCacheIds.Contains(i)) sb.Append($"<pivotCache cacheId=\"{i}\" r:id=\"{caches[i].RelId}\"/>");
+        }
         sb.Append("</pivotCaches>");
+        return sb.ToString();
+    }
+
+    /// <summary>x14 extLst &lt;pivotCaches&gt;：包含未被透视表引用、但仍是数据模型缓存（如 slicerData）的项。</summary>
+    public static string? BuildPivotCachesExtLstXml(IReadOnlyList<CacheRef> caches, IReadOnlyCollection<int> usedCacheIds)
+    {
+        var extra = new List<int>();
+        for (int i = 0; i < caches.Count; i++)
+            if (!usedCacheIds.Contains(i)) extra.Add(i);
+        if (extra.Count == 0) return null;
+        var sb = new StringBuilder();
+        sb.Append("<ext uri=\"{876F7934-8845-4945-9796-88D515C7AA90}\" " +
+                  "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:pivotCaches>");
+        foreach (var i in extra)
+            sb.Append($"<pivotCache cacheId=\"{i}\" r:id=\"{caches[i].RelId}\"/>");
+        sb.Append("</x14:pivotCaches></ext>");
         return sb.ToString();
     }
 
