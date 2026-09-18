@@ -534,6 +534,75 @@ internal static class XlsbTestFile
         return ms.ToArray();
     }
 
+    public static byte[] BuildPivotTableBin(uint cacheId, string name, string dataCaption, string rowHeaderCaption,
+        string fieldName, (int ItemType, int CacheIndex)[] items, int[] rowFields, ushort hierarchyFlags, string style)
+    {
+        using var ms = new MemoryStream();
+        var head = new byte[32];
+        WriteU32(head, 28, cacheId);
+        using (var b = new MemoryStream())
+        {
+            b.Write(head, 0, head.Length);
+            WriteWideString(b, name);
+            WriteWideString(b, dataCaption);
+            WriteWideString(b, rowHeaderCaption);
+            WriteRecord(ms, 0x0118, b.ToArray());
+        }
+        using (var b = new MemoryStream())
+        {
+            WriteU32(b, 0); WriteU32(b, 64); WriteU32(b, 3); WriteU32(b, 3);
+            WriteU32(b, 1); WriteU32(b, 1); WriteU32(b, 4);
+            WriteU32(b, 0); WriteU32(b, 0);
+            WriteRecord(ms, 0x013A, b.ToArray());
+        }
+        WriteRecord(ms, 0x0139, Empty());
+        using (var b = new MemoryStream()) { WriteU32(b, 1); WriteRecord(ms, 0x011F, b.ToArray()); }
+        using (var b = new MemoryStream())
+        {
+            b.WriteByte(0x01); WriteU16(b, 0x0001); b.WriteByte(0xA1);
+            WriteU32(b, 0); WriteU32(b, 0x0104A15F); WriteU32(b, 0xFFFFFFFF); WriteU32(b, 0xFFFFFFFF);
+            WriteWideString(b, fieldName);
+            WriteRecord(ms, 0x011D, b.ToArray());
+        }
+        using (var b = new MemoryStream()) { WriteU32(b, (uint)items.Length); WriteRecord(ms, 0x011B, b.ToArray()); }
+        foreach (var it in items)
+        {
+            using (var b = new MemoryStream())
+            {
+                b.WriteByte((byte)it.ItemType); WriteU16(b, 0); WriteU32(b, (uint)it.CacheIndex);
+                WriteRecord(ms, 0x011A, b.ToArray());
+            }
+            WriteRecord(ms, 0x0119, Empty());
+        }
+        WriteRecord(ms, 0x011C, Empty());
+        WriteRecord(ms, 0x011E, Empty());
+        using (var b = new MemoryStream())
+        {
+            WriteU32(b, (uint)rowFields.Length);
+            foreach (var x in rowFields) WriteU32(b, (uint)x);
+            WriteRecord(ms, 0x0135, b.ToArray());
+        }
+        WriteRecord(ms, 0x0136, Empty());
+        using (var b = new MemoryStream()) { WriteU32(b, 1); WriteRecord(ms, 0x012B, b.ToArray()); }
+        using (var b = new MemoryStream())
+        {
+            WriteU16(b, 0); b.WriteByte(0); b.WriteByte(0); WriteU32(b, 1); WriteU32(b, 0);
+            WriteRecord(ms, 0x0129, b.ToArray());
+        }
+        using (var b = new MemoryStream()) { WriteU32(b, 0); WriteRecord(ms, 0x0184, b.ToArray()); }
+        WriteRecord(ms, 0x0185, Empty());
+        WriteRecord(ms, 0x012A, Empty());
+        WriteRecord(ms, 0x012C, Empty());
+        using (var b = new MemoryStream()) { WriteU32(b, 1); WriteRecord(ms, 0x013C, b.ToArray()); }
+        using (var b = new MemoryStream()) { WriteU16(b, hierarchyFlags); WriteU32(b, 0); WriteRecord(ms, 0x013E, b.ToArray()); }
+        WriteRecord(ms, 0x013D, Empty());
+        using (var b = new MemoryStream()) { WriteU16(b, 0); WriteWideString(b, style); WriteRecord(ms, 0x0201, b.ToArray()); }
+        using (var b = new MemoryStream()) { WriteU32(b, 1); WriteU32(b, 0); WriteRecord(ms, 0x0140, b.ToArray()); }
+        WriteRecord(ms, 0x0141, Empty());
+        WriteRecord(ms, 0x013B, Empty());
+        return ms.ToArray();
+    }
+
     private static void WriteU32(byte[] b, int o, uint v)
     {
         b[o] = (byte)v; b[o + 1] = (byte)(v >> 8); b[o + 2] = (byte)(v >> 16); b[o + 3] = (byte)(v >> 24);
