@@ -1,6 +1,6 @@
 ﻿# Changelog
 
-## [2.4.78] - 2026-09-16
+## [2.4.77] - 2026-09-18
 
 ### Added
 
@@ -10,40 +10,6 @@
   - 条件格式样式（dxf）写入 `styles.bin` 的 `BrtDXF`(0x01FB)：填充色/字体色/字重/斜体/下划线/删除线/边框，经全局去重（与规则 `dxfId` 一致）。
   - 关键标定点：**BIFF12 记录头为 LEB128 变长编码**（非固定 2+2 或 2+4）；**CF 公式的单元格/区域引用相对 sqref 左上角锚点**存储，且 Ptg 字节与单元格公式不同（`Ref`=0x4C、`Area`=0x2D、`Func`=0x41、`FuncVar`=0x42）；`BrtCFRule` 的公式段展开长度 = 长度 + 2×引用数；colorScale/dataBar 的颜色记录为 `BrtColor`(0x0234)；`BrtBeginDataBar` = `minLength(u8) + maxLength(u8) + flags(u8)`（bit0 = showValue）；timePeriod 各时间段的 rgce 为 Excel 固定模板（与锚点无关）。
   - 经 Excel COM 打开验证：无文件级修复提示，16 条规则（覆盖 12 种类型）往返（xlsb→xlsx 另存）XML 与原语义一致。
-
-### Fixed
-
-- **XLSB 手术式删表遗漏 rId 重编号（`0x046D` / `0x0430`）**：删除工作表后 `xl/workbook.bin.rels` 会整体重编号，但 `workbook.bin` 内嵌的透视缓存引用 `0x046D`（→ `pivotCacheDefinitionN.bin`）与切片缓存引用 `0x0430`（→ `slicerCacheN.bin`）此前未同步重编号，致其指向错部件（实测指向 `slicerCacheN.bin` / `theme1.xml`）；Excel 打开判为断链并删除 `pivotTable1/2.bin`、`slicerCache2/3.bin`、`slicer1.bin` 及一条工作簿属性记录（"已删除的部件/记录"修复提示）。现按 `newRel` 映射重写这两类记录内嵌的 rId（布局 `flags(u32) + cch(u16) + rId(UTF16) [+ 尾部 u32]`，`cch` 为 **u16**，区别于 `0x0182` 的 u32）。
-- **XLSB 透视表 `cacheId` 归位错误**：`BrtBeginPivotTable`(0x0118) 的 `cacheId`(off28) 此前在越界时按透视表名的数字后缀猜测；其真实语义是「该透视表 rels 指向的 `pivotCacheDefinitionN` 在 workbook 缓存引用序列（`0x0182` / `0x046D` 出现顺序）中的 **0 基索引**」。脏值会被 Excel 判为断链并删除该透视表（实测 `pivotTable1/2.bin`）。现由透视表 rels 解析缓存目标、查得索引后写回该字段。
-- **XLSB 手术式删表改写 `_xlcn.LinkedTable_*` 名**：此前对连接名/定义名去掉尾部 `"1"`（旧称"冗余"）。实测该 `1` 是表名后缀（如 `Table1`），剥离会截断合法名（`Table1`→`Table`），且源名本身可能已是 Excel 形态（`Table11`），多次另存会逐次降级（`Table11`→`Table1`→`Table`）。经全文件扫描确认该名为纯元数据、无任何部件按字符串引用（`item.data` 逐字节不变、`queryTableN.bin` 不含该名、公式引用走索引 `PtgName`），Excel 另存时自行追加 `1`。现改为**原样保留源名**，不再改写。
-- **`lengthIs` 非法 OOXML 类型（xlsx / xlsb）**：`ConditionalFormatType.TextLength` 此前在 xlsx 写出为 `<cfRule type="lengthIs">`——`lengthIs` **不在 OOXML `ST_CfType` 枚举**中，Excel 打开含该规则的文件会直接拒绝（经真实 Excel COM 逐字节对照确证：仅把 Excel 原生文件的 `cellIs` 改为 `lengthIs` 即拒开）。现改为 Excel 原生形式 `cellIs` + `LEN(ref) <op> <value>`（between/notBetween 输出两条公式），xlsx 与 xlsb 一致。
-- **`FormulaEncoder` 多字符运算符丢失**：词法分析中 `>=` / `<=` / `<>` 匹配后未加入 token 即 `continue`，导致这些比较运算符被静默丢弃、公式编码错误（影响所有 BIFF8/BIFF12 公式与条件格式）。现正确产出 `PtgGe`/`PtgLe`/`PtgNe`。
-- **`FormulaFtab` 变参函数表补全**：`SEARCH`(82) / `LEFT`(115) / `RIGHT`(116) 补入 `VarArgFuncs`，使文本类条件格式公式（`SEARCH`/`LEFT`/`RIGHT`）编码为 `PtgFuncVar` 而非 `PtgFunc`（后者会导致 Excel 拒开文件）。
-
-### Changed
-
-- **XLSB 条件格式降级上报取消**：全部 18 种 OOXML 规则类型均已支持写出，仅在遇到未知类型枚举值时经 `DegradationCapability.ConditionalFormatting` 上报。
-- **`IconSetInfo` 默认阈值改为整数**：未显式给出 `Thresholds` 时，均分阈值取整（如 3 图标 → 0/33/67），与 Excel 原生输出一致（此前为 33.333/66.667）。
-- **`IconSetInfo.Reverse`**：新增 `Reverse` 属性（对应 Excel `reverse`），xlsb 经 `BrtBeginIconSet` 标志位写出。
-
-### Notes
-
-- **XLSB 条件格式**：全类型已支持写出。verbatim / 手术式路径下既有条件格式仍原样透传。
-
-### Tests
-
-- 新增 `XlsbConditionalFormatTests`（cellIs / between 双公式 / iconSet 模板+子记录 / expression 锚点相对引用 / top10 标志 / colorScale 2 色与 3 色 / dataBar 头+CFVO+颜色 / textLength→cellIs+LEN / duplicate / timePeriod / dxf 填充 / dxf 边框边类型 / 未知类型降级 / 全类型不降级，共 14 项）。
-- 新增 `ConditionalFormatTests.TextLength_WritesCellIsWithLen_NotInvalidLengthIs`（xlsx 回归）。
-- 新增 `FormulaTests.Xlsb_ComparisonOperators_RoundTrip`（`>=` `<=` `<>` `>` `<` `=` 编码回归，6 例）。
-- 新增 `DeleteSheetTests.Delete_XlsbSurgical_RenumbersPivotAndSlicerCacheRefs`（`0x046D`/`0x0430` 内嵌 rId 随 rels 递减的回归）。
-- 新增 `DeleteSheetTests.Delete_XlsbSurgical_RepairsPivotTableCacheId`（透视表 `cacheId` 按 rels 归位的回归）。
-- 新增 `DeleteSheetTests.Delete_XlsbSurgical_PreservesLinkedTableNames`（`_xlcn.LinkedTable_*` 名删表前后原样不变的回归）。
-- 全量 **710** 测试通过。
-
-## [2.4.77] - 2026-09-15
-
-### Added
-
 - **工作表可见性 `Worksheet.Visible`**：新增 `SheetVisibility` 枚举（`Visible` / `Hidden` / `VeryHidden`）。支持 xlsx / xlsm / xlsb / xls 四格式读写（xlsx 走 `<sheet state>`、xlsb 走 `BrtBundleSh.hsState`、xls 走 `BOUNDSHEET.grbit`）。将最后一张可见表设为隐藏会抛 `LiteExcelException`（Excel 要求至少保留一张可见表）。
 - **工作表标签颜色 `Worksheet.TabColor`**：`#RRGGBB` / `RRGGBB`，null = 无。xlsx / xlsm 读写（`sheetPr/tabColor`）；xlsb / xls 写出时经 `DegradationCapability.SheetVisibility` 上报后丢弃。
 - **XLSB 命名区域读回**：打开 .xlsb 时解析 `BrtDefinedName` + rgce 令牌（`PtgRef`/`PtgArea`/`PtgRef3d`/`PtgArea3d` + 常量），填充 `Workbook.Names`（含 sheet-local `LocalSheetId`）。复合表达式（函数调用、运算符、名称引用等）跳过，不产出错误引用。
@@ -59,26 +25,45 @@
     2. `workbook.bin.rels` 的 rId **全量重编**（`rId9+` 递减，无空洞）；
     3. `BrtExternSheet`（XTI）引用被删表的条目 `itab` 置 `-1`、其余递减；
     4. 定义名：挂被删表的 sheet-local 名移除、其余 `itab` 递减；引用被删表的名称 **rgce 失效化**（`18 19` + ixti 指向失效条目 → body 改写为 `10 FF FF FF FF`）；
-    5. `_xlcn.LinkedTable_*` 连接名去掉尾部冗余 "1"（`workbook.bin` 定义名与 `connections.bin` 的 `BrtConnection` **同步**）；
+    5. `_xlcn.LinkedTable_*` 连接名/定义名**原样保留**（尾部数字为表名后缀，非冗余，不可剥离）；
     6. `[Content_Types].xml` 移除被删表 override 并同步重编号；
     7. 透视表 `BrtBeginPivotTable` 名称长度字段越界时规范化（Excel 修复源文件异常值）。
   - **修复**：重写 `WriteSurgicalXlsb` 完整实现上述 7 项同步改动。删表后**数据模型、PQ 连接、透视表/缓存、超级表、customXml、ActiveX、绘图、VBA 宏、工作表标签颜色、样式等全部保留**，输出与 Excel 自身产出等价（`workbook.bin` 仅剩连接 GUID / activeTab 两处无差异），Excel 打开正常。
+- **XLSB 手术式删表遗漏 rId 重编号（`0x046D` / `0x0430`）**：删除工作表后 `xl/workbook.bin.rels` 会整体重编号，但 `workbook.bin` 内嵌的透视缓存引用 `0x046D`（→ `pivotCacheDefinitionN.bin`）与切片缓存引用 `0x0430`（→ `slicerCacheN.bin`）此前未同步重编号，致其指向错部件（实测指向 `slicerCacheN.bin` / `theme1.xml`）；Excel 打开判为断链并删除 `pivotTable1/2.bin`、`slicerCache2/3.bin`、`slicer1.bin` 及一条工作簿属性记录（"已删除的部件/记录"修复提示）。现按 `newRel` 映射重写这两类记录内嵌的 rId（布局 `flags(u32) + cch(u16) + rId(UTF16) [+ 尾部 u32]`，`cch` 为 **u16**，区别于 `0x0182` 的 u32）。
+- **XLSB 透视表 `cacheId` 归位错误**：`BrtBeginPivotTable`(0x0118) 的 `cacheId`(off28) 此前在越界时按透视表名的数字后缀猜测；其真实语义是「该透视表 rels 指向的 `pivotCacheDefinitionN` 在 workbook 缓存引用序列（`0x0182` / `0x046D` 出现顺序）中的 **0 基索引**」。脏值会被 Excel 判为断链并删除该透视表（实测 `pivotTable1/2.bin`）。现由透视表 rels 解析缓存目标、查得索引后写回该字段。
+- **XLSB 手术式删表改写 `_xlcn.LinkedTable_*` 名**：此前对连接名/定义名去掉尾部 `"1"`（旧称"冗余"）。实测该 `1` 是表名后缀（如 `Table1`），剥离会截断合法名（`Table1`→`Table`），且源名本身可能已是 Excel 形态（`Table11`），多次另存会逐次降级（`Table11`→`Table1`→`Table`）。经全文件扫描确认该名为纯元数据、无任何部件按字符串引用（`item.data` 逐字节不变、`queryTableN.bin` 不含该名、公式引用走索引 `PtgName`），Excel 另存时自行追加 `1`。现改为**原样保留源名**，不再改写。
+- **`lengthIs` 非法 OOXML 类型（xlsx / xlsb）**：`ConditionalFormatType.TextLength` 此前在 xlsx 写出为 `<cfRule type="lengthIs">`——`lengthIs` **不在 OOXML `ST_CfType` 枚举**中，Excel 打开含该规则的文件会直接拒绝（经真实 Excel COM 逐字节对照确证：仅把 Excel 原生文件的 `cellIs` 改为 `lengthIs` 即拒开）。现改为 Excel 原生形式 `cellIs` + `LEN(ref) <op> <value>`（between/notBetween 输出两条公式），xlsx 与 xlsb 一致。
+- **`FormulaEncoder` 多字符运算符丢失**：词法分析中 `>=` / `<=` / `<>` 匹配后未加入 token 即 `continue`，导致这些比较运算符被静默丢弃、公式编码错误（影响所有 BIFF8/BIFF12 公式与条件格式）。现正确产出 `PtgGe`/`PtgLe`/`PtgNe`。
+- **`FormulaFtab` 变参函数表补全**：`SEARCH`(82) / `LEFT`(115) / `RIGHT`(116) 补入 `VarArgFuncs`，使文本类条件格式公式（`SEARCH`/`LEFT`/`RIGHT`）编码为 `PtgFuncVar` 而非 `PtgFunc`（后者会导致 Excel 拒开文件）。
 - **XLSB 手术式删除的 XTI 递减**：`ModifyExternSheet` 现对「itab > 被删表索引」的 XTI 条目正确递减（此前遗漏），与 Excel 自身行为一致。
 - **XLSB 手术式删除的依赖部件路径**：修正被删表 rels 依赖（如 `../tables/tableN.bin`）的路径规范化，避免残留孤儿部件（如 `table11.bin`）。
 - **XLSB 手术式删除的记录保真**：修正 `ModifyWorkbookBin` 对 `0x0817`（BrtFileVersion）等记录的解析，确保未修改的记录逐字节保留（此前旧实现会吞并后续记录）。
 - **XLSB 超级表降级误报**：`XlsbWriter.ReportDegradations` 此前对含超级表的工作表**无条件**上报 `DegradationCapability.Tables`（"超级表已丢弃"），但三条写出路径（重建 / verbatim / 手术式）实际都保留超级表——重建经 `BuildTableBin` 写出，verbatim/手术式原样透传 `xl/tables/*.bin`。该上报恒为假，已移除（xlsb 不存在丢表路径）。
 - **数据模型部件 `xl/model/item.data` 按 STORED 写出**：与 Excel 自身产出约定一致（该部件是内存映射数据库，Excel 存为不压缩）。此前用 `CompressionLevel.Optimal` 使输出体积显著小于 Excel；改为 STORED 后输出大小与 Excel 接近（如 `raw_repro` 删表：1.33MB → 2.31MB）。不影响内容与打开。
 
+### Changed
+
+- **XLSB 条件格式降级上报取消**：全部 18 种 OOXML 规则类型均已支持写出，仅在遇到未知类型枚举值时经 `DegradationCapability.ConditionalFormatting` 上报。
+- **`IconSetInfo` 默认阈值改为整数**：未显式给出 `Thresholds` 时，均分阈值取整（如 3 图标 → 0/33/67），与 Excel 原生输出一致（此前为 33.333/66.667）。
+- **`IconSetInfo.Reverse`**：新增 `Reverse` 属性（对应 Excel `reverse`），xlsb 经 `BrtBeginIconSet` 标志位写出。
+
 ### Notes
 
-- **XLSB 条件格式（2.4.77 时）为 C 级降级**：该版本 xlsb 的 CF 全类型丢弃 + 上报。**2.4.78 起已支持全部 18 种 OOXML 规则类型写出**（cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / 文本类 / 空值类 / 错误类 / uniqueValues / duplicateValues / timePeriod / textLength），不再降级。
+- **XLSB 条件格式**：全类型已支持写出。verbatim / 手术式路径下既有条件格式仍原样透传。
 - **XLSB 命名区域写出**仍为 C 级降级（本轮仅实现读回）。
 - **输出体积与 Excel 的差异（均非信息丢失）**：删表另存时输出与 Excel 的差异来自——① `model/item.data` 已按 STORED 对齐；② 其余部件我们压缩率更高（更小无害）；③ 省略陈旧 `calcChain.bin`（Excel 打开时重建）；④ Excel 重编码 `styles`/`sharedStrings`/`docProps`/`vbaProject` 的副作用（我们保留更完整内容）。经未压缩内容逐目录比对，**零信息遗漏**。
 
 ### Tests
 
-- 新增 `SheetVisibilityTests`（可见性/tabColor 四格式往返 + 最后可见表守卫 + verbatim 失效验证）、`XlsbNamedRangeReadTests`（真实样本命名区域读回）、`XlsbTableTests`（表读写往返 + 真实 12 表 + **真实样本打开-保存不误报 Tables 降级**）、`XlsbDataValidationTests`、`XlsbImageTests`（xlsb 浮动图片 media/drawing/BrtDrawing/CT + 打开-保存不翻倍）；`DeleteSheetTests` 新增数据模型工作簿删表**保真成功**（含 `AllowFeatureLossOnSave=true/false`）+ 未被引用表可删。全量 **686** 测试通过。
+- 新增 `XlsbConditionalFormatTests`（cellIs / between 双公式 / iconSet 模板+子记录 / expression 锚点相对引用 / top10 标志 / colorScale 2 色与 3 色 / dataBar 头+CFVO+颜色 / textLength→cellIs+LEN / duplicate / timePeriod / dxf 填充 / dxf 边框边类型 / 未知类型降级 / 全类型不降级，共 14 项）。
+- 新增 `SheetVisibilityTests`（可见性/tabColor 四格式往返 + 最后可见表守卫 + verbatim 失效验证）、`XlsbNamedRangeReadTests`（真实样本命名区域读回）、`XlsbTableTests`（表读写往返 + 真实 12 表 + **真实样本打开-保存不误报 Tables 降级**）、`XlsbDataValidationTests`、`XlsbImageTests`（xlsb 浮动图片 media/drawing/BrtDrawing/CT + 打开-保存不翻倍）；`DeleteSheetTests` 新增数据模型工作簿删表**保真成功**（含 `AllowFeatureLossOnSave=true/false`）+ 未被引用表可删。
+- 新增 `ConditionalFormatTests.TextLength_WritesCellIsWithLen_NotInvalidLengthIs`（xlsx 回归）。
+- 新增 `FormulaTests.Xlsb_ComparisonOperators_RoundTrip`（`>=` `<=` `<>` `>` `<` `=` 编码回归，6 例）。
+- 新增 `DeleteSheetTests.Delete_XlsbSurgical_RenumbersPivotAndSlicerCacheRefs`（`0x046D`/`0x0430` 内嵌 rId 随 rels 递减的回归）。
+- 新增 `DeleteSheetTests.Delete_XlsbSurgical_RepairsPivotTableCacheId`（透视表 `cacheId` 按 rels 归位的回归）。
+- 新增 `DeleteSheetTests.Delete_XlsbSurgical_PreservesLinkedTableNames`（`_xlcn.LinkedTable_*` 名删表前后原样不变的回归）。
 - 新增 fixture `excel-authored-namedranges.xlsb`（Excel 生成，含全局 + sheet-local 命名区域）、`excel-authored-table.xlsb`（Excel 生成，含超级表，用于验证降级误报修复）。
+- 全量 **710** 测试通过（net8.0）；net48 构建通过。
 - Excel COM 验证：四格式可见性、xlsx/xlsm tabColor、xlsb 命名区域/超级表/数据验证均与 Excel 视角一致；数据模型工作簿（`raw_repro.xlsb` 9 表）删 `DayList` → 输出 8 表打开正常，透视表 8/连接 12/VBA/数据模型/标签颜色 4 个全部保留，`workbook.bin` 与 Excel 基准仅差 2 条无语义记录（连接 GUID / activeTab）。
 
 ## [2.4.76] - 2026-09-11
