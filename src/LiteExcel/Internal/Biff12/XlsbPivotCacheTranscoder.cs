@@ -24,6 +24,10 @@ internal static class XlsbPivotCacheTranscoder
     private const int RtCacheField = 0x00B7;
     private const int RtSharedItemsHead = 0x00BD;
     private const int RtSharedItemStr = 0x0018;
+    private const int RtCacheHierarchy = 0x00C5;
+    private const int RtEndCacheHierarchy = 0x00C6;
+    private const int RtFieldsUsage = 0x00C7;
+    private const int RtEndFieldsUsage = 0x00C8;
 
     private const string MainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
@@ -37,6 +41,20 @@ internal static class XlsbPivotCacheTranscoder
         public readonly List<string> SharedStrings = new();
     }
 
+    internal sealed class CacheHierarchyInfo
+    {
+        public string UniqueName = "";
+        public string Caption = "";
+        public bool Attribute;
+        public int Count;
+        public int MemberValueDatatype;
+        public string? DimensionUniqueName;
+        public string? DefaultMemberUniqueName;
+        public string? AllUniqueName;
+        public string? DisplayFolder;
+        public readonly List<(int Type, int Index)> FieldsUsage = new();
+    }
+
     internal sealed class PivotCacheInfo
     {
         public int RefreshedVersion;
@@ -47,6 +65,7 @@ internal static class XlsbPivotCacheTranscoder
         public int SourceType;       // 1 = external（数据模型/OLAP）
         public uint ConnectionId;
         public readonly List<CacheFieldInfo> Fields = new();
+        public readonly List<CacheHierarchyInfo> Hierarchies = new();
     }
 
     public static PivotCacheInfo Parse(byte[] data)
@@ -76,10 +95,55 @@ internal static class XlsbPivotCacheTranscoder
                         if (s.Length > 0) field.SharedStrings.Add(s);
                     }
                     break;
+                case RtCacheHierarchy:
+                {
+                    var h = ParseHierarchy(d);
+                    if (h is not null) info.Hierarchies.Add(h);
+                    break;
+                }
+                case RtFieldsUsage:
+                    if (info.Hierarchies.Count > 0) ParseFieldsUsage(d, info.Hierarchies[info.Hierarchies.Count - 1]);
+                    break;
             }
         }
         return info;
     }
+
+    /// <summary>BrtBeginPivotCacheHierarchy(0x00C5)：flags(1) attribute(1) count(1) … memberValueDatatype(1)@15
+    /// + strings@21（uniqueName / caption / dimensionUniqueName / defaultMemberUniqueName / allUniqueName / displayFolder）。</summary>
+    private static CacheHierarchyInfo? ParseHierarchy(byte[] d)
+    {
+        if (d.Length < 21) return null;
+        var h = new CacheHierarchyInfo
+        {
+            Attribute = (d[0] & 0x01) != 0 || d[1] != 0,
+            Count = d[2],
+            MemberValueDatatype = d[15],
+        };
+        int off = 17;
+        h.UniqueName = ReadWideString(d, ref off);
+        h.Caption = ReadWideString(d, ref off);
+        h.DimensionUniqueName = NullIfEmpty(ReadWideString(d, ref off));
+        h.DefaultMemberUniqueName = NullIfEmpty(ReadWideString(d, ref off));
+        h.AllUniqueName = NullIfEmpty(ReadWideString(d, ref off));
+        h.DisplayFolder = ReadWideString(d, ref off);
+        return h;
+    }
+
+    /// <summary>BrtBeginPivotCacheHierarchyFieldsUsage(0x00C7)：count(u32) + count×fieldUsage(u32 type + u32 index)。</summary>
+    private static void ParseFieldsUsage(byte[] d, CacheHierarchyInfo h)
+    {
+        if (d.Length < 4) return;
+        int count = (int)Biff12Records.ReadU32(d, 0);
+        for (int i = 0; i < count; i++)
+        {
+            int off = 4 + i * 8;
+            if (off + 8 > d.Length) break;
+            h.FieldsUsage.Add(((int)Biff12Records.ReadU32(d, off), (int)Biff12Records.ReadU32(d, off + 4)));
+        }
+    }
+
+    private static string? NullIfEmpty(string s) => s.Length == 0 ? null : s;
 
     private static void ParseHeader(byte[] d, PivotCacheInfo info)
     {
@@ -163,6 +227,34 @@ internal static class XlsbPivotCacheTranscoder
             }
         }
         sb.Append("</cacheFields>");
+
+        if (c.Hierarchies.Count > 0)
+        {
+            sb.Append($"<cacheHierarchies count=\"{c.Hierarchies.Count}\">");
+            foreach (var h in c.Hierarchies)
+            {
+                sb.Append($"<cacheHierarchy uniqueName=\"{Esc(h.UniqueName)}\" caption=\"{Esc(h.Caption)}\"");
+                if (h.Attribute) sb.Append(" attribute=\"1\"");
+                if (h.DefaultMemberUniqueName is not null) sb.Append($" defaultMemberUniqueName=\"{Esc(h.DefaultMemberUniqueName)}\"");
+                if (h.AllUniqueName is not null) sb.Append($" allUniqueName=\"{Esc(h.AllUniqueName)}\"");
+                if (h.DimensionUniqueName is not null) sb.Append($" dimensionUniqueName=\"{Esc(h.DimensionUniqueName)}\"");
+                if (h.DisplayFolder is not null) sb.Append($" displayFolder=\"{Esc(h.DisplayFolder)}\"");
+                sb.Append($" count=\"{h.Count}\" memberValueDatatype=\"{h.MemberValueDatatype}\" unbalanced=\"0\"");
+                if (h.FieldsUsage.Count > 0)
+                {
+                    sb.Append($"><fieldsUsage count=\"{h.FieldsUsage.Count}\">");
+                    foreach (var (_, idx) in h.FieldsUsage)
+                        sb.Append($"<fieldUsage x=\"{idx}\"/>");
+                    sb.Append("</fieldsUsage></cacheHierarchy>");
+                }
+                else
+                {
+                    sb.Append("/>");
+                }
+            }
+            sb.Append("</cacheHierarchies>");
+        }
+
         sb.Append("</pivotCacheDefinition>");
         return sb.ToString();
     }

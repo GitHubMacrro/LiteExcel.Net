@@ -62,5 +62,13 @@ public class XlsbPivotCacheTranscoderTests
         Assert.True(info.Fields.Count >= 12);
         Assert.Equal("PACKAGEGROUP", info.Fields[0].Caption);
         Assert.NotEmpty(info.Fields[0].SharedStrings);
+
+        Assert.True(info.Hierarchies.Count >= 100);
+        Assert.Equal("[BUSP_PRODUCTGROUPSFORSELECT].[SUBPACKAGEGROUP]", info.Hierarchies[0].UniqueName);
+        Assert.Equal("SUBPACKAGEGROUP", info.Hierarchies[0].Caption);
+        Assert.True(info.Hierarchies[0].Attribute);
+        Assert.Equal(2, info.Hierarchies[0].Count);
+        Assert.Equal(130, info.Hierarchies[0].MemberValueDatatype);
+        Assert.Equal("[BUSP_PRODUCTGROUPSFORSELECT]", info.Hierarchies[0].DimensionUniqueName);
     }
 }
