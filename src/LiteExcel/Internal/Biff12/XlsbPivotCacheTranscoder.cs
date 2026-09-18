@@ -25,6 +25,9 @@ internal static class XlsbPivotCacheTranscoder
     private const int RtSharedItemsHead = 0x00BD;
     private const int RtSharedItemStr = 0x0018;
     private const int RtSharedItemDate = 0x0019;
+    private const int RtSharedItemNumber = 0x0015;
+    private const int RtSharedItemBlank = 0x0014;
+    private const int RtSharedItemNumberName = 0x083C;
     private const int RtCacheHierarchy = 0x00C5;
     private const int RtEndCacheHierarchy = 0x00C6;
     private const int RtFieldsUsage = 0x00C7;
@@ -35,6 +38,8 @@ internal static class XlsbPivotCacheTranscoder
     private const int RtMeasureGroup = 0x01EA;
     private const int RtMapsCount = 0x01E8;
     private const int RtMap = 0x01EC;
+    private const int RtSourceConnection = 0x049E;
+    private const int RtSlicerCacheData = 0x042A;
 
     private const string MainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
@@ -46,11 +51,14 @@ internal static class XlsbPivotCacheTranscoder
         public int Hierarchy;
         public int Level;
         public bool HasSharedItemsHead;
-        public byte SharedItemsFlags;
+        public ushort SharedItemsFlags;
         public double SharedMin;
         public double SharedMax;
         public readonly List<string> SharedStrings = new();
         public readonly List<string> SharedDates = new();
+        public readonly List<string> SharedNumbers = new();
+        public readonly List<string> SharedNumberNames = new();
+        public bool SharedBlank;
     }
 
     internal sealed class CacheHierarchyInfo
@@ -79,6 +87,9 @@ internal static class XlsbPivotCacheTranscoder
         public double? RefreshedDate;
         public int SourceType;       // 1 = external（数据模型/OLAP）
         public uint ConnectionId;
+        public string? SourceConnectionName;
+        public bool SlicerData;
+        public uint PivotCacheId;
         public readonly List<CacheFieldInfo> Fields = new();
         public readonly List<CacheHierarchyInfo> Hierarchies = new();
         public readonly List<DimensionInfo> Dimensions = new();
@@ -123,7 +134,7 @@ internal static class XlsbPivotCacheTranscoder
                     if (field is not null)
                     {
                         field.HasSharedItemsHead = true;
-                        if (d.Length >= 1) field.SharedItemsFlags = d[0];
+                        if (d.Length >= 2) field.SharedItemsFlags = Biff12Records.ReadU16(d, 0);
                         if (d.Length >= 22) { field.SharedMin = BitConverter.ToDouble(d, 6); field.SharedMax = BitConverter.ToDouble(d, 14); }
                     }
                     break;
@@ -143,6 +154,21 @@ internal static class XlsbPivotCacheTranscoder
                         field.SharedDates.Add($"{year:D4}-{mon:D2}-{day:D2}T{hour:D2}:{min:D2}:{sec:D2}");
                     }
                     break;
+                case RtSharedItemNumber:
+                    if (field is not null && d.Length >= 8)
+                        field.SharedNumbers.Add(BitConverter.ToDouble(d, 0).ToString("0.###############", CultureInfo.InvariantCulture));
+                    break;
+                case RtSharedItemBlank:
+                    if (field is not null) field.SharedBlank = true;
+                    break;
+                case RtSharedItemNumberName:
+                    if (field is not null && d.Length >= 8)
+                    {
+                        int off = 8;
+                        var s = ReadWideString(d, ref off);
+                        if (s.Length > 0) field.SharedNumberNames.Add(s);
+                    }
+                    break;
                 case RtCacheHierarchy:
                 {
                     var h = ParseHierarchy(d);
@@ -160,6 +186,20 @@ internal static class XlsbPivotCacheTranscoder
                     break;
                 case RtMap:
                     if (d.Length >= 8) info.Maps.Add((Biff12Records.ReadU32(d, 0), Biff12Records.ReadU32(d, 4)));
+                    break;
+                case RtSourceConnection:
+                    if (d.Length >= 4)
+                    {
+                        int o = 4;
+                        info.SourceConnectionName = ReadWideString(d, ref o);
+                    }
+                    break;
+                case RtSlicerCacheData:
+                    if (d.Length >= 9 && d[4] == 0x0F)
+                    {
+                        info.PivotCacheId = Biff12Records.ReadU32(d, 5);
+                        info.SlicerData = true;
+                    }
                     break;
             }
         }
@@ -287,6 +327,51 @@ internal static class XlsbPivotCacheTranscoder
     private static string FmtOle(double ole)
         => DateTime.FromOADate(ole).ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
 
+    /// <summary>由 0x00BD 标志位生成 sharedItems 的属性（位0=containsSemiMixedTypes、位1=containsNonDate、
+    /// 位3=containsString、位4=containsBlank、位6=containsNumber、位7=containsInteger；数值/整数时附 minValue/maxValue）。</summary>
+    private static void AppendSharedItemsFlags(StringBuilder sb, CacheFieldInfo f)
+    {
+        ushort fl = f.SharedItemsFlags;
+        bool semi = (fl & 0x01) != 0;
+        bool nonDate = (fl & 0x02) != 0;
+        bool str = (fl & 0x08) != 0;
+        bool blank = (fl & 0x10) != 0;
+        bool number = (fl & 0x40) != 0;
+        bool integer = (fl & 0x80) != 0;
+        if (!semi) sb.Append(" containsSemiMixedTypes=\"0\"");
+        if (!nonDate) sb.Append(" containsNonDate=\"0\"");
+        if (!str) sb.Append(" containsString=\"0\"");
+        if (blank) sb.Append(" containsBlank=\"1\"");
+        if (number) sb.Append(" containsNumber=\"1\"");
+        if (integer) sb.Append(" containsInteger=\"1\"");
+        if ((number || integer) && f.SharedNumbers.Count > 0)
+        {
+            double min = double.MaxValue, max = double.MinValue;
+            foreach (var v in f.SharedNumbers)
+            {
+                if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var dv))
+                {
+                    if (dv < min) min = dv;
+                    if (dv > max) max = dv;
+                }
+            }
+            if (min <= max)
+                sb.Append($" minValue=\"{min.ToString("0.###############", CultureInfo.InvariantCulture)}\" " +
+                          $"maxValue=\"{max.ToString("0.###############", CultureInfo.InvariantCulture)}\"");
+        }
+    }
+
+    private static void AppendCachedUniqueNames(StringBuilder sb, CacheFieldInfo f)
+    {
+        if (f.SharedNumberNames.Count == 0) return;
+        sb.Append("<extLst><ext uri=\"{4F2E5C28-24EA-4eb8-9CBF-B6C8F9C3D259}\" " +
+                  "xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\"><x15:cachedUniqueNames>");
+        int offset = f.SharedBlank ? 1 : 0;
+        for (int i = 0; i < f.SharedNumberNames.Count; i++)
+            sb.Append($"<x15:cachedUniqueName index=\"{i + offset}\" name=\"{Esc(f.SharedNumberNames[i])}\"/>");
+        sb.Append("</x15:cachedUniqueNames></ext></extLst>");
+    }
+
     /// <summary>数据字段度量（[Measures].[Sum of X]）对应的属性层级索引；无法匹配返回 -1。</summary>
     private static int AggregatedColumn(PivotCacheInfo c, CacheHierarchyInfo measure)
     {
@@ -321,16 +406,30 @@ internal static class XlsbPivotCacheTranscoder
         sb.Append('>');
 
         if (c.SourceType == 1)
-            sb.Append($"<cacheSource type=\"external\" connectionId=\"{c.ConnectionId}\"/>");
+        {
+            sb.Append($"<cacheSource type=\"external\" connectionId=\"{c.ConnectionId}\"");
+            if (c.SourceConnectionName is not null)
+                sb.Append("><extLst><ext uri=\"{F057638F-6D5F-4e77-A914-E7F072B9BCA8}\" " +
+                          "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\">" +
+                          $"<x14:sourceConnection name=\"{Esc(c.SourceConnectionName)}\"/></ext></extLst></cacheSource>");
+            else
+                sb.Append("/>");
+        }
         else
             sb.Append("<cacheSource type=\"worksheet\"/>");
 
-        sb.Append($"<cacheFields count=\"{c.Fields.Count}\">");
-        foreach (var f in c.Fields)
+        if (c.Fields.Count == 0)
+            sb.Append("<cacheFields count=\"0\"/>");
+        else
         {
+            sb.Append($"<cacheFields count=\"{c.Fields.Count}\">");
+            foreach (var f in c.Fields)
+            {
             sb.Append($"<cacheField name=\"{Esc(f.Name)}\"");
             if (f.Caption is not null) sb.Append($" caption=\"{Esc(f.Caption)}\"");
-            sb.Append($" numFmtId=\"{f.NumFmtId}\" hierarchy=\"{f.Hierarchy}\" level=\"{f.Level}\"");
+            sb.Append($" numFmtId=\"{f.NumFmtId}\"");
+            if (f.Hierarchy != 0) sb.Append($" hierarchy=\"{f.Hierarchy}\"");
+            if (f.Level != 0) sb.Append($" level=\"{f.Level}\"");
             if (f.SharedDates.Count > 0)
             {
                 sb.Append("><sharedItems containsSemiMixedTypes=\"0\" containsNonDate=\"0\" containsDate=\"1\" " +
@@ -346,19 +445,26 @@ internal static class XlsbPivotCacheTranscoder
                     sb.Append($"<x15:cachedUniqueName index=\"{di}\" name=\"{Esc(baseName)}.&amp;[{f.SharedDates[di]}]\"/>");
                 sb.Append("</x15:cachedUniqueNames></ext></extLst></cacheField>");
             }
-            else if (f.SharedStrings.Count > 0)
+            else if (f.SharedStrings.Count > 0 || f.SharedNumbers.Count > 0 || f.SharedBlank)
             {
-                sb.Append($"><sharedItems count=\"{f.SharedStrings.Count}\">");
-                foreach (var v in f.SharedStrings)
-                    sb.Append($"<s v=\"{Esc(v)}\"/>");
-                sb.Append("</sharedItems></cacheField>");
+                int count = f.SharedStrings.Count + f.SharedNumbers.Count + (f.SharedBlank ? 1 : 0);
+                sb.Append("><sharedItems");
+                AppendSharedItemsFlags(sb, f);
+                sb.Append($" count=\"{count}\">");
+                if (f.SharedBlank) sb.Append("<m/>");
+                foreach (var v in f.SharedStrings) sb.Append($"<s v=\"{Esc(v)}\"/>");
+                foreach (var v in f.SharedNumbers) sb.Append($"<n v=\"{v}\"/>");
+                sb.Append("</sharedItems>");
+                AppendCachedUniqueNames(sb, f);
+                sb.Append("</cacheField>");
             }
             else
             {
                 sb.Append("/>");
             }
+            }
+            sb.Append("</cacheFields>");
         }
-        sb.Append("</cacheFields>");
 
         if (c.Hierarchies.Count > 0)
         {
@@ -376,10 +482,21 @@ internal static class XlsbPivotCacheTranscoder
                     if (h.OneField) sb.Append(" oneField=\"1\"");
                     sb.Append(" hidden=\"1\"");
                     int aggCol = AggregatedColumn(c, h);
-                    if (aggCol >= 0)
-                        sb.Append($"><extLst><ext uri=\"{{B97F6D7D-B522-45F9-BDA1-12C45D357490}}\" " +
-                                  "xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\">" +
-                                  $"<x15:cacheHierarchy aggregatedColumn=\"{aggCol}\"/></ext></extLst></cacheHierarchy>");
+                    if (h.FieldsUsage.Count > 0 || aggCol >= 0)
+                    {
+                        sb.Append('>');
+                        if (h.FieldsUsage.Count > 0)
+                        {
+                            sb.Append($"<fieldsUsage count=\"{h.FieldsUsage.Count}\">");
+                            foreach (var idx in h.FieldsUsage) sb.Append($"<fieldUsage x=\"{idx}\"/>");
+                            sb.Append("</fieldsUsage>");
+                        }
+                        if (aggCol >= 0)
+                            sb.Append("<extLst><ext uri=\"{B97F6D7D-B522-45F9-BDA1-12C45D357490}\" " +
+                                      "xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\">" +
+                                      $"<x15:cacheHierarchy aggregatedColumn=\"{aggCol}\"/></ext></extLst>");
+                        sb.Append("</cacheHierarchy>");
+                    }
                     else
                         sb.Append("/>");
                     continue;
@@ -406,11 +523,11 @@ internal static class XlsbPivotCacheTranscoder
             sb.Append("</cacheHierarchies>");
         }
 
+        if (c.SourceType == 1) sb.Append("<kpis count=\"0\"/>");
+
         if (c.Dimensions.Count > 0)
         {
-            sb.Append("<kpis count=\"0\"/>");
-            sb.Append("<dimensions count=\"" + c.Dimensions.Count + "\">");
-            foreach (var dim in c.Dimensions)
+            sb.Append("<dimensions count=\"" + c.Dimensions.Count + "\">");            foreach (var dim in c.Dimensions)
             {
                 sb.Append("<dimension");
                 if (dim.Measure) sb.Append(" measure=\"1\"");
@@ -436,10 +553,13 @@ internal static class XlsbPivotCacheTranscoder
         }
 
         if (c.SourceType == 1)
+        {
             sb.Append("<extLst><ext uri=\"{725AE2AE-9491-48be-B2B4-4EB974FC3084}\" " +
                       "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\">" +
-                      "<x14:pivotCacheDefinition supportSubqueryNonVisual=\"1\" supportSubqueryCalcMem=\"1\" " +
-                      "supportAddCalcMems=\"1\"/></ext></extLst>");
+                      "<x14:pivotCacheDefinition");
+            if (c.SlicerData) sb.Append($" slicerData=\"1\" pivotCacheId=\"{c.PivotCacheId}\"");
+            sb.Append(" supportSubqueryNonVisual=\"1\" supportSubqueryCalcMem=\"1\" supportAddCalcMems=\"1\"/></ext></extLst>");
+        }
 
         sb.Append("</pivotCacheDefinition>");
         return sb.ToString();
