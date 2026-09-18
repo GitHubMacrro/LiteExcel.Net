@@ -100,6 +100,12 @@ internal static class XlsbTestFile
 
         /// <summary>额外关系 XML 片段（键为 .rels 路径，值为 &lt;Relationship/&gt; 片段）。workbook.bin.rels 会就地合并。</summary>
         public Dictionary<string, string> ExtraRels { get; } = new();
+
+        /// <summary>额外的 [Content_Types].xml Override 声明（PartName 含前导 '/' → ContentType）。</summary>
+        public Dictionary<string, string> ExtraOverrides { get; } = new();
+
+        /// <summary>额外的 [Content_Types].xml Default 声明（扩展名 → ContentType）。</summary>
+        public Dictionary<string, string> ExtraDefaults { get; } = new();
     }
 
     /// <summary>workbook.bin 中内嵌 rId 的缓存引用记录规格。</summary>
@@ -151,10 +157,14 @@ internal static class XlsbTestFile
         sb.Append("<Default Extension=\"bin\" ContentType=\"application/vnd.ms-excel.sheet.binary.macroEnabled.main\"/>");
         sb.Append("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
         sb.Append("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
+        foreach (var kv in spec.ExtraDefaults)
+            sb.Append($"<Default Extension=\"{kv.Key}\" ContentType=\"{kv.Value}\"/>");
         for (int i = 1; i <= spec.Sheets.Count; i++)
             sb.Append($"<Override PartName=\"/xl/worksheets/sheet{i}.bin\" ContentType=\"application/vnd.ms-excel.worksheet\"/>");
         if (spec.HasDataModelPart)
             sb.Append("<Override PartName=\"/xl/model/item.data\" ContentType=\"application/vnd.openxmlformats-officedocument.model+data\"/>");
+        foreach (var kv in spec.ExtraOverrides)
+            sb.Append($"<Override PartName=\"{kv.Key}\" ContentType=\"{kv.Value}\"/>");
         sb.Append("</Types>");
         return Encoding.UTF8.GetBytes(sb.ToString());
     }

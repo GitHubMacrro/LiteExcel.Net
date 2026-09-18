@@ -212,4 +212,124 @@ internal sealed class OoxmlPreservedParts
         stream.CopyTo(ms);
         return ms.ToArray();
     }
+
+    /// <summary>
+    /// 把从 xlsb 源捕获的保留部件转换为可用于 xlsx/xlsm 写出的形态（跨格式转换 Stage A）。
+    /// 仅保留「格式无关」部件（两种容器中同构），其余 BIFF12 (.bin) 记录不混入 OOXML 包；
+    /// 同时把 .bin 关系路径/目标与内容类型声明按目标容器重写，并剔除指向未写出部件的关系，
+    /// 避免产生悬空引用导致 Excel 修复。
+    /// </summary>
+    internal OoxmlPreservedParts ToXlsxCompatible()
+    {
+        var result = new OoxmlPreservedParts
+        {
+            // 非 null 标记：XlsxWriter 以此判断保留部件可用（不再整体丢弃）。
+            VerbatimXmlParts = new Dictionary<string, byte[]>(StringComparer.Ordinal),
+            WorkbookCodeName = WorkbookCodeName,
+            BookViewsXml = BookViewsXml,
+            DefinedNamesXml = DefinedNamesXml,
+        };
+
+        foreach (var kv in Parts)
+            if (IsFormatAgnosticForXlsx(kv.Key))
+                result.Parts[kv.Key] = kv.Value;
+
+        // 内容类型：丢弃 xlsb 专有 Default（bin/data），Override 仅保留已复制且非 .bin 的部件。
+        foreach (var (ext, ct) in DefaultTypes)
+            if (!string.Equals(ext, "bin", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(ext, "data", StringComparison.OrdinalIgnoreCase))
+                result.DefaultTypes.Add((ext, ct));
+        foreach (var (part, ct) in OverrideTypes)
+        {
+            var path = part.TrimStart('/');
+            // 仅保留实际已复制部件的 Override（含 vbaProject.bin 等 .bin 格式无关部件）。
+            if (!result.Parts.ContainsKey(path)) continue;
+            result.OverrideTypes.Add((part, ct));
+        }
+
+        // 关系：.bin.rels → .xml.rels；剔除指向未写出（.bin / 未复制）部件的关系。
+        foreach (var kv in Rels)
+        {
+            var newKey = RenameBinaryRelsKey(kv.Key);
+            var baseDir = RelsBaseDir(newKey);
+            result.Rels[newKey] = FilterRelsToAvailableParts(kv.Value, baseDir, result.Parts);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 跨格式可直通的格式无关部件（xlsb / xlsx 中同构）。
+    /// 注意：`xl/drawings/drawing*.xml` 是 xlsb 专有的 ActiveX 图形表达（xdr:graphicFrame + com14:compatSp），
+    /// 混入 xlsx 会被 Excel 拒绝（0x800A03EC）；须由后续阶段的 drawing 转码处理，此处排除。
+    /// 仅保留 `xl/drawings/vmlDrawing*`。
+    /// </summary>
+    private static bool IsFormatAgnosticForXlsx(string path)
+    {
+        if (path.StartsWith("customXml/", StringComparison.Ordinal)) return true;
+        if (path == "docProps/custom.xml") return true;
+        if (path == "xl/theme/theme1.xml") return true;
+        if (path == "xl/vbaProject.bin") return true;
+        if (path.StartsWith("xl/media/", StringComparison.Ordinal)) return true;
+        if (path.StartsWith("xl/drawings/", StringComparison.Ordinal))
+            return path.IndexOf("vmlDrawing", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (path.StartsWith("xl/activeX/", StringComparison.Ordinal)) return true;
+        if (path.StartsWith("xl/printerSettings/", StringComparison.Ordinal)) return true;
+        if (path.StartsWith("xl/ctrlProps/", StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    private static string RenameBinaryRelsKey(string path)
+    {
+        if (path == "xl/_rels/workbook.bin.rels") return "xl/_rels/workbook.xml.rels";
+        if (path.StartsWith("xl/worksheets/_rels/sheet", StringComparison.Ordinal)
+            && path.EndsWith(".bin.rels", StringComparison.Ordinal))
+            return path.Substring(0, path.Length - ".bin.rels".Length) + ".xml.rels";
+        return path;
+    }
+
+    private static string RelsBaseDir(string relsPath)
+    {
+        // "xl/_rels/workbook.xml.rels" -> "xl"; "xl/worksheets/_rels/sheet1.xml.rels" -> "xl/worksheets"; "_rels/.rels" -> ""
+        var idx = relsPath.IndexOf("/_rels/", StringComparison.Ordinal);
+        return idx < 0 ? "" : relsPath.Substring(0, idx);
+    }
+
+    private static string ResolveRelTarget(string baseDir, string target)
+    {
+        target = target.Replace('\\', '/');
+        if (target.StartsWith("/", StringComparison.Ordinal)) return target.TrimStart('/');
+        var combined = (string.IsNullOrEmpty(baseDir) ? "" : baseDir + "/") + target;
+        var stack = new List<string>();
+        foreach (var p in combined.Split('/'))
+        {
+            if (string.IsNullOrEmpty(p) || p == ".") continue;
+            if (p == "..") { if (stack.Count > 0) stack.RemoveAt(stack.Count - 1); continue; }
+            stack.Add(p);
+        }
+        return string.Join("/", stack);
+    }
+
+    /// <summary>剔除指向未写出部件的关系（保留 External），避免悬空引用。</summary>
+    private static string FilterRelsToAvailableParts(string relsXml, string baseDir, IReadOnlyDictionary<string, byte[]> available)
+    {
+        if (string.IsNullOrEmpty(relsXml)) return relsXml;
+        XDocument doc;
+        try { doc = XDocument.Parse(relsXml); }
+        catch { return relsXml; }
+        var root = doc.Root;
+        if (root is null) return relsXml;
+        var ns = root.GetDefaultNamespace();
+        var keep = new List<XElement>();
+        foreach (var el in root.Elements(ns + "Relationship"))
+        {
+            var targetMode = (string?)el.Attribute("TargetMode") ?? "";
+            if (string.Equals(targetMode, "External", StringComparison.OrdinalIgnoreCase)) { keep.Add(el); continue; }
+            var target = (string?)el.Attribute("Target") ?? "";
+            var abs = ResolveRelTarget(baseDir, target);
+            if (available.ContainsKey(abs)) keep.Add(el);
+        }
+        root.ReplaceNodes(keep);
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" + doc.ToString(SaveOptions.DisableFormatting);
+    }
 }

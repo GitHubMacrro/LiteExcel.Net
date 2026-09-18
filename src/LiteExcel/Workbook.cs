@@ -354,36 +354,57 @@ public sealed class Workbook
             "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
     }
 
+    /// <summary>
+    /// 源 XLSB 含高级部件（透视表/切片器/连接/PQ/数据模型等）时的守卫：
+    /// - 目标仍为 xlsb：verbatim / surgical 可逐字节保留则放行，否则按既有逻辑上报或阻止。
+    /// - 跨格式（目标 xlsx/xlsm/xls/csv）：这些 BIFF12 部件尚无法转码，写出时会被丢弃 —— 显式上报或阻止，绝不静默。
+    /// </summary>
     private void ThrowIfAdvancedXlsbPartsNotPreservable(ExcelFormat format)
     {
         if (Format != ExcelFormat.Xlsb || !SourceHasAdvancedXlsbParts)
             return;
-        var sheets = BuildSheetDataList();
-        if (CanVerbatimXlsb(sheets))
+
+        if (format == ExcelFormat.Xlsb)
+        {
+            var sheets = BuildSheetDataList();
+            if (CanVerbatimXlsb(sheets))
+                return;
+            // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留（含数据模型/透视/连接等全部高级部件）。
+            if (CanSurgicalXlsb(sheets))
+                return;
+            bool anyAdvancedModified = AdvancedXlsbSheetIndexes.Count > 0
+                && AdvancedXlsbSheetIndexes.Any(i => i >= 0 && i < Worksheets.Count && Worksheets[i].IsModified);
+            bool structureChanged = _openedSheetNames is not null
+                && (Worksheets.Count != _openedSheetNames.Count
+                    || !Worksheets.Select((w, i) => w.Name).SequenceEqual(_openedSheetNames));
+            if (!anyAdvancedModified && !structureChanged)
+                return;
+            ReportOrBlockAdvancedXlsb(format,
+                $"源 XLSB 文件包含当前模型无法安全合并的高级部件，保存到 {format} 时这些部件可能丢失。");
             return;
-        // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留（含数据模型/透视/连接等全部高级部件）。
-        if (CanSurgicalXlsb(sheets))
-            return;
-        bool anyAdvancedModified = AdvancedXlsbSheetIndexes.Count > 0
-            && AdvancedXlsbSheetIndexes.Any(i => i >= 0 && i < Worksheets.Count && Worksheets[i].IsModified);
-        bool structureChanged = _openedSheetNames is not null
-            && (Worksheets.Count != _openedSheetNames.Count
-                || !Worksheets.Select((w, i) => w.Name).SequenceEqual(_openedSheetNames));
-        if (!anyAdvancedModified && !structureChanged)
-            return;
+        }
+
+        // 跨格式：BIFF12 高级部件（透视表/切片器/连接/Power Query/数据模型）尚未转码，
+        // 写出时将被丢弃；格式无关部件（VBA/主题/customXml/媒体/ActiveX 等）会保留。
+        ReportOrBlockAdvancedXlsb(format,
+            $"源 XLSB 文件包含高级部件（透视表/切片器/连接/Power Query/数据模型等），转换为 {format} 时这些部件无法保留；" +
+            "VBA、主题、customXml、媒体、ActiveX 等格式无关部件会保留。");
+    }
+
+    private void ReportOrBlockAdvancedXlsb(ExcelFormat format, string message)
+    {
         if (AllowFeatureLossOnSave)
         {
             ReportDegradation(new DegradationInfo
             {
                 Capability = DegradationCapability.PivotTables,
                 TargetFormat = format,
-                Message = $"源 XLSB 文件包含当前模型无法安全合并的高级部件，保存到 {format} 时这些部件可能丢失。"
+                Message = message,
             });
             return;
         }
         throw new LiteExcelException(
-            "源 XLSB 文件包含透视表、切片器、图表或其他高级部件，当前版本无法在编辑/删除工作表后安全合并这些部件。默认已阻止本次保存。\n" +
-            "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
+            message + "\n默认已阻止本次保存。如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
     }
 
     /// <summary>记录一次能力降级：累积进 <see cref="SaveDegradations"/> 并透传外部回调。</summary>

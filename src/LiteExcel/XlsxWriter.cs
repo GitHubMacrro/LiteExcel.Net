@@ -97,12 +97,14 @@ public static partial class XlsxWriter
         var sharedIndex = new Dictionary<string, int>();
         var stylesheet = new Stylesheet();
 
+        // 源为 xlsb 时保留部件是 BIFF12 (.bin) 记录：转换为 xlsx 兼容形态
+        // （直通格式无关部件 + 重写关系/内容类型 + 剔除悬空引用），而非整体丢弃。
+        // workbook/styles/sheet/pivot/connection 等需转码的部件由后续阶段处理，暂不写出。
+        if (preserved is not null && preserved.VerbatimXmlParts is null)
+            preserved = preserved.ToXlsxCompatible();
+
         verbatim = verbatim && preserved?.VerbatimXmlParts is not null
             && preserved.VerbatimXmlParts.ContainsKey("xl/styles.xml");
-
-        // 源为 xlsb 时保留部件是 .bin 记录，混入 xlsx 包会损坏结构，故丢弃。
-        if (preserved is not null && preserved.VerbatimXmlParts is null)
-            preserved = null;
 
         if (!verbatim)
         {

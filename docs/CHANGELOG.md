@@ -1,5 +1,26 @@
 ﻿# Changelog
 
+## [2.4.78] - 2026-09-18
+
+### Added
+
+- **xlsb → xlsx/xlsm 跨格式转换（阶段 A：格式无关部件直通）**：打开 xlsb 后另存为 xlsx/xlsm 时，不再丢弃全部保留部件，而是把两种容器中同构的「格式无关」部件原样保留：工作簿主题 `theme1.xml`、`customXml/*`（含 Power Query M 代码）、`docProps/custom.xml`、VBA 宏工程（xlsm）、媒体 `xl/media/*`、ActiveX 控件、打印设置 `printerSettings/*`、控件属性 `ctrlProps/*`、VML 绘图 `vmlDrawing*`。各部件的关系（`_rels/.rels`、`workbook.xml.rels`、工作表 rels）与 `[Content_Types].xml` 按目标容器重写，并剔除指向未写出部件的悬空引用。
+
+### Fixed
+
+- **跨格式静默丢弃高级部件**（违反保真契约）：源为 xlsb、目标为非 xlsb 时，含透视表/切片器/连接/Power Query/数据模型等高级部件此前会被静默丢弃。现改为显式上报 `DegradationCapability.PivotTables`（记入 `Workbook.SaveDegradations`），`AllowFeatureLossOnSave=false` 时阻止保存。
+- **高级部件检测扩展**：`SourceHasAdvancedXlsbParts` 现同时覆盖工作簿级部件（`pivotCache` / `pivotTables` / `slicerCaches` / `slicers` / `queryTables` / `connections` / 数据模型），而非仅工作表 rels 中的透视/切片引用。
+
+### Notes
+
+- **`xl/drawings/drawing*.xml` 暂不直通**：该部件是 xlsb 专有的 ActiveX 图形表达（`xdr:graphicFrame` + `com14:compatSp`），混入 xlsx 会被 Excel 拒绝打开（`0x800A03EC`）；待后续阶段做 drawing 转码。`vmlDrawing*` 保留。
+- **后续阶段**：B1（workbook / sharedStrings / 工作表记录级转码 + 编辑叠加）、B2（完整样式转码）、B3（已有能力接入 + drawing/controls）、C（PQ/PP 连接）、D（透视表）、E（切片器）。
+
+### Tests
+
+- 新增 `XlsbToXlsxConversionTests`（5 项）：格式无关部件直通 + 关系重写；drawing XML 排除 / VML 保留；高级部件降级上报；严格模式阻止保存；VBA 按目标格式取舍。含包完整性断言（无悬空关系、部件均有内容类型声明）。
+- 全量 **715** 测试通过（net8.0）；net48 构建通过。
+
 ## [2.4.77] - 2026-09-18
 
 ### Added

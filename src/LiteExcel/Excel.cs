@@ -863,7 +863,29 @@ public static class Excel
                 workbook.SourceHasAdvancedXlsbParts = true;
             }
         }
-        workbook.SourceHasAdvancedXlsbParts = workbook.AdvancedXlsbSheetIndexes.Count > 0;
+
+        // 工作簿级高级部件（透视表/切片缓存/连接/PQ 查询表/数据模型）同样无法在跨格式或结构变更时保留。
+        bool workbookLevelAdvanced = false;
+        if (preserved.Parts is not null)
+        {
+            foreach (var key in preserved.Parts.Keys)
+            {
+                if (key.StartsWith("xl/pivotTables/", StringComparison.Ordinal)
+                    || key.StartsWith("xl/pivotCache/", StringComparison.Ordinal)
+                    || key.StartsWith("xl/slicerCaches/", StringComparison.Ordinal)
+                    || key.StartsWith("xl/slicers/", StringComparison.Ordinal)
+                    || key.StartsWith("xl/queryTables/", StringComparison.Ordinal)
+                    || key == "xl/connections.bin"
+                    || key == "xl/model/item.data")
+                {
+                    workbookLevelAdvanced = true;
+                    break;
+                }
+            }
+        }
+
+        workbook.SourceHasAdvancedXlsbParts =
+            workbook.SourceHasAdvancedXlsbParts || workbook.AdvancedXlsbSheetIndexes.Count > 0 || workbookLevelAdvanced;
     }
 
     private static SheetData NormalizeSheetData(SheetData sheet, bool firstRowIsHeader)
