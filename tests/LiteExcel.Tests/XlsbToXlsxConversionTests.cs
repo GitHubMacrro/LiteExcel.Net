@@ -78,7 +78,7 @@ public class XlsbToXlsxConversionTests
     }
 
     [Fact]
-    public void XlsbToXlsm_DropsDrawingXml_KeepsVml()
+    public void XlsbToXlsm_KeepsDrawingAndVml()
     {
         var spec = SpecWithCell();
         spec.ExtraParts["xl/drawings/drawing1.xml"] =
@@ -100,13 +100,52 @@ public class XlsbToXlsxConversionTests
             wb.SaveAs(outPath, ExcelFormat.Xlsm);
 
             using var zip = ZipFile.OpenRead(outPath);
-            // xlsb 专有 drawing XML 会被 Excel 拒绝，故 Stage A 排除；VML 保留。
-            Assert.Null(zip.GetEntry("xl/drawings/drawing1.xml"));
+            Assert.NotNull(zip.GetEntry("xl/drawings/drawing1.xml"));
             Assert.NotNull(zip.GetEntry("xl/drawings/vmlDrawing1.vml"));
 
             var sheetRels = ReadXml(zip, "xl/worksheets/_rels/sheet1.xml.rels").ToString();
-            Assert.DoesNotContain("drawing1.xml", sheetRels);
+            Assert.Contains("drawing1.xml", sheetRels);
 
+            AssertNoDangling(zip);
+        }
+        finally { Cleanup(src, outPath); }
+    }
+
+    [Fact]
+    public void XlsbToXlsx_ConvertsActiveXDrawingToShape()
+    {
+        // xlsb 的 ActiveX 形状用 xdr:graphicFrame + com14:compatSp 表达；xlsx 需为 xdr:sp（否则 Excel 拒开）。
+        var spec = SpecWithCell();
+        const string drawing =
+            "<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" " +
+            "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">" +
+            "<xdr:twoCellAnchor editAs=\"oneCell\"><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>" +
+            "<xdr:to><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>" +
+            "<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr>" +
+            "<xdr:cNvPr id=\"2051\" name=\"btn\"/><xdr:cNvGraphicFramePr><a:graphicFrameLocks/></xdr:cNvGraphicFramePr>" +
+            "</xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm>" +
+            "<a:graphic><a:graphicData uri=\"http://schemas.microsoft.com/office/drawing/2010/compatibility\">" +
+            "<com14:compatSp xmlns:com14=\"http://schemas.microsoft.com/office/drawing/2010/compatibility\" spid=\"_x0000_s2051\"/>" +
+            "</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>";
+        spec.ExtraParts["xl/drawings/drawing1.xml"] = Encoding.UTF8.GetBytes(drawing);
+        spec.ExtraOverrides["/xl/drawings/drawing1.xml"] = DrawingCt;
+        spec.ExtraRels["xl/worksheets/_rels/sheet1.bin.rels"] =
+            $"<Relationship Id=\"rIdD\" Type=\"{OfficeRelNs}/drawing\" Target=\"../drawings/drawing1.xml\"/>";
+
+        var src = XlsbTestFile.Build(spec);
+        var outPath = TempPath(".xlsx");
+        try
+        {
+            var wb = Excel.Open(src);
+            wb.AllowFeatureLossOnSave = true;
+            wb.SaveAs(outPath, ExcelFormat.Xlsx);
+
+            using var zip = ZipFile.OpenRead(outPath);
+            var xml = ReadXml(zip, "xl/drawings/drawing1.xml").ToString();
+            Assert.Contains("sp", xml);
+            Assert.DoesNotContain("compatSp", xml);
+            Assert.Contains("_x0000_s2051", xml);
+            Assert.Contains("compatExt", xml);
             AssertNoDangling(zip);
         }
         finally { Cleanup(src, outPath); }

@@ -250,6 +250,15 @@ internal sealed class OoxmlPreservedParts
             result.Parts["xl/model/item.data"] = modelData;
             result.OverrideTypes.Add(("/xl/model/item.data", "application/vnd.openxmlformats-officedocument.model+data"));
         }
+
+        // 绘图：xlsb 的 graphicFrame(compatSp) → xlsx 的 sp（否则 Excel 拒开）；drawing rels 原样保留。
+        foreach (var kv in Parts)
+        {
+            if (kv.Key.StartsWith("xl/drawings/drawing", StringComparison.Ordinal) && kv.Key.EndsWith(".xml", StringComparison.Ordinal))
+                result.Parts[kv.Key] = Encoding.UTF8.GetBytes(Biff12.XlsbDrawingTranscoder.Transcode(Encoding.UTF8.GetString(kv.Value)));
+            else if (kv.Key.StartsWith("xl/drawings/_rels/drawing", StringComparison.Ordinal) && kv.Key.EndsWith(".rels", StringComparison.Ordinal))
+                result.Parts[kv.Key] = kv.Value;
+        }
         foreach (var kv in Parts)
         {
             if (!kv.Key.StartsWith("xl/queryTables/queryTable", StringComparison.Ordinal)) continue;
