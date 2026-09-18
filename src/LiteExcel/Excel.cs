@@ -8,13 +8,12 @@ using System.IO.Compression;
 namespace LiteExcel;
 
 /// <summary>
-/// 高层统一入口（门面）。
-/// 用户只感知本类，不感知底层 Reader/Writer 与格式后端差异。
+/// API 统一入库
 /// </summary>
 public static class Excel
 {
 
-    /// <summary>打开工作簿，按扩展名自动识别格式。已支持 xlsx/xlsm/xls/xlsb/csv </summary>
+    /// <summary>打开工作簿，按扩展名自动识别格式,支持 xlsx/xlsm/xls/xlsb/csv </summary>
     public static Workbook Open(string path, ExcelReadOptions? options = null)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -389,8 +388,13 @@ public static class Excel
         wb.Worksheets.Add("Sheet1");
         return wb;
     }
-
-    /// <summary>新建工作簿并指定首个工作表名 </summary>
+        
+    /// <summary>
+    /// 新建工作簿,并指定首个工作表名称
+    /// </summary>
+    /// <param name="sheetName"></param>
+    /// <param name="format"></param>
+    /// <returns></returns>
     public static Workbook Create(string sheetName, ExcelFormat format = ExcelFormat.Xlsx)
     {
         var wb = Create(format);
@@ -412,7 +416,7 @@ public static class Excel
     }
 
     /// <summary>
-    /// 新建工作簿并直接写入 List&lt;T&gt; 数据（首个工作表，首行为表头）。
+    /// 新建工作簿并直接写入 List 《T》; 数据（首个工作表，首行为表头）。
     /// 反射映射，已标注 DAM，AOT/裁剪安全；返回的工作簿可与样式/冻结/条件格式/密码等工作簿级能力混用。
     /// </summary>
     public static Workbook Create<

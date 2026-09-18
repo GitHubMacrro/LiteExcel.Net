@@ -17,6 +17,6 @@ public enum ExcelFormat
     /// <summary>旧版二进制工作簿（BIFF8） </summary>
     Xls,
 
-    /// <summary>逗号分隔文本（轻量格式，仅表格数据） </summary>
+    /// <summary>逗号分隔文本 </summary>
     Csv,
 }

@@ -4,19 +4,31 @@ using System.Text;
 namespace LiteExcel;
 
 /// <summary>
-/// CSV 格式后端（轻量，仅表格数据，不支持样式/合并/批注等 Excel 专有能力）。
-/// 实现 RFC 4180 基础子集：双引号包裹含分隔符/换行/引号的字段。
+/// CSV 格式后端
 /// </summary>
 internal static class CsvBackend
-{
-    /// <summary>读取 CSV 文件为单张工作表的原始数据（首行不拆分为表头）。separator 为 null 时自动探测逗号/分号/Tab；encoding 为 null 时按 BOM 探测并回退 UTF-8。</summary>
+{    
+    /// <summary>
+    ///  读取 CSV 文件为单张工作表的原始数据（首行不拆分为表头）
+    /// </summary>
+    /// <param name="path"></param>
+    /// <param name="separator">为 null 时自动探测逗号/分号/Tab</param>
+    /// <param name="encoding">为 null 时按 BOM 探测并回退 UTF-8</param>
+    /// <returns></returns>
     public static SheetData Read(string path, char? separator = null, Encoding? encoding = null)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         return Read(fs, Path.GetFileNameWithoutExtension(path), separator, encoding);
     }
-
-    /// <summary>从流读取 CSV 为单张工作表的原始数据。sheetName 用于工作表命名，separator 为 null 时自动探测；encoding 显式指定时优先于 BOM。</summary>
+    
+    /// <summary>
+    /// 从流读取 CSV 为单张工作表的原始数据
+    /// </summary>
+    /// <param name="stream"></param>
+    /// <param name="sheetName">工作表命名</param>
+    /// <param name="separator">为 null 时自动探测</param>
+    /// <param name="encoding">显式指定时优先于 BOM</param>
+    /// <returns></returns>
     public static SheetData Read(Stream stream, string sheetName = "Sheet1", char? separator = null, Encoding? encoding = null)
     {
         var ms = new MemoryStream();
@@ -46,8 +58,8 @@ internal static class CsvBackend
     }
 
     /// <summary>
-    /// 探测 CSV 分隔符（仅统计引号之外的分隔符频率，引号内不算）。
-    /// 候选按 逗号 &gt; 分号 &gt; Tab 考察，取最多；三个候选都为零时回退逗号。
+    /// 探测 CSV 分隔符。
+    /// 候选按 逗号 分号 Tab 考察，取最多；三个候选都为零时回退逗号。
     /// </summary>
     internal static char DetectSeparator(string preview)
     {
@@ -177,7 +189,7 @@ internal static class CsvBackend
             AppendRow(sb, fields, sep);
         }
 
-        // 默认 UTF-8 带 BOM（Excel 打开 UTF-8 CSV 需 BOM 才不按本地代码页解读中文）。
+        // 默认 UTF-8 带 BOM
         // BOM 由编码的 preamble 决定：GetBytes 不含 preamble，须显式写出。
         var enc = encoding ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
         var preamble = enc.GetPreamble();

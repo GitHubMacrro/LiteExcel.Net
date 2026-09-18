@@ -6,9 +6,7 @@ using System.Linq;
 namespace LiteExcel;
 
 /// <summary>
-/// 高层工作簿模型（文件级）。
-/// 负责工作表集合、文档属性、保存/另存为。
-/// 打开时加载到内存，不长期持有文件流，因此无需 IDisposable。
+/// 统一工作簿API,负责工作表集合、文档属性、保存/另存为,打开时加载到内存，不长期持有文件流，因此无需 IDisposable。
 /// </summary>
 public sealed class Workbook
 {
@@ -34,14 +32,12 @@ public sealed class Workbook
     public ExcelFormat Format { get; private set; }
 
     /// <summary>
-    /// 打开时捕获的、写入器不重建的 OOXML 部件（宏/主题/绘图/图表等）。
-    /// 保存时按二进制透传，避免未映射部件被静默删除。新建工作簿为 null。
+    /// 打开时捕获的、写入器不重建的 OOXML 部件（宏/主题/绘图/图表等），保存时按二进制透传，避免未映射部件被静默删除。新建工作簿为 null
     /// </summary>
     internal OoxmlPreservedParts? PreservedParts { get; set; }
 
     /// <summary>
-    /// 打开时捕获的 VBA 宏工程原始字节（xl/vbaProject.bin）。写入 xlsb 时透传保留。
-    /// 新建工作簿或源文件无宏时为 null。
+    /// 打开时捕获的 VBA 宏工程原始字节（xl/vbaProject.bin）,写入 xlsb 时透传保留,新建工作簿或源文件无宏时为 null
     /// </summary>
     internal byte[]? VbaProjectBytes { get; set; }
 
@@ -82,7 +78,7 @@ public sealed class Workbook
     private readonly List<DegradationInfo> _saveDegradations = new();
 
     /// <summary>
-    /// 当前目标路径。
+    /// 当前目标路径
     /// <see cref="Open"/> 后指向源文件；<see cref="SaveAs"/> 后更新为新路径；
     /// <see cref="Create"/> 后为 null（此时只能 SaveAs）。
     /// </summary>
@@ -220,7 +216,7 @@ public sealed class Workbook
         WriteTo(stream, format);
     }
 
-    /// <summary>执行实际写出的 switch 分发。守卫校验已在调用方完成，避免 path→stream 双重执行导致降级重复上报。</summary>
+    /// <summary>执行实际写出的 switch 分发，避免 path→stream 双重执行导致降级重复上报</summary>
     private void WriteTo(Stream stream, ExcelFormat format)
     {
         void OnDeg(DegradationInfo info)
@@ -336,7 +332,7 @@ public sealed class Workbook
                 "请使用 xlsx/xlsm/xlsb 保存，或先移除密码。");
     }
 
-    /// <summary>源 XLS 含透视表时默认阻止保存（BIFF8 透视表无法保真写回或转换到其他格式）。
+    /// <summary>源 XLS 含透视表时默认阻止保存
     /// 用户可设 <see cref="AllowFeatureLossOnSave"/> = true 显式允许降级，此时透视表会被丢弃并经降级回调上报。 </summary>
     private void ThrowIfPivotTablesNotPreservable(ExcelFormat format)
     {
@@ -450,7 +446,7 @@ public sealed class Workbook
     }
 
     /// <summary>
-    /// 是否可以「手术式原样写回」（surgical verbatim）：仅从源文件中删除若干工作表而保持其余全部逐字节不变。
+    /// 是否可以「原样写回」（surgical verbatim）：仅从源文件中删除若干工作表而保持其余全部逐字节不变。
     /// 条件：源为 xlsx/xlsm、当前表是打开时表的有序子集（只删不增/不改名/不移动）、且无任何保留表被修改。
     /// 命中时 XlsxWriter 可原样写出保留部件 + 仅摘除被删表引用，最大限度保留透视表/图表/切片器等高级功能。
     /// </summary>
@@ -459,7 +455,7 @@ public sealed class Workbook
         if (Format != ExcelFormat.Xlsx && Format != ExcelFormat.Xlsm) return false;
         if (_openedSheetNames is null) return false;
         if (PreservedParts?.VerbatimXmlParts is null) return false;
-        // 必须有表被删除（count 减少）才走手术式；无删除时走 verbatim 路径（calcChain 清理等）
+        // 必须有表被删除（count 减少）才走；无删除时走 verbatim 路径（calcChain 清理等）
         if (sheets.Count >= _openedSheetNames.Count) return false;
 
         // 当前表名必须是打开时表名的「有序子序列」（去掉若干项后剩余顺序完全一致）。
@@ -510,7 +506,7 @@ public sealed class Workbook
     }
 
     /// <summary>
-    /// 是否可以「手术式原样写回」（surgical verbatim）xlsb：仅从源文件中删除若干工作表而保持其余全部逐字节不变。
+    /// 是否可以原样写回（surgical verbatim）xlsb：仅从源文件中删除若干工作表而保持其余全部逐字节不变。
     /// 条件：源为 xlsb、当前表是打开时表的有序子集（只删不增/不改名/不移动）、且无任何保留表被修改、
     /// 原始二进制部件已捕获、无密码变动。命中时 XlsbWriter 可原样写出保留部件 + 仅摘除被删表引用，
     /// 最大限度保留透视表/切片器/宏等高级功能。
@@ -521,7 +517,7 @@ public sealed class Workbook
         if (_openedSheetNames is null) return false;
         if (PreservedParts?.VerbatimBinaries is null) return false;
         if (!PreservedParts.VerbatimBinaries.ContainsKey("xl/workbook.bin")) return false;
-        // 必须有表被删除（count 减少）才走手术式
+        // 必须有表被删除（count 减少）才走
         if (sheets.Count >= _openedSheetNames.Count) return false;
 
         // 当前表名必须是打开时表名的「有序子序列」
@@ -607,8 +603,8 @@ public sealed class Workbook
     }
 
     /// <summary>删除工作表后，对原 definedNames XML 文本做同步清理：
-    /// 1. localSheetId == removedIndex → 删除该 definedName
-    /// 2. localSheetId > removedIndex → 局部索引减一（保持次序正确） </summary>
+    /// localSheetId == removedIndex → 删除该 definedName
+    /// localSheetId > removedIndex → 局部索引减一（保持次序正确） </summary>
     private static string? CleanDefinedNamesXmlOnDelete(string xml, int removedIndex)
     {
         if (string.IsNullOrEmpty(xml)) return null;

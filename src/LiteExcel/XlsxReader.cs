@@ -9,7 +9,7 @@ using System.Xml.Linq;
 namespace LiteExcel;
 
 /// <summary>
-/// xlsx 读取器 零反射，AOT 安全 
+/// xlsx 读取器
 /// </summary>
 public static partial class XlsxReader
 {
@@ -198,9 +198,9 @@ public static partial class XlsxReader
     }
 
     /// <summary>
-    /// 读取所有工作表的 InCell（richData）图片。
-    /// vm 索引为工作簿级全局连续编号（写侧 InCellVmBySheet 按 sheet 顺序累加）；
-    /// richValueRel.xml.rels 第 i 条 image 关系即对应 vm = i+1 的图片 media。
+    /// 读取所有工作表中的 InCell（richData）图片。
+    /// 图片按工作簿级全局连续的 vm 编号关联：写入时按工作表顺序累加，
+    /// 读取时按图片关系顺序，第 i 条对应 vm = i+1。
     /// </summary>
     private static void ReadInCellImages(ZipArchive zip, List<SheetInfo> infos, List<SheetData> sheets)
     {

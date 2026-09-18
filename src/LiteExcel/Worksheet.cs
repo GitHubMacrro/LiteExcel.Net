@@ -5,8 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace LiteExcel;
 
 /// <summary>
-/// 高层工作表模型。
-/// 内部保存原始网格（含首行在内的所有行），不隐含"首行是表头"的语义；
+/// 统一工作表api。
 /// 表头识别是 List&lt;T&gt;/DataTable 映射层的职责。
 /// 高层坐标统一 1-based；写回低层 <see cref="SheetData"/> 时自动转换。
 /// </summary>
@@ -898,7 +897,7 @@ public sealed class Worksheet
         row[col1 - 1] = cell;
     }
 
-    /// <summary>单元格写回回调：把高层 Cell 落入网格（越界扩展） </summary>
+    /// <summary>单元格写回回调：把高层 Cell 落入网格 </summary>
     internal void OnCellChanged(Cell cell)
     {
         if (!ReferenceEquals(cell.Owner, this)) return;
@@ -964,9 +963,8 @@ public sealed class Worksheet
     }
 
     /// <summary>
-    /// 把高层稀疏字典（key=0-based 列索引）转为低层 List&lt;double&gt;，按下标补齐，
-    /// 未设置的列填 0（哨兵=无自定义列宽，与各写入器跳过 &lt;=0 的约定一致）。
-    /// 旧实现 <c>.Select(kv =&gt; kv.Value).ToList()</c> 丢弃 key 且枚举顺序无保证，导致稀疏列宽错位。
+    /// 把稀疏字典（key=0-based 列索引）按索引展开为 List&lt;double&gt;，缺的列补 0（0=无自定义列宽）。
+    /// 旧实现直接抽 value 会丢 key，加上字典枚举无序，导致列宽错位。
     /// </summary>
     private static List<double>? ToColumnWidthsList(Dictionary<int, double>? widths)
     {

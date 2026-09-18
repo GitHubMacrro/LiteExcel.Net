@@ -77,9 +77,7 @@ public static partial class XlsxWriter
         Action<DegradationInfo>? degradationCallback = null, bool verbatim = false, bool surgical = false, bool dropMacros = false)
     {
         if (sheets is null || sheets.Count == 0)
-            throw new ArgumentException("至少需要一张工作表", nameof(sheets));
-
-        // 手术式原样写回（surgical verbatim）：仅摘除被删表部件及其引用，其余逐字节保留。
+            throw new ArgumentException("至少需要一张工作表", nameof(sheets));        
         if (surgical && preserved is not null
             && preserved.VerbatimXmlParts is not null)
         {
@@ -240,8 +238,7 @@ public static partial class XlsxWriter
     }
 
     /// <summary>
-    /// 手术式原样写回（surgical verbatim）：仅从源包摘除被删表部件及其引用（workbook.xml/rels/CT），
-    /// 其余逐字节保留，透视表/图表/切片器/ActiveX/customXml/connections/queryTables 均原封不动。
+    /// 仅从源包摘除被删表部件及其引用（workbook.xml/rels/CT），其余逐字节保留，透视表/图表/切片器/ActiveX/customXml/connections/queryTables 均原封不动    
     /// </summary>
     /// <param name="deletedOrigIndexes">被删表在打开时的 0-based 序号集合 </param>
     private static void WriteSurgicalXlsx(Stream stream, IReadOnlyList<SheetData> sheets,

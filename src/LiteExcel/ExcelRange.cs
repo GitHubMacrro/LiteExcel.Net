@@ -3,8 +3,7 @@ using System.Collections;
 namespace LiteExcel;
 
 /// <summary>
-/// 连续矩形区域（1-based，含端点）。
-/// 支持批量读写、样式、合并、清空、枚举。
+/// 连续矩形区域（1-based，含端点）,支持批量读写、样式、合并、清空、枚举
 /// </summary>
 public sealed class ExcelRange : IEnumerable<Cell>
 {

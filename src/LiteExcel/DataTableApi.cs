@@ -4,7 +4,7 @@ using System.Data;
 namespace LiteExcel;
 
 /// <summary>
-/// DataTable 便利 API（AOT 安全，无反射） 
+/// DataTable 便利 API
 /// </summary>
 public static partial class XlsxReader
 {
@@ -93,7 +93,7 @@ public static partial class XlsxReader
 }
 
 /// <summary>
-/// DataTable 便利 API（AOT 安全，无反射） 
+/// DataTable 便利 API
 /// </summary>
 public static partial class XlsxWriter
 {

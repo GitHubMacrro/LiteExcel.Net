@@ -5,7 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace LiteExcel;
 
 /// <summary>
-/// 工作表集合。支持按索引/名称访问，以及增删移动。
+/// 工作表集合
 /// </summary>
 public sealed class WorksheetCollection : IEnumerable<Worksheet>
 {
@@ -70,7 +70,7 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
         return sheet;
     }
 
-    /// <summary>按名称删除工作表。存在则删除并返回 true，否则 false </summary>
+    /// <summary>按名称删除工作表,存在则删除并返回 true，否则 false </summary>
     public bool Remove(string name)
     {
         var sheet = Find(name);
@@ -122,9 +122,9 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
     }
 
     /// <summary>
-    /// 返回快照枚举器：在枚举过程中对集合进行增删不会影响正在进行的遍历。
-    /// 例如可以在 foreach 中直接调用 <c>ws.Delete()</c> 而不触发「集合已修改」异常。
-    /// 注意：枚举期间新增的表不会被本次遍历看到。
+    /// 枚举的是调用时的快照，遍历期间的增删不影响本次遍历。
+    /// 例如可在 foreach 中直接调用 <c>ws.Delete()</c>，不会抛「集合已修改」异常。
+    /// 注意：遍历期间新增的表不会被本次遍历看到。
     /// </summary>
     public IEnumerator<Worksheet> GetEnumerator()
     {

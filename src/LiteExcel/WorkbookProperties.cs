@@ -1,8 +1,7 @@
 namespace LiteExcel;
 
 /// <summary>
-/// 工作簿文档属性（文件属性对话框显示的信息） 
-/// 对应 xlsx 包内的 docProps/core.xml 与 docProps/app.xml 
+/// 工作簿文档属性（文件属性对话框显示的信息）
 /// </summary>
 public sealed class WorkbookProperties
 {
@@ -25,8 +24,7 @@ public sealed class WorkbookProperties
     public string? Subject { get; set; }
 
     /// <summary>
-    /// 应用程序名（docProps/app.xml 的 Application） 
-    /// 为 null 时写出默认取宿主程序集名（Assembly.GetEntryAssembly()） 
+    /// 应用程序名为 null 时写出默认取宿主程序集名
     /// </summary>
     public string? Application { get; set; }
 

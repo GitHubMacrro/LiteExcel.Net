@@ -70,21 +70,21 @@ public enum DegradationCapability
 }
 
 /// <summary>
-/// 一次能力降级事件：写出到目标格式时，某项 Excel 能力被静默丢弃的说明。
-/// 通过 <see cref="ExcelWriteOptions.OnDegradation"/> 回调上报，默认关闭（无破坏性）。
+/// 写出到目标格式时，某项 Excel 能力被静默丢弃的说明
+/// 通过 <see cref="ExcelWriteOptions.OnDegradation"/> 回调上报，默认关闭
 /// </summary>
 public sealed class DegradationInfo
 {
     /// <summary>被丢弃的能力 </summary>
     public DegradationCapability Capability { get; set; }
 
-    /// <summary>受影响的工作表名（工作簿级能力为 null） </summary>
+    /// <summary>受影响的工作表名 </summary>
     public string? SheetName { get; set; }
 
     /// <summary>写出目标格式 </summary>
     public ExcelFormat TargetFormat { get; set; }
 
-    /// <summary>人类可读说明 </summary>
+    /// <summary>可读说明 </summary>
     public string Message { get; set; } = "";
 }
 

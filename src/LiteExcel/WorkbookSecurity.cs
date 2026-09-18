@@ -3,9 +3,7 @@ using System;
 namespace LiteExcel;
 
 /// <summary>
-/// 工作簿文件级安全状态。
-/// 管理两类文件级密码：打开密码（文件加密）与修改密码（写保护）。
-/// 密码本体仅存储于本对象内部，不对外暴露；错误消息与序列化均不含密码明文。
+/// 工作簿文件级的加密属性,管理两类文件级密码：打开密码（文件加密）与修改密码（写保护）。
 /// </summary>
 public sealed class WorkbookSecurity
 {
