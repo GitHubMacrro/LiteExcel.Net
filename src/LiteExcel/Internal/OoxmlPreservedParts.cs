@@ -239,23 +239,11 @@ internal sealed class OoxmlPreservedParts
         var targetMap = new Dictionary<string, string>(StringComparer.Ordinal);
         if (Parts.TryGetValue("xl/connections.bin", out var connBin))
         {
-            var conns = Biff12.XlsbConnectionTranscoder.Parse(connBin);
-            var connXml = Biff12.XlsbConnectionTranscoder.ToXml(conns);
+            var connXml = Biff12.XlsbConnectionTranscoder.ToXml(Biff12.XlsbConnectionTranscoder.Parse(connBin));
             result.Parts["xl/connections.xml"] = Encoding.UTF8.GetBytes(connXml);
             targetMap["xl/connections.bin"] = "xl/connections.xml";
             result.OverrideTypes.Add(("/xl/connections.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"));
-
-            // type-102（数据模型链接表）连接的 extLst 引用 _xlcn.LinkedTable_* 定义名；
-            // 缺失这些定义名时 Excel 会拒绝打开（实测）。由连接自身合成（name=sourceName，值=<x15id>[]）。
-            var defNames = new StringBuilder();
-            foreach (var c in conns)
-            {
-                if (c.Type != 102 || string.IsNullOrEmpty(c.RangeSourceName)) continue;
-                var value = (c.X15Id ?? "") + "[]";
-                defNames.Append($"<definedName name=\"{XlsxWriter.XmlEscape(c.RangeSourceName!)}\" hidden=\"1\">{XlsxWriter.XmlEscape(value)}</definedName>");
-            }
-            if (defNames.Length > 0)
-                result.DefinedNamesXml = "<definedNames>" + defNames + "</definedNames>";
+            // 注：type-102 链接表所需的 `_xlcn.LinkedTable_*` 定义名由 Workbook.BuildXlsbDefinedNamesXml 统一合成。
         }
         if (Parts.TryGetValue("xl/model/item.data", out var modelData))
         {

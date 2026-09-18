@@ -231,6 +231,9 @@ public sealed class Workbook
             case ExcelFormat.Xlsm:
             {
                 var sheets = BuildSheetDataList();
+                // B1：源为 xlsb 时，把模型中的定义名（可解码的简单引用）与数据模型链接表名合并为 definedNames 写出。
+                if (Format == ExcelFormat.Xlsb && PreservedParts is not null)
+                    PreservedParts.DefinedNamesXml = BuildXlsbDefinedNamesXml();
                 bool structureUnchanged = StructureUnchanged(sheets);
                 bool verbatimX = CanVerbatimXlsx(sheets);
                 bool surgicalX = CanSurgicalXlsx(sheets);
@@ -352,6 +355,34 @@ public sealed class Workbook
         throw new LiteExcelException(
             $"源 XLS 文件包含透视表，当前版本无法保真写回或转换 BIFF8 透视表，保存会永久删除透视表。默认已阻止本次保存。\n" +
             "如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
+    }
+
+    /// <summary>
+    /// 源为 xlsb 时构建 workbook.xml 的 definedNames：
+    /// 模型中的定义名（rgce 可解码的简单引用/常量）+ 数据模型链接表的 `_xlcn.LinkedTable_*`（由连接合成）。
+    /// 复合表达式（结构化引用、函数等）在读取时已跳过，不会产出错误引用。
+    /// </summary>
+    private string BuildXlsbDefinedNamesXml()
+    {
+        var sb = new System.Text.StringBuilder();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var n in Names)
+        {
+            if (string.IsNullOrEmpty(n.Name) || string.IsNullOrEmpty(n.Reference)) continue;
+            if (!seen.Add(n.Name + "|" + n.LocalSheetId)) continue;
+            var local = n.LocalSheetId >= 0 ? $" localSheetId=\"{n.LocalSheetId}\"" : "";
+            sb.Append($"<definedName name=\"{XlsxWriter.XmlEscape(n.Name)}\"{local}>{XlsxWriter.XmlEscape(n.Reference)}</definedName>");
+        }
+        if (PreservedParts?.Parts.TryGetValue("xl/connections.bin", out var connBin) == true)
+        {
+            foreach (var c in Internal.Biff12.XlsbConnectionTranscoder.Parse(connBin))
+            {
+                if (c.Type != 102 || string.IsNullOrEmpty(c.RangeSourceName)) continue;
+                if (!seen.Add(c.RangeSourceName! + "|-1")) continue;
+                sb.Append($"<definedName name=\"{XlsxWriter.XmlEscape(c.RangeSourceName!)}\" hidden=\"1\">{XlsxWriter.XmlEscape((c.X15Id ?? "") + "[]")}</definedName>");
+            }
+        }
+        return sb.Length > 0 ? "<definedNames>" + sb + "</definedNames>" : "";
     }
 
     /// <summary>

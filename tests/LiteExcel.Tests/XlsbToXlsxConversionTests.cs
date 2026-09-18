@@ -286,6 +286,31 @@ public class XlsbToXlsxConversionTests
         finally { Cleanup(src, outPath); }
     }
 
+    [Fact]
+    public void XlsbToXlsx_EmitsDefinedNames()
+    {
+        // B1：xlsb 打开后读回的定义名（rgce 可解码的简单引用）应写出到 workbook.xml 的 definedNames。
+        var fixture = Path.Combine(AppContext.BaseDirectory, "Fixtures", "excel-authored-namedranges.xlsb");
+        Assert.True(File.Exists(fixture), $"缺少 fixture: {fixture}");
+
+        var outPath = TempPath(".xlsx");
+        try
+        {
+            var wb = Excel.Open(fixture);
+            Assert.NotEmpty(wb.Names);
+            wb.AllowFeatureLossOnSave = true;
+            wb.SaveAs(outPath, ExcelFormat.Xlsx);
+
+            using var zip = ZipFile.OpenRead(outPath);
+            var wbXml = ReadXml(zip, "xl/workbook.xml").ToString();
+            Assert.Contains("<definedNames>", wbXml);
+            Assert.Contains("G_Area", wbXml);
+            Assert.Contains("G_BetaRef", wbXml);
+            AssertNoDangling(zip);
+        }
+        finally { if (File.Exists(outPath)) File.Delete(outPath); }
+    }
+
     /// <summary>校验输出包：所有关系目标可解析、每个部件都有内容类型。</summary>
     private static void AssertNoDangling(ZipArchive zip)
     {
