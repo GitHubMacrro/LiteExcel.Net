@@ -67,6 +67,7 @@ internal static class XlsbPivotTableTranscoder
         public uint CacheId;
         public string Name = "";
         public string? DataCaption;
+        public string? Tag;
         public string? RowHeaderCaption;
         public string? PivotStyle;
         public int PivotFieldCount;
@@ -212,10 +213,33 @@ internal static class XlsbPivotTableTranscoder
     {
         if (d.Length < 32) return;
         info.CacheId = Biff12Records.ReadU32(d, 28);
-        int off = 32;
-        info.Name = ReadWideString(d, ref off);
-        info.DataCaption = ReadWideString(d, ref off);
-        info.RowHeaderCaption = ReadWideString(d, ref off);
+        var strs = ReadTailStrings(d, 32);
+        if (strs.Count == 0) return;
+        info.Name = strs[0];
+        int i = 1;
+        if (i < strs.Count && !IsGuid(strs[i])) { info.DataCaption = strs[i]; i++; }
+        if (i < strs.Count && IsGuid(strs[i])) { info.Tag = strs[i]; i++; }
+        if (i < strs.Count) info.RowHeaderCaption = strs[i];
+    }
+
+    private static List<string> ReadTailStrings(byte[] d, int off)
+    {
+        var list = new List<string>();
+        while (off + 4 <= d.Length)
+        {
+            uint cch = Biff12Records.ReadU32(d, off);
+            if (cch == 0 || cch > (uint)((d.Length - off - 4) / 2)) break;
+            var s = Encoding.Unicode.GetString(d, off + 4, (int)cch * 2);
+            list.Add(s);
+            off += 4 + (int)cch * 2;
+        }
+        return list;
+    }
+
+    private static bool IsGuid(string s)
+    {
+        if (s.Length != 36) return false;
+        return s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-';
     }
 
     private static string ReadWideString(byte[] d, ref int off)
@@ -268,6 +292,7 @@ internal static class XlsbPivotTableTranscoder
                   "applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" " +
                   "applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"1\"");
         if (p.DataCaption is not null) sb.Append($" dataCaption=\"{Esc(p.DataCaption)}\"");
+        if (p.Tag is not null) sb.Append($" tag=\"{Esc(p.Tag)}\"");
         if (p.RowHeaderCaption is not null) sb.Append($" rowHeaderCaption=\"{Esc(p.RowHeaderCaption)}\"");
         sb.Append('>');
 

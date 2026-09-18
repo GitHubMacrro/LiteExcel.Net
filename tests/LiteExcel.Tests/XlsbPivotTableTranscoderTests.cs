@@ -55,8 +55,8 @@ public class XlsbPivotTableTranscoderTests
     [Fact]
     public void PivotTable_ParsesFieldsItemsAndRows()
     {
-        var bin = XlsbTestFile.BuildPivotTableBin(1, "PivotTable1", "Values", "SUBPACKAGEGROUPS",
-            "PACKAGE GROUP",
+        var bin = XlsbTestFile.BuildPivotTableBin(1, "PivotTable1", "Values", "525319f5-bea4-47af-942b-336253323744",
+            "SUBPACKAGEGROUPS", "PACKAGE GROUP",
             new[] { (0, 0), (1, -1) },
             new[] { 0 },
             0x03F0,
@@ -86,5 +86,7 @@ public class XlsbPivotTableTranscoderTests
         Assert.Contains("<pivotHierarchy dragToData=\"1\"/>", xml);
         Assert.Contains("<pivotTableStyleInfo name=\"PivotStyleLight16\"", xml);
         Assert.Contains("<rowHierarchiesUsage count=\"1\"><rowHierarchyUsage hierarchyUsage=\"0\"/></rowHierarchiesUsage>", xml);
+        Assert.Contains("tag=\"525319f5-bea4-47af-942b-336253323744\"", xml);
+        Assert.Contains("rowHeaderCaption=\"SUBPACKAGEGROUPS\"", xml);
     }
 }

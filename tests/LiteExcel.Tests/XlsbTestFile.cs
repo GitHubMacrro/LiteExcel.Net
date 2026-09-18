@@ -534,8 +534,9 @@ internal static class XlsbTestFile
         return ms.ToArray();
     }
 
-    public static byte[] BuildPivotTableBin(uint cacheId, string name, string dataCaption, string rowHeaderCaption,
-        string fieldName, (int ItemType, int CacheIndex)[] items, int[] rowFields, ushort hierarchyFlags, string style)
+    public static byte[] BuildPivotTableBin(uint cacheId, string name, string dataCaption, string tag,
+        string? rowHeaderCaption, string fieldName, (int ItemType, int CacheIndex)[] items,
+        int[] rowFields, ushort hierarchyFlags, string style)
     {
         using var ms = new MemoryStream();
         var head = new byte[32];
@@ -545,7 +546,8 @@ internal static class XlsbTestFile
             b.Write(head, 0, head.Length);
             WriteWideString(b, name);
             WriteWideString(b, dataCaption);
-            WriteWideString(b, rowHeaderCaption);
+            WriteWideString(b, tag);
+            if (rowHeaderCaption is not null) WriteWideString(b, rowHeaderCaption);
             WriteRecord(ms, 0x0118, b.ToArray());
         }
         using (var b = new MemoryStream())
