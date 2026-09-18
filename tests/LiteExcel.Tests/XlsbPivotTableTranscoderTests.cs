@@ -72,7 +72,7 @@ public class XlsbPivotTableTranscoderTests
         Assert.Equal(new[] { 0 }, info.RowFields);
         Assert.Single(info.RowItems);
         Assert.Single(info.Hierarchies);
-        Assert.Equal(new uint[] { 0 }, info.RowHierarchyUsage);
+        Assert.Equal(new[] { 0 }, info.RowHierarchyUsage);
 
         var xml = XlsbPivotTableTranscoder.ToXml(info);
         Assert.Contains("<pivotFields count=\"1\">", xml);
@@ -88,5 +88,39 @@ public class XlsbPivotTableTranscoderTests
         Assert.Contains("<rowHierarchiesUsage count=\"1\"><rowHierarchyUsage hierarchyUsage=\"0\"/></rowHierarchiesUsage>", xml);
         Assert.Contains("tag=\"525319f5-bea4-47af-942b-336253323744\"", xml);
         Assert.Contains("rowHeaderCaption=\"SUBPACKAGEGROUPS\"", xml);
+    }
+
+    [Fact]
+    public void PivotTable_ParsesColFieldsColItemsAndDataFields_WhenRealFileAvailable()
+    {
+        var path = @"D:\AiStory\Test\raw_repro.xlsb";
+        if (!File.Exists(path)) return;
+        using var zip = System.IO.Compression.ZipFile.OpenRead(path);
+        var e = zip.GetEntry("xl/pivotTables/pivotTable1.bin");
+        if (e is null) return;
+        using var ms = new MemoryStream();
+        using (var s = e.Open()) s.CopyTo(ms);
+
+        var info = XlsbPivotTableTranscoder.Parse(ms.ToArray());
+        Assert.Equal(13, info.RowFields.Count);
+        Assert.Equal(563, info.RowItems.Count);
+        Assert.Equal(new[] { -2 }, info.ColFields);
+        Assert.Equal(24, info.ColItems.Count);
+        Assert.Equal(24, info.DataFields.Count);
+        Assert.Equal("BEINQTY", info.DataFields[0].Name);
+        Assert.Equal(13, info.DataFields[0].Field);
+        Assert.Equal("TOTALLOSS", info.DataFields[23].Name);
+        Assert.Equal(13, info.RowHierarchyUsage.Count);
+        Assert.Equal(new[] { -2 }, info.ColHierarchyUsage);
+
+        var xml = XlsbPivotTableTranscoder.ToXml(info);
+        Assert.Contains("<rowFields count=\"13\">", xml);
+        Assert.Contains("<rowItems count=\"563\">", xml);
+        Assert.Contains("<colFields count=\"1\"><field x=\"-2\"/></colFields>", xml);
+        Assert.Contains("<colItems count=\"24\">", xml);
+        Assert.Contains("<dataFields count=\"24\">", xml);
+        Assert.Contains("<dataField name=\"BEINQTY\" fld=\"13\" baseField=\"0\" baseItem=\"0\"/>", xml);
+        Assert.Contains("<rowHierarchiesUsage count=\"13\">", xml);
+        Assert.Contains("<colHierarchiesUsage count=\"1\"><colHierarchyUsage hierarchyUsage=\"-2\"/></colHierarchiesUsage>", xml);
     }
 }

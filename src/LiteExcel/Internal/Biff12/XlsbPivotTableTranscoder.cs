@@ -15,7 +15,9 @@ namespace LiteExcel.Internal.Biff12;
 ///   <c>0x0135</c> BrtBeginISXVDRws(rowFields)；<c>0x012B</c> BrtBeginSXLIRws + <c>0x0129</c> SXLI(12B) + <c>0x0184</c> ISXVIs(rowItems)；
 ///   <c>0x013C</c> BrtBeginPivotHierarchies + <c>0x013E</c> BrtPivotHierarchy(6B)；
 ///   <c>0x0140</c> BrtBeginRowHierarchiesUsage；<c>0x0201</c> BrtTableStyleClient；<c>0x013B</c> BrtEndSXView。
-/// 其余记录（colFields/colItems/SXPI/SXDI 等）待补。
+/// 列方向：<c>0x0137</c> BrtBeginISXVDCols(colFields) / <c>0x012D</c> BrtBeginSXLICols + <c>0x0129</c>/<c>0x0184</c>（colItems）；
+/// 数据字段：<c>0x0125</c> BrtBeginPivotDataField（isxvdData@0/iiftab@4/df@8/isxvd@12/isxvi@16/ifmt@20/fLoadDisplayName@24/stDisplayName）；
+/// <c>0x0142</c> BrtBeginColHierarchiesUsage。其余记录（SXPI/SXDI/formats/extLst）待补。
 /// </summary>
 internal static class XlsbPivotTableTranscoder
 {
@@ -26,12 +28,19 @@ internal static class XlsbPivotTableTranscoder
     private const int RtItemsCount = 0x011B;
     private const int RtItem = 0x011A;
     private const int RtRowFields = 0x0135;
+    private const int RtColFields = 0x0137;
     private const int RtRowItemsCount = 0x012B;
+    private const int RtRowItemsEnd = 0x012C;
+    private const int RtColItemsCount = 0x012D;
+    private const int RtColItemsEnd = 0x012E;
     private const int RtLine = 0x0129;
     private const int RtLineEntries = 0x0184;
+    private const int RtDataFieldsCount = 0x0127;
+    private const int RtDataField = 0x0125;
     private const int RtHierarchiesCount = 0x013C;
     private const int RtHierarchy = 0x013E;
     private const int RtRowHierarchyUsage = 0x0140;
+    private const int RtColHierarchyUsage = 0x0142;
     private const int RtTableStyleClient = 0x0201;
 
     private const string MainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -62,6 +71,14 @@ internal static class XlsbPivotTableTranscoder
         public readonly List<uint> Entries = new();
     }
 
+    internal sealed class DataField
+    {
+        public string Name = "";
+        public int Field;
+        public int BaseField;
+        public int BaseItem;
+    }
+
     internal sealed class PivotTableInfo
     {
         public uint CacheId;
@@ -79,8 +96,12 @@ internal static class XlsbPivotTableTranscoder
         public readonly List<PivotField> Fields = new();
         public readonly List<int> RowFields = new();
         public readonly List<PivotLine> RowItems = new();
+        public readonly List<int> ColFields = new();
+        public readonly List<PivotLine> ColItems = new();
+        public readonly List<DataField> DataFields = new();
         public readonly List<ushort> Hierarchies = new();
-        public readonly List<uint> RowHierarchyUsage = new();
+        public readonly List<int> RowHierarchyUsage = new();
+        public readonly List<int> ColHierarchyUsage = new();
     }
 
     public static PivotTableInfo Parse(byte[] data)
@@ -88,6 +109,7 @@ internal static class XlsbPivotTableTranscoder
         var info = new PivotTableInfo();
         PivotField? curField = null;
         PivotLine? curLine = null;
+        List<PivotLine>? curLines = null;
         foreach (var rec in Biff12Records.ReadAll(data))
         {
             var d = rec.Data;
@@ -123,20 +145,42 @@ internal static class XlsbPivotTableTranscoder
                 case RtRowFields:
                     ParseIndexArray(d, info.RowFields);
                     break;
+                case RtColFields:
+                    ParseIndexArray(d, info.ColFields);
+                    break;
+                case RtRowItemsCount:
+                    curLines = info.RowItems;
+                    curLine = null;
+                    break;
+                case RtColItemsCount:
+                    curLines = info.ColItems;
+                    curLine = null;
+                    break;
+                case RtRowItemsEnd:
+                case RtColItemsEnd:
+                    curLines = null;
+                    curLine = null;
+                    break;
                 case RtLine:
                     curLine = ParseLine(d);
-                    info.RowItems.Add(curLine);
+                    curLines?.Add(curLine);
                     break;
                 case RtLineEntries:
                     if (curLine is not null)
                         for (int o = 0; o + 4 <= d.Length; o += 4)
                             curLine.Entries.Add(Biff12Records.ReadU32(d, o));
                     break;
+                case RtDataField:
+                    info.DataFields.Add(ParseDataField(d));
+                    break;
                 case RtHierarchy:
                     if (d.Length >= 2) info.Hierarchies.Add(Biff12Records.ReadU16(d, 0));
                     break;
                 case RtRowHierarchyUsage:
                     ParseIndexArray(d, info.RowHierarchyUsage);
+                    break;
+                case RtColHierarchyUsage:
+                    ParseIndexArray(d, info.ColHierarchyUsage);
                     break;
                 case RtTableStyleClient:
                 {
@@ -197,16 +241,16 @@ internal static class XlsbPivotTableTranscoder
         }
     }
 
-    private static void ParseIndexArray(byte[] d, List<uint> target)
+    private static DataField ParseDataField(byte[] d)
     {
-        if (d.Length < 4) return;
-        int count = (int)Biff12Records.ReadU32(d, 0);
-        for (int i = 0; i < count; i++)
-        {
-            int off = 4 + i * 4;
-            if (off + 4 > d.Length) break;
-            target.Add(Biff12Records.ReadU32(d, off));
-        }
+        var df = new DataField();
+        if (d.Length < 25) return df;
+        df.Field = Biff12Records.ReadS32(d, 0);
+        df.BaseField = Biff12Records.ReadS32(d, 12);
+        df.BaseItem = Biff12Records.ReadS32(d, 16);
+        int off = 25;
+        if (d[24] != 0) df.Name = ReadWideString(d, ref off);
+        return df;
     }
 
     private static void ParseBegin(byte[] d, PivotTableInfo info)
@@ -306,6 +350,9 @@ internal static class XlsbPivotTableTranscoder
         AppendFields(sb, p);
         AppendFields(sb, "rowFields", p.RowFields);
         AppendLines(sb, "rowItems", p.RowItems);
+        AppendFields(sb, "colFields", p.ColFields);
+        AppendLines(sb, "colItems", p.ColItems);
+        AppendDataFields(sb, p);
 
         if (p.Hierarchies.Count > 0)
         {
@@ -326,8 +373,25 @@ internal static class XlsbPivotTableTranscoder
             sb.Append("</rowHierarchiesUsage>");
         }
 
+        if (p.ColHierarchyUsage.Count > 0)
+        {
+            sb.Append($"<colHierarchiesUsage count=\"{p.ColHierarchyUsage.Count}\">");
+            foreach (var u in p.ColHierarchyUsage)
+                sb.Append($"<colHierarchyUsage hierarchyUsage=\"{u}\"/>");
+            sb.Append("</colHierarchiesUsage>");
+        }
+
         sb.Append("</pivotTableDefinition>");
         return sb.ToString();
+    }
+
+    private static void AppendDataFields(StringBuilder sb, PivotTableInfo p)
+    {
+        if (p.DataFields.Count == 0) return;
+        sb.Append($"<dataFields count=\"{p.DataFields.Count}\">");
+        foreach (var df in p.DataFields)
+            sb.Append($"<dataField name=\"{Esc(df.Name)}\" fld=\"{df.Field}\" baseField=\"{df.BaseField}\" baseItem=\"{df.BaseItem}\"/>");
+        sb.Append("</dataFields>");
     }
 
     private static void AppendFields(StringBuilder sb, PivotTableInfo p)
@@ -407,9 +471,12 @@ internal static class XlsbPivotTableTranscoder
     private static void AppendFields(StringBuilder sb, string tag, List<int> fields)
     {
         if (fields.Count == 0) return;
-        sb.Append($"<{tag} count=\"{fields.Count}\">");
+        var emit = new List<int>();
         foreach (var x in fields)
-            if (x >= 0) sb.Append($"<field x=\"{x}\"/>");
+            if (x != -1) emit.Add(x);
+        if (emit.Count == 0) return;
+        sb.Append($"<{tag} count=\"{emit.Count}\">");
+        foreach (var x in emit) sb.Append($"<field x=\"{x}\"/>");
         sb.Append($"</{tag}>");
     }
 
