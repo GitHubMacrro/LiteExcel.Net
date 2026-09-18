@@ -234,6 +234,46 @@ internal sealed class OoxmlPreservedParts
             if (IsFormatAgnosticForXlsx(kv.Key))
                 result.Parts[kv.Key] = kv.Value;
 
+        // 跨格式转码（Stage C）：connections / queryTables / 数据模型。
+        // 关系目标需从 .bin 重写为 .xml，故先记录映射再过滤 rels。
+        var targetMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (Parts.TryGetValue("xl/connections.bin", out var connBin))
+        {
+            var conns = Biff12.XlsbConnectionTranscoder.Parse(connBin);
+            var connXml = Biff12.XlsbConnectionTranscoder.ToXml(conns);
+            result.Parts["xl/connections.xml"] = Encoding.UTF8.GetBytes(connXml);
+            targetMap["xl/connections.bin"] = "xl/connections.xml";
+            result.OverrideTypes.Add(("/xl/connections.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"));
+
+            // type-102（数据模型链接表）连接的 extLst 引用 _xlcn.LinkedTable_* 定义名；
+            // 缺失这些定义名时 Excel 会拒绝打开（实测）。由连接自身合成（name=sourceName，值=<x15id>[]）。
+            var defNames = new StringBuilder();
+            foreach (var c in conns)
+            {
+                if (c.Type != 102 || string.IsNullOrEmpty(c.RangeSourceName)) continue;
+                var value = (c.X15Id ?? "") + "[]";
+                defNames.Append($"<definedName name=\"{XlsxWriter.XmlEscape(c.RangeSourceName!)}\" hidden=\"1\">{XlsxWriter.XmlEscape(value)}</definedName>");
+            }
+            if (defNames.Length > 0)
+                result.DefinedNamesXml = "<definedNames>" + defNames + "</definedNames>";
+        }
+        if (Parts.TryGetValue("xl/model/item.data", out var modelData))
+        {
+            result.Parts["xl/model/item.data"] = modelData;
+            result.OverrideTypes.Add(("/xl/model/item.data", "application/vnd.openxmlformats-officedocument.model+data"));
+        }
+        foreach (var kv in Parts)
+        {
+            if (!kv.Key.StartsWith("xl/queryTables/queryTable", StringComparison.Ordinal)) continue;
+            if (!kv.Key.EndsWith(".bin", StringComparison.Ordinal)) continue;
+            int slash = kv.Key.LastIndexOf('/');
+            var num = kv.Key.Substring(slash + 1); // queryTableN.bin
+            var xmlPath = "xl/queryTables/" + num.Substring(0, num.Length - 4) + ".xml";
+            result.Parts[xmlPath] = Encoding.UTF8.GetBytes(Biff12.XlsbConnectionTranscoder.ToQueryTableXml(kv.Value));
+            targetMap[kv.Key] = xmlPath;
+            result.OverrideTypes.Add(("/" + xmlPath, "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml"));
+        }
+
         // 内容类型：丢弃 xlsb 专有 Default（bin/data），Override 仅保留已复制且非 .bin 的部件。
         foreach (var (ext, ct) in DefaultTypes)
             if (!string.Equals(ext, "bin", StringComparison.OrdinalIgnoreCase)
@@ -247,12 +287,12 @@ internal sealed class OoxmlPreservedParts
             result.OverrideTypes.Add((part, ct));
         }
 
-        // 关系：.bin.rels → .xml.rels；剔除指向未写出（.bin / 未复制）部件的关系。
+        // 关系：.bin.rels → .xml.rels；目标 .bin → .xml；剔除指向未写出部件的关系。
         foreach (var kv in Rels)
         {
             var newKey = RenameBinaryRelsKey(kv.Key);
             var baseDir = RelsBaseDir(newKey);
-            result.Rels[newKey] = FilterRelsToAvailableParts(kv.Value, baseDir, result.Parts);
+            result.Rels[newKey] = FilterRelsToAvailableParts(kv.Value, baseDir, result.Parts, targetMap);
         }
 
         return result;
@@ -310,8 +350,9 @@ internal sealed class OoxmlPreservedParts
         return string.Join("/", stack);
     }
 
-    /// <summary>剔除指向未写出部件的关系（保留 External），避免悬空引用。</summary>
-    private static string FilterRelsToAvailableParts(string relsXml, string baseDir, IReadOnlyDictionary<string, byte[]> available)
+    /// <summary>剔除指向未写出部件的关系（保留 External），并对 .bin→.xml 转码部件重写目标，避免悬空引用。</summary>
+    private static string FilterRelsToAvailableParts(string relsXml, string baseDir, IReadOnlyDictionary<string, byte[]> available,
+        IReadOnlyDictionary<string, string>? targetMap = null)
     {
         if (string.IsNullOrEmpty(relsXml)) return relsXml;
         XDocument doc;
@@ -327,6 +368,12 @@ internal sealed class OoxmlPreservedParts
             if (string.Equals(targetMode, "External", StringComparison.OrdinalIgnoreCase)) { keep.Add(el); continue; }
             var target = (string?)el.Attribute("Target") ?? "";
             var abs = ResolveRelTarget(baseDir, target);
+            if (targetMap is not null && targetMap.TryGetValue(abs, out var mapped))
+            {
+                // 同一目录、仅扩展名不同（connections.bin→xml、queryTables/queryTableN.bin→xml）。
+                el.SetAttributeValue("Target", target.Substring(0, target.Length - 4) + ".xml");
+                abs = mapped;
+            }
             if (available.ContainsKey(abs)) keep.Add(el);
         }
         root.ReplaceNodes(keep);

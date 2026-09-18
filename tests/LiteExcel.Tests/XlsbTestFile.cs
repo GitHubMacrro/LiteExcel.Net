@@ -359,6 +359,57 @@ internal static class XlsbTestFile
         return ms.ToArray();
     }
 
+    /// <summary>构建单个 BIFF12 连接记录（BrtConnection 0x00C9 + 可选 dbPr/0x083D/0x0844），供跨格式转码测试。</summary>
+    public static byte[] BuildConnectionBin(int type, uint id, string name,
+        string? dbConn = null, string? dbCmd = null, string? x15Id = null, string? sourceName = null, byte uidTail = 0)
+    {
+        using var ms = new MemoryStream();
+        var uid = new byte[16];
+        uid[5] = 0x15; uid[8] = 0xFF; uid[9] = 0xFF; uid[10] = 0xFF; uid[11] = 0xFF; uid[15] = uidTail;
+        WriteRecord(ms, 0x0C00, uid);
+
+        using (var b = new MemoryStream())
+        {
+            b.WriteByte(6);                                  // refreshedVersion
+            b.WriteByte((byte)(type == 5 ? 0 : 5));          // minRefreshableVersion
+            b.WriteByte(2); b.WriteByte(0); b.WriteByte(0); b.WriteByte(0);
+            b.WriteByte((byte)(type == 5 ? 0x41 : 0));       // flags（keepAlive|saveData）
+            b.WriteByte(0);
+            b.WriteByte((byte)(type == 5 ? 0x0C : 0x08)); b.WriteByte(0);
+            WriteU16(b, (ushort)type);
+            b.WriteByte(0); b.WriteByte(0);
+            WriteU32(b, 1);
+            WriteU32(b, id);
+            b.WriteByte(0);                                  // credentials
+            if (type == 5) WriteWideString(b, "desc");
+            WriteWideString(b, name);
+            WriteRecord(ms, 0x00C9, b.ToArray());
+        }
+        if (type == 5 && dbConn is not null)
+        {
+            using var d = new MemoryStream();
+            WriteU32(d, 2); d.WriteByte(2);
+            WriteWideString(d, dbConn);
+            WriteWideString(d, dbCmd ?? "");
+            WriteRecord(ms, 0x00CB, d.ToArray());
+        }
+        if (x15Id is not null)
+        {
+            using var x = new MemoryStream();
+            x.Write(new byte[5], 0, 5);
+            WriteWideString(x, x15Id);
+            WriteRecord(ms, 0x083D, x.ToArray());
+        }
+        if (sourceName is not null)
+        {
+            using var r = new MemoryStream();
+            WriteU32(r, 0);
+            WriteWideString(r, sourceName);
+            WriteRecord(ms, 0x0844, r.ToArray());
+        }
+        return ms.ToArray();
+    }
+
     /// <summary>读取 workbook.bin 中 BrtDefinedName(0x0027) 的名称（布局：flags(4)+pad(1)+itab(4)+cch(u32)+name）。</summary>
     public static List<string> ReadDefinedNames(byte[] part)
     {
@@ -399,6 +450,41 @@ internal static class XlsbTestFile
             pos += cb;
         }
         return result;
+    }
+
+    /// <summary>构建 queryTableN.bin（BrtBeginQueryTable 0x01BF + refresh + fields）。</summary>
+    public static byte[] BuildQueryTableBin(uint connectionId, string name, (uint Id, uint ColId, string Name)[] fields)
+    {
+        using var ms = new MemoryStream();
+        using (var b = new MemoryStream())
+        {
+            WriteU32(b, 0x00101A41);
+            WriteU16(b, 16); // autoFormatId
+            WriteU32(b, connectionId);
+            WriteWideString(b, name);
+            WriteRecord(ms, 0x01BF, b.ToArray());
+        }
+        using (var b = new MemoryStream())
+        {
+            WriteU16(b, 0x17);
+            WriteU32(b, 5); // nextId
+            WriteRecord(ms, 0x01C1, b.ToArray());
+        }
+        using (var b = new MemoryStream())
+        {
+            WriteU32(b, (uint)fields.Length);
+            WriteRecord(ms, 0x01C7, b.ToArray());
+        }
+        foreach (var f in fields)
+        {
+            using var b = new MemoryStream();
+            WriteU32(b, 0x10);
+            WriteU32(b, f.Id);
+            WriteU32(b, f.ColId);
+            WriteWideString(b, f.Name);
+            WriteRecord(ms, 0x01C9, b.ToArray());
+        }
+        return ms.ToArray();
     }
 
     private static void WriteU32(byte[] b, int o, uint v)

@@ -236,6 +236,56 @@ public class XlsbToXlsxConversionTests
         finally { Cleanup(src, outPath); }
     }
 
+    [Fact]
+    public void XlsbToXlsx_TranscodesConnectionsAndQueryTables()
+    {
+        var spec = SpecWithCell();
+        var conn1 = XlsbTestFile.BuildConnectionBin(5, 1, "Query - X",
+            dbConn: "Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=X;Extended Properties=\"\"",
+            dbCmd: "SELECT * FROM [X]");
+        var conn2 = XlsbTestFile.BuildConnectionBin(102, 2, "LinkedTable_T",
+            x15Id: "T", sourceName: "_xlcn.LinkedTable_T");
+        spec.ExtraParts["xl/connections.bin"] = conn1.Concat(conn2).ToArray();
+        spec.ExtraOverrides["/xl/connections.bin"] = "application/vnd.ms-excel.connections";
+        spec.ExtraRels["xl/_rels/workbook.bin.rels"] =
+            $"<Relationship Id=\"rIdConn\" Type=\"{OfficeRelNs}/connections\" Target=\"connections.bin\"/>";
+
+        spec.ExtraParts["xl/queryTables/queryTable1.bin"] = XlsbTestFile.BuildQueryTableBin(1, "ExternalData_1",
+            new[] { (1u, 5u, "FACTORY") });
+        spec.ExtraOverrides["/xl/queryTables/queryTable1.bin"] = "application/vnd.ms-excel.queryTable";
+        spec.ExtraRels["xl/worksheets/_rels/sheet1.bin.rels"] =
+            $"<Relationship Id=\"rIdQ\" Type=\"{OfficeRelNs}/queryTable\" Target=\"../queryTables/queryTable1.bin\"/>";
+
+        var src = XlsbTestFile.Build(spec);
+        var outPath = TempPath(".xlsx");
+        try
+        {
+            var wb = Excel.Open(src);
+            wb.AllowFeatureLossOnSave = true;
+            wb.SaveAs(outPath, ExcelFormat.Xlsx);
+
+            using var zip = ZipFile.OpenRead(outPath);
+            Assert.NotNull(zip.GetEntry("xl/connections.xml"));
+            Assert.NotNull(zip.GetEntry("xl/queryTables/queryTable1.xml"));
+
+            var connXml = ReadXml(zip, "xl/connections.xml").ToString();
+            Assert.Contains("Query - X", connXml);
+            Assert.Contains("LinkedTable_T", connXml);
+            Assert.Contains("_xlcn.LinkedTable_T", connXml);
+
+            var wbXml = ReadXml(zip, "xl/workbook.xml").ToString();
+            Assert.Contains("definedNames", wbXml);
+            Assert.Contains("_xlcn.LinkedTable_T", wbXml);
+
+            var qtXml = ReadXml(zip, "xl/queryTables/queryTable1.xml").ToString();
+            Assert.Contains("ExternalData_1", qtXml);
+            Assert.Contains("FACTORY", qtXml);
+
+            AssertNoDangling(zip);
+        }
+        finally { Cleanup(src, outPath); }
+    }
+
     /// <summary>校验输出包：所有关系目标可解析、每个部件都有内容类型。</summary>
     private static void AssertNoDangling(ZipArchive zip)
     {
