@@ -487,6 +487,53 @@ internal static class XlsbTestFile
         return ms.ToArray();
     }
 
+    /// <summary>构建 pivotCacheDefinitionN.bin（0x00B3 头 / 0x00B9 cacheSource / 0x00B5 字段数 / 0x00B7+0x00BD+0x0018 字段）。</summary>
+    public static byte[] BuildPivotCacheBin(int sourceType, uint connectionId, string refreshedBy,
+        (int Hierarchy, int Level, uint NumFmtId, string Name, string Caption, string[] Items)[] fields)
+    {
+        using var ms = new MemoryStream();
+        using (var b = new MemoryStream())
+        {
+            b.WriteByte(8); b.WriteByte(3); b.WriteByte(5); b.WriteByte(0x10);
+            for (int i = 0; i < 4; i++) b.WriteByte(0xFF);
+            for (int i = 0; i < 8; i++) b.WriteByte(0); // refreshedDate
+            for (int i = 0; i < 5; i++) b.WriteByte(0);
+            WriteWideString(b, refreshedBy);
+            WriteRecord(ms, 0x00B3, b.ToArray());
+        }
+        using (var b = new MemoryStream())
+        {
+            WriteU32(b, (uint)sourceType); WriteU32(b, connectionId);
+            WriteRecord(ms, 0x00B9, b.ToArray());
+        }
+        using (var b = new MemoryStream()) { WriteU32(b, (uint)fields.Length); WriteRecord(ms, 0x00B5, b.ToArray()); }
+        foreach (var f in fields)
+        {
+            using (var b = new MemoryStream())
+            {
+                WriteU32(b, 0x0C); WriteU32(b, 0);
+                WriteU32(b, (uint)f.Hierarchy); WriteU32(b, (uint)f.Level); WriteU32(b, f.NumFmtId);
+                WriteWideString(b, f.Name);
+                WriteWideString(b, f.Caption);
+                WriteRecord(ms, 0x00B7, b.ToArray());
+            }
+            using (var b = new MemoryStream())
+            {
+                b.WriteByte(0x0B); b.WriteByte(0); WriteU32(b, (uint)f.Items.Length);
+                WriteRecord(ms, 0x00BD, b.ToArray());
+            }
+            foreach (var it in f.Items)
+            {
+                using var b = new MemoryStream();
+                WriteWideString(b, it);
+                WriteRecord(ms, 0x0018, b.ToArray());
+            }
+            WriteRecord(ms, 0x00BE, Empty());
+            WriteRecord(ms, 0x00B8, Empty());
+        }
+        return ms.ToArray();
+    }
+
     private static void WriteU32(byte[] b, int o, uint v)
     {
         b[o] = (byte)v; b[o + 1] = (byte)(v >> 8); b[o + 2] = (byte)(v >> 16); b[o + 3] = (byte)(v >> 24);
