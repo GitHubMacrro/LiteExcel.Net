@@ -32,6 +32,15 @@ internal static class XlsbBackend
     private const int BrtXf = 0x002F;         // 单元格样式 XF
     private const int BrtBeginCellXfs = 0x0269;
     private const int BrtEndCellXfs = 0x026A;
+    private const int BrtFont = 0x002B;       // 字体
+    private const int BrtBeginFonts = 0x0263;
+    private const int BrtEndFonts = 0x0264;
+    private const int BrtFill = 0x002D;       // 填充
+    private const int BrtBeginFills = 0x025B;
+    private const int BrtEndFills = 0x025C;
+    private const int BrtBorder = 0x002E;     // 边框
+    private const int BrtBeginBorders = 0x0265;
+    private const int BrtEndBorders = 0x0266;
 
     // table（超级表）部件记录
     private const int BrtBeginList = 0x0157;        // 表属性
@@ -227,9 +236,9 @@ internal static class XlsbBackend
         var sst = sstBytes is not null ? ParseSharedStrings(sstBytes) : new List<string>();
 
         var stylesBytes = ReadEntry(zip, "xl/styles.bin");
-        var (formats, cellXfs) = stylesBytes is not null
+        var (formats, cellXfs, cellStyles) = stylesBytes is not null
             ? ParseStyles(stylesBytes)
-            : (new Dictionary<int, string>(), new List<int> { 0 });
+            : (new Dictionary<int, string>(), new List<int> { 0 }, new List<CellStyle?> { null });
 
         var sheetPaths = MapSheetPaths(zip, sheets);
 
@@ -240,7 +249,7 @@ internal static class XlsbBackend
             if (data is null)
                 throw new LiteExcelException($"缺少工作表文件: {sheetPaths[i]}");
             var rels = ReadSheetHyperlinkRels(zip, sheetPaths[i]);
-            var sd = ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, date1904, rels);
+            var sd = ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, cellStyles, date1904, rels);
             sd.SheetState = SheetVisibilityMap.ToOoxml(SheetVisibilityMap.FromBiff(sheets[i].HsState));
             ReadCommentsForSheet(zip, sheetPaths[i], sd);
             ReadTablesForSheet(zip, sheetPaths[i], data, sd);
@@ -321,9 +330,9 @@ internal static class XlsbBackend
         var sst = sstBytes is not null ? ParseSharedStrings(sstBytes) : new List<string>();
 
         var stylesBytes = ReadEntry(zip, "xl/styles.bin");
-        var (formats, cellXfs) = stylesBytes is not null
+        var (formats, cellXfs, _) = stylesBytes is not null
             ? ParseStyles(stylesBytes)
-            : (new Dictionary<int, string>(), new List<int> { 0 });
+            : (new Dictionary<int, string>(), new List<int> { 0 }, new List<CellStyle?> { null });
 
         return (sheets, sst, formats, cellXfs, date1904);
     }
@@ -452,12 +461,16 @@ internal static class XlsbBackend
         return result;
     }
 
-    private static (Dictionary<int, string> Formats, List<int> CellXfs) ParseStyles(byte[] data)
+    private static (Dictionary<int, string> Formats, List<int> CellXfs, List<CellStyle?> CellStyles) ParseStyles(byte[] data)
     {
         var records = Biff12Records.ReadAll(data);
         var formats = new Dictionary<int, string>();
         var cellXfs = new List<int>(); // BrtBeginCellXFs 内按序排列，索引 0 即默认样式
-        bool inCellXfs = false;
+        var fonts = new List<CellStyle?>();
+        var fills = new List<string?>();
+        var borders = new List<BorderStyle?>();
+        var xfRefs = new List<(int FontId, int FillId, int BorderId)>();
+        bool inCellXfs = false, inFonts = false, inFills = false, inBorders = false;
 
         foreach (var rec in records)
         {
@@ -472,19 +485,126 @@ internal static class XlsbBackend
                         formats[numFmtId] = Biff12Records.ReadWideString(d, ref off);
                     }
                     break;
-                case BrtBeginCellXfs:
-                    inCellXfs = true;
-                    break;
-                case BrtEndCellXfs:
-                    inCellXfs = false;
-                    break;
+                case BrtBeginFonts: inFonts = true; break;
+                case BrtEndFonts: inFonts = false; break;
+                case BrtFont: if (inFonts) fonts.Add(ParseFont(d)); break;
+                case BrtBeginFills: inFills = true; break;
+                case BrtEndFills: inFills = false; break;
+                case BrtFill: if (inFills) fills.Add(ParseFillColor(d)); break;
+                case BrtBeginBorders: inBorders = true; break;
+                case BrtEndBorders: inBorders = false; break;
+                case BrtBorder: if (inBorders) borders.Add(ParseBorder(d)); break;
+                case BrtBeginCellXfs: inCellXfs = true; break;
+                case BrtEndCellXfs: inCellXfs = false; break;
                 case BrtXf:
-                    if (inCellXfs && d.Length >= 4)
-                        cellXfs.Add(Biff12Records.ReadU16(d, 2)); // ixfeParent(2) ifmt(2)
+                    if (inCellXfs && d.Length >= 10)
+                    {
+                        int ifmt = Biff12Records.ReadU16(d, 2);
+                        int fontId = Biff12Records.ReadU16(d, 4);
+                        int fillId = Biff12Records.ReadU16(d, 6);
+                        int borderId = Biff12Records.ReadU16(d, 8);
+                        cellXfs.Add(ifmt);
+                        xfRefs.Add((fontId, fillId, borderId));
+                    }
                     break;
             }
         }
-        return (formats, cellXfs);
+
+        // 每个 ixfe → CellStyle（默认 XF 0/0/0 返回 null，保持轻量）
+        var styles = new List<CellStyle?>(xfRefs.Count);
+        foreach (var (fontId, fillId, borderId) in xfRefs)
+        {
+            var font = fontId >= 0 && fontId < fonts.Count ? fonts[fontId] : null;
+            var fill = fillId >= 0 && fillId < fills.Count ? fills[fillId] : null;
+            var border = borderId >= 0 && borderId < borders.Count ? borders[borderId] : null;
+            if (font is null && fill is null && border is null) { styles.Add(null); continue; }
+            var s = font ?? new CellStyle();
+            s.FillColor = fill;
+            s.Border = border;
+            styles.Add(s);
+        }
+
+        return (formats, cellXfs, styles);
+    }
+
+    /// <summary>解析 BrtFont（29+ 字节）。布局：sz(2 twips) grbit(2) weight(2) vertAlign(2) underline(1)
+    /// family(1) charset(1) pad(1) BrtColor(8) scheme(1) name(XLWideString)。</summary>
+    private static CellStyle? ParseFont(byte[] d)
+    {
+        if (d.Length < 25) return null;
+        int szTwips = Biff12Records.ReadU16(d, 0);
+        int grbit = Biff12Records.ReadU16(d, 2);
+        int weight = Biff12Records.ReadU16(d, 4);
+        int underline = d[8];
+        int off = 21;
+        var name = Biff12Records.ReadWideString(d, ref off);
+        return new CellStyle
+        {
+            FontName = string.IsNullOrEmpty(name) ? null : name,
+            FontSize = szTwips > 0 ? szTwips / 20.0 : 11,
+            Bold = (grbit & 0x01) != 0 || weight >= 700,
+            Italic = (grbit & 0x02) != 0,
+            Strikeout = (grbit & 0x08) != 0,
+            Underline = underline != 0,
+            FontColor = ColorRgb(d, 12),
+        };
+    }
+
+    /// <summary>解析 BrtFill 的填充色：fls(4) + fgColor(BrtColor 8) + bgColor(8) + 12×u32。仅 solid(fls=1) 返回颜色。</summary>
+    private static string? ParseFillColor(byte[] d)
+    {
+        if (d.Length < 12) return null;
+        int fls = (int)Biff12Records.ReadU32(d, 0);
+        if (fls != 1) return null; // 1 = solid；0=无、0x11=gray125 等不映射
+        return ColorRgb(d, 4);
+    }
+
+    /// <summary>解析 BrtBorder：diagonal(1) + 5×(style(1)+reserved(1)+BrtColor(8))，边序 left/right/top/bottom/diagonal。</summary>
+    private static BorderStyle? ParseBorder(byte[] d)
+    {
+        if (d.Length < 51) return null;
+        var left = ParseBorderEdge(d, 1);
+        var right = ParseBorderEdge(d, 11);
+        var top = ParseBorderEdge(d, 21);
+        var bottom = ParseBorderEdge(d, 31);
+        if (left is null && right is null && top is null && bottom is null) return null;
+        return new BorderStyle { Left = left, Right = right, Top = top, Bottom = bottom };
+    }
+
+    private static BorderEdge? ParseBorderEdge(byte[] d, int off)
+    {
+        var name = BorderStyleName(d[off]);
+        if (name is null) return null;
+        return new BorderEdge { Style = name, Color = ColorRgb(d, off + 2) };
+    }
+
+    private static string? BorderStyleName(int style) => style switch
+    {
+        0 => null,
+        1 => "thin",
+        2 => "medium",
+        3 => "dashed",
+        4 => "dotted",
+        5 => "thick",
+        6 => "double",
+        7 => "hair",
+        8 => "mediumDashed",
+        9 => "dashDot",
+        10 => "mediumDashDot",
+        11 => "dashDotDot",
+        12 => "mediumDashDotDot",
+        13 => "slantDashDot",
+        _ => "thin",
+    };
+
+    /// <summary>BrtColor（8 字节）→ "#RRGGBB"；RGB 固定位于颜色记录 +4（theme/rgb 均已含解析后 RGB）。
+    /// 类型字节 0x00=auto、0x01=无颜色时返回 null。</summary>
+    private static string? ColorRgb(byte[] d, int off)
+    {
+        if (off + 7 > d.Length) return null;
+        byte type = d[off];
+        if (type == 0x00 || type == 0x01) return null;
+        return $"#{d[off + 4]:X2}{d[off + 5]:X2}{d[off + 6]:X2}";
     }
 
     /// <summary>
@@ -696,7 +816,7 @@ internal static class XlsbBackend
     }
 
     private static SheetData ParseWorksheet(byte[] data, string sheetName, List<string> sst,
-        Dictionary<int, string> formats, List<int> cellXfs, bool date1904, Dictionary<string, string>? hlinkRels = null)
+        Dictionary<int, string> formats, List<int> cellXfs, List<CellStyle?> cellStyles, bool date1904, Dictionary<string, string>? hlinkRels = null)
     {
         var records = Biff12Records.ReadAll(data);
         var sheet = new SheetData { SheetName = sheetName };
@@ -722,34 +842,34 @@ internal static class XlsbBackend
                     break;
                 case BrtCellBlank:
                 case BrtShortBlank:
-                    PutCell(cells, d, isShort, ref prevCol, currentRow, (_) => Cell.Empty, ref maxRow, ref maxCol);
+                    PutCell(cells, d, isShort, ref prevCol, currentRow, (_) => Cell.Empty, ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtCellRk:
                 case BrtShortRk:
                     PutCell(cells, d, isShort, ref prevCol, currentRow,
                         (valOff) => FormatDetector.CellFromNumber(BiffShared.DecodeRk(ReadS32(d, valOff)), StyleRef(d, isShort ? 0 : 4), cellXfs, formats, date1904),
-                        ref maxRow, ref maxCol);
+                        ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtCellError:
                 case BrtShortError:
                     PutCell(cells, d, isShort, ref prevCol, currentRow,
-                        (valOff) => Cell.FromText(BiffShared.ErrorCode(d[valOff])), ref maxRow, ref maxCol);
+                        (valOff) => Cell.FromText(BiffShared.ErrorCode(d[valOff])), ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtCellBool:
                 case BrtShortBool:
                     PutCell(cells, d, isShort, ref prevCol, currentRow,
-                        (valOff) => Cell.FromBoolean(d[valOff] != 0), ref maxRow, ref maxCol);
+                        (valOff) => Cell.FromBoolean(d[valOff] != 0), ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtCellReal:
                 case BrtShortReal:
                     PutCell(cells, d, isShort, ref prevCol, currentRow,
                         (valOff) => FormatDetector.CellFromNumber(BitConverter.ToDouble(d, valOff), StyleRef(d, isShort ? 0 : 4), cellXfs, formats, date1904),
-                        ref maxRow, ref maxCol);
+                        ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtCellSt:
                 case BrtShortSt:
                     PutCell(cells, d, isShort, ref prevCol, currentRow,
-                        (valOff) => Cell.FromText(ReadStringAt(d, valOff)), ref maxRow, ref maxCol);
+                        (valOff) => Cell.FromText(ReadStringAt(d, valOff)), ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtCellIsst:
                 case BrtShortIsst:
@@ -758,7 +878,7 @@ internal static class XlsbBackend
                         {
                             int idx = ReadS32(d, valOff);
                             return idx >= 0 && idx < sst.Count ? Cell.FromText(sst[idx]) : Cell.Empty;
-                        }, ref maxRow, ref maxCol);
+                        }, ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtFmlaString:
                     PutCell(cells, d, false, ref prevCol, currentRow,
@@ -767,7 +887,7 @@ internal static class XlsbBackend
                             var cell = Cell.FromText(ReadStringAt(d, valOff));
                             ApplyFormula(d, valOff + 4 + ReadWideLen(d, valOff), cell);
                             return cell;
-                        }, ref maxRow, ref maxCol);
+                        }, ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtFmlaNum:
                     PutCell(cells, d, false, ref prevCol, currentRow,
@@ -776,7 +896,7 @@ internal static class XlsbBackend
                             var cell = FormatDetector.CellFromNumber(BitConverter.ToDouble(d, valOff), StyleRef(d, 4), cellXfs, formats, date1904);
                             ApplyFormula(d, valOff + 8, cell);
                             return cell;
-                        }, ref maxRow, ref maxCol);
+                        }, ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtFmlaBool:
                     PutCell(cells, d, false, ref prevCol, currentRow,
@@ -785,7 +905,7 @@ internal static class XlsbBackend
                             var cell = Cell.FromBoolean(d[valOff] != 0);
                             ApplyFormula(d, valOff + 1, cell);
                             return cell;
-                        }, ref maxRow, ref maxCol);
+                        }, ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtFmlaError:
                     PutCell(cells, d, false, ref prevCol, currentRow,
@@ -794,7 +914,7 @@ internal static class XlsbBackend
                             var cell = Cell.FromText(BiffShared.ErrorCode(d[valOff]));
                             ApplyFormula(d, valOff + 1, cell);
                             return cell;
-                        }, ref maxRow, ref maxCol);
+                        }, ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtColInfo:
                     ParseColInfo(d, colWidths);
@@ -937,7 +1057,8 @@ internal static class XlsbBackend
     }
 
     private static void PutCell(Dictionary<int, Dictionary<int, Cell>> cells, byte[] d, bool shortCell,
-        ref int prevCol, int currentRow, Func<int, Cell> factory, ref int maxRow, ref int maxCol)
+        ref int prevCol, int currentRow, Func<int, Cell> factory, ref int maxRow, ref int maxCol,
+        List<CellStyle?>? cellStyles = null)
     {
         int valueOff = shortCell ? 4 : 8;
         int col;
@@ -953,6 +1074,13 @@ internal static class XlsbBackend
         prevCol = col;
 
         var cell = factory(valueOff);
+        // 应用单元格样式（字体/填充/边框）：ixfe → CellStyle。默认样式返回 null，保持轻量。
+        if (cellStyles is not null)
+        {
+            int ixfe = StyleRef(d, shortCell ? 0 : 4);
+            if (ixfe >= 0 && ixfe < cellStyles.Count && cellStyles[ixfe] is { } st)
+                cell.Style = st;
+        }
         if (!cells.TryGetValue(currentRow, out var rowCells))
         {
             rowCells = new Dictionary<int, Cell>();

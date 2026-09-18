@@ -29,6 +29,15 @@ internal static class XlsbTestFile
     private const int BrtBeginCellXfs = 0x0269;
     private const int BrtEndCellXfs = 0x026A;
     private const int BrtXf = 0x002F;
+    private const int BrtBeginFonts = 0x0263;
+    private const int BrtEndFonts = 0x0264;
+    private const int BrtFont = 0x002B;
+    private const int BrtBeginFills = 0x025B;
+    private const int BrtEndFills = 0x025C;
+    private const int BrtFill = 0x002D;
+    private const int BrtBeginBorders = 0x0265;
+    private const int BrtEndBorders = 0x0266;
+    private const int BrtBorder = 0x002E;
 
     // worksheet.bin
     private const int BrtBeginSheet = 0x0081;
@@ -106,6 +115,29 @@ internal static class XlsbTestFile
 
         /// <summary>额外的 [Content_Types].xml Default 声明（扩展名 → ContentType）。</summary>
         public Dictionary<string, string> ExtraDefaults { get; } = new();
+
+        /// <summary>可选字体表（BrtFont）；非空时写出 BrtBeginFonts/BrtEndFonts 段。</summary>
+        public List<FontSpec>? Fonts { get; set; }
+
+        /// <summary>可选填充表（BrtFill，仅 solid 颜色）；非空时写出填充段。</summary>
+        public List<string?>? Fills { get; set; }
+
+        /// <summary>可选边框表（BrtBorder，四边均为 thin）；非空时写出边框段。</summary>
+        public List<bool>? Borders { get; set; }
+
+        /// <summary>每个 CellXfs 条目的 (FontId, FillId, BorderId)；缺省全 0。</summary>
+        public List<(int FontId, int FillId, int BorderId)> CellXfRefs { get; } = new();
+    }
+
+    /// <summary>测试用字体规格。</summary>
+    public sealed class FontSpec
+    {
+        public string Name = "Calibri";
+        public double Size = 11;
+        public bool Bold;
+        public bool Italic;
+        public bool Underline;
+        public string? ColorRgb; // "RRGGBB"（不含 #）；null = auto
     }
 
     /// <summary>workbook.bin 中内嵌 rId 的缓存引用记录规格。</summary>
@@ -468,16 +500,107 @@ internal static class XlsbTestFile
             WriteWideString(b, kv.Value);
             WriteRecord(ms, BrtFmt, b.ToArray());
         }
-        WriteRecord(ms, BrtBeginCellXfs, Empty());
-        foreach (var ifmt in spec.CellXfs)
+
+        if (spec.Fonts is { Count: > 0 })
         {
+            WriteRecord(ms, BrtBeginFonts, U32Bytes((uint)spec.Fonts.Count));
+            foreach (var f in spec.Fonts)
+                WriteRecord(ms, BrtFont, BuildFont(f));
+            WriteRecord(ms, BrtEndFonts, Empty());
+        }
+
+        if (spec.Fills is { Count: > 0 })
+        {
+            WriteRecord(ms, BrtBeginFills, U32Bytes((uint)spec.Fills.Count));
+            foreach (var color in spec.Fills)
+                WriteRecord(ms, BrtFill, BuildFill(color));
+            WriteRecord(ms, BrtEndFills, Empty());
+        }
+
+        if (spec.Borders is { Count: > 0 })
+        {
+            WriteRecord(ms, BrtBeginBorders, U32Bytes((uint)spec.Borders.Count));
+            foreach (var hasBorder in spec.Borders)
+                WriteRecord(ms, BrtBorder, BuildBorder(hasBorder));
+            WriteRecord(ms, BrtEndBorders, Empty());
+        }
+
+        WriteRecord(ms, BrtBeginCellXfs, Empty());
+        for (int i = 0; i < spec.CellXfs.Count; i++)
+        {
+            var (fontId, fillId, borderId) = i < spec.CellXfRefs.Count ? spec.CellXfRefs[i] : (0, 0, 0);
             using var b = new MemoryStream();
-            WriteU16(b, 0);                  // ixfeParent
-            WriteU16(b, (ushort)ifmt);       // ifmt
-            for (int i = 0; i < 12; i++) b.WriteByte(0);
+            WriteU16(b, 0);                              // ixfeParent
+            WriteU16(b, (ushort)spec.CellXfs[i]);        // ifmt
+            WriteU16(b, (ushort)fontId);                 // iFont
+            WriteU16(b, (ushort)fillId);                 // iFill
+            WriteU16(b, (ushort)borderId);               // ixBorder
+            for (int k = 0; k < 6; k++) b.WriteByte(0);  // trot/indent/flow/... + trailing
             WriteRecord(ms, BrtXf, b.ToArray());
         }
         WriteRecord(ms, BrtEndCellXfs, Empty());
+        return ms.ToArray();
+    }
+
+    /// <summary>BrtFont：sz(2) grbit(2) weight(2) vertAlign(2) underline(1) family(1) charset(1) pad(1) BrtColor(8) scheme(1) name(XLWideString)。</summary>
+    private static byte[] BuildFont(FontSpec f)
+    {
+        using var ms = new MemoryStream();
+        WriteU16(ms, (ushort)Math.Round(f.Size * 20));
+        WriteU16(ms, (ushort)((f.Bold ? 0x01 : 0) | (f.Italic ? 0x02 : 0)));
+        WriteU16(ms, (ushort)(f.Bold ? 700 : 400));
+        WriteU16(ms, 0);            // vertAlign
+        ms.WriteByte(f.Underline ? (byte)1 : (byte)0);
+        ms.WriteByte(2);            // family
+        ms.WriteByte(0);            // charset
+        ms.WriteByte(0);            // pad
+        WriteColor(ms, f.ColorRgb);
+        ms.WriteByte(2);            // scheme
+        WriteWideString(ms, f.Name);
+        return ms.ToArray();
+    }
+
+    /// <summary>BrtFill：fls(4) + fgColor(8) + bgColor(8) + 12×u32。</summary>
+    private static byte[] BuildFill(string? colorRgb)
+    {
+        using var ms = new MemoryStream();
+        WriteU32(ms, colorRgb is null ? 0u : 1u); // 0=none, 1=solid
+        WriteColor(ms, colorRgb);
+        WriteColor(ms, null);
+        for (int j = 0; j < 12; j++) WriteU32(ms, 0);
+        return ms.ToArray();
+    }
+
+    /// <summary>BrtBorder：diagonal(1) + 5×(style(1)+reserved(1)+BrtColor(8))，边序 left/right/top/bottom/diagonal。</summary>
+    private static byte[] BuildBorder(bool hasBorder)
+    {
+        using var ms = new MemoryStream();
+        ms.WriteByte(0); // diagonal style
+        for (int i = 0; i < 5; i++)
+        {
+            bool edge = hasBorder && i < 4; // 仅四边，不含 diagonal
+            ms.WriteByte(edge ? (byte)1 : (byte)0); // style (1=thin)
+            ms.WriteByte(0);
+            WriteColor(ms, null);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>BrtColor(8)：auto 全 0；rgb = 05 FF 00 00 R G B FF。</summary>
+    private static void WriteColor(MemoryStream ms, string? rgb)
+    {
+        if (rgb is null) { for (int i = 0; i < 8; i++) ms.WriteByte(0); return; }
+        ms.WriteByte(0x05); ms.WriteByte(0xFF); ms.WriteByte(0x00); ms.WriteByte(0x00);
+        ms.WriteByte(Convert.ToByte(rgb.Substring(0, 2), 16));
+        ms.WriteByte(Convert.ToByte(rgb.Substring(2, 2), 16));
+        ms.WriteByte(Convert.ToByte(rgb.Substring(4, 2), 16));
+        ms.WriteByte(0xFF);
+    }
+
+    private static byte[] U32Bytes(uint v)
+    {
+        using var ms = new MemoryStream();
+        WriteU32(ms, v);
         return ms.ToArray();
     }
 

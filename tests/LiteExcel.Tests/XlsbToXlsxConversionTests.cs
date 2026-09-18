@@ -191,6 +191,51 @@ public class XlsbToXlsxConversionTests
         finally { Cleanup(src, xlsm); Cleanup(src, xlsx); }
     }
 
+    [Fact]
+    public void XlsbToXlsx_TranscodesBasicStyles()
+    {
+        // B2：xlsb styles.bin 的字体/填充/边框应转码为 xlsx styles.xml 并作用于单元格。
+        var spec = SpecWithCell();
+        spec.Fonts = new List<XlsbTestFile.FontSpec>
+        {
+            new() { Name = "Calibri", Size = 11 },
+            new() { Name = "Arial", Size = 14, Bold = true, ColorRgb = "FF0000" },
+        };
+        spec.Fills = new List<string?> { null, null, "FFFF00" }; // 索引 0/1 保留，2 = 黄底
+        spec.Borders = new List<bool> { false, true };
+        spec.CellXfs.Add(0);
+        spec.CellXfs.Add(0);
+        spec.CellXfRefs.Add((0, 0, 0)); // 默认
+        spec.CellXfRefs.Add((1, 2, 1)); // Arial 14 粗体红字 + 黄底 + thin 边框
+        spec.Sheets[0].Rows[0].Cells[0].Style = 1;
+
+        var src = XlsbTestFile.Build(spec);
+        var outPath = TempPath(".xlsx");
+        try
+        {
+            var wb = Excel.Open(src);
+            var cell = wb.Worksheets[0].Cell("A1");
+            Assert.NotNull(cell.Style);
+            Assert.Equal("Arial", cell.Style!.FontName);
+            Assert.True(cell.Style.Bold);
+            Assert.Equal("#FF0000", cell.Style.FontColor);
+            Assert.Equal("#FFFF00", cell.Style.FillColor);
+            Assert.Equal("thin", cell.Style.Border!.Top!.Style);
+
+            wb.AllowFeatureLossOnSave = true;
+            wb.SaveAs(outPath, ExcelFormat.Xlsx);
+
+            using var zip = ZipFile.OpenRead(outPath);
+            var styles = ReadXml(zip, "xl/styles.xml").ToString();
+            Assert.Contains("Arial", styles);
+            Assert.Contains("FF0000", styles);
+            Assert.Contains("FFFF00", styles);
+            Assert.Contains("thin", styles);
+            AssertNoDangling(zip);
+        }
+        finally { Cleanup(src, outPath); }
+    }
+
     /// <summary>校验输出包：所有关系目标可解析、每个部件都有内容类型。</summary>
     private static void AssertNoDangling(ZipArchive zip)
     {
