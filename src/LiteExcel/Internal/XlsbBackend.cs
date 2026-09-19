@@ -251,6 +251,7 @@ internal static class XlsbBackend
             var rels = ReadSheetHyperlinkRels(zip, sheetPaths[i]);
             var sd = ParseWorksheet(data, sheets[i].Name, sst, formats, cellXfs, cellStyles, date1904, rels);
             sd.SheetState = SheetVisibilityMap.ToOoxml(SheetVisibilityMap.FromBiff(sheets[i].HsState));
+            if (sheets[i].SheetId > 0) sd.SheetId = sheets[i].SheetId.ToString(System.Globalization.CultureInfo.InvariantCulture);
             ReadCommentsForSheet(zip, sheetPaths[i], sd);
             ReadTablesForSheet(zip, sheetPaths[i], data, sd);
             BuildSheetSlicerExtLst(sd);
@@ -273,7 +274,7 @@ internal static class XlsbBackend
     }
 
     /// <summary>将工作簿清单中的 rId 映射到实际工作表部件路径。</summary>
-    private static List<string> MapSheetPaths(ZipArchive zip, List<(string Name, string RelId, int HsState)> sheets)
+    private static List<string> MapSheetPaths(ZipArchive zip, List<(string Name, string RelId, int HsState, int SheetId)> sheets)
     {
         var relMap = new Dictionary<string, string>();
         var relsEntry = zip.GetEntry("xl/_rels/workbook.bin.rels");
@@ -319,7 +320,7 @@ internal static class XlsbBackend
     /// 为流式读取预加载工作簿级共享数据：工作表清单、SST、样式、日期系统。
     /// 返回 (sheets, sst, formats, cellXfs, date1904)。
     /// </summary>
-    public static (List<(string Name, string RelId, int HsState)> sheets, List<string> sst,
+    public static (List<(string Name, string RelId, int HsState, int SheetId)> sheets, List<string> sst,
         Dictionary<int, string> formats, List<int> cellXfs, bool date1904)
         PrepareStreaming(ZipArchive zip)
     {
@@ -339,16 +340,16 @@ internal static class XlsbBackend
     }
 
     /// <summary>将工作簿清单中的 rId 映射到实际工作表部件路径（公开给流式读取器）。</summary>
-    public static List<string> MapSheetPathsPublic(ZipArchive zip, List<(string Name, string RelId, int HsState)> sheets)
+    public static List<string> MapSheetPathsPublic(ZipArchive zip, List<(string Name, string RelId, int HsState, int SheetId)> sheets)
         => MapSheetPaths(zip, sheets);
 
-    private static (List<(string Name, string RelId, int HsState)> Sheets, bool Date1904) ParseWorkbook(byte[] wb)
+    private static (List<(string Name, string RelId, int HsState, int SheetId)> Sheets, bool Date1904) ParseWorkbook(byte[] wb)
     {
         var records = Biff12Records.ReadAll(wb);
         if (records.Count == 0)
             throw new LiteExcelException("这不是有效的 .xlsb 文件（workbook.bin 为空）");
 
-        var sheets = new List<(string, string, int)>();
+        var sheets = new List<(string, string, int, int)>();
         bool date1904 = false;
 
         foreach (var rec in records)
@@ -360,10 +361,11 @@ internal static class XlsbBackend
                     var d = rec.Data;
                     if (d.Length < 8) break;
                     uint hsState = Biff12Records.ReadU32(d, 0);
+                    uint iTabId = Biff12Records.ReadU32(d, 4);
                     int off = 8; // Hidden(4) + iTabID(4)
                     var relId = Biff12Records.ReadWideString(d, ref off);
                     var name = Biff12Records.ReadWideString(d, ref off);
-                    sheets.Add((name, relId, (int)hsState));
+                    sheets.Add((name, relId, (int)hsState, (int)iTabId));
                     break;
                 }
                 case BrtWbProp:
