@@ -261,9 +261,8 @@ internal sealed class OoxmlPreservedParts
         }
 
         // 透视表（Stage D 接线）+ 切片器（Stage E 接线）：二者必须一起启用（透视表强依赖切片器）。
-        // 注意：当前转码尚未覆盖全部变体（如 pivotFields 翻倍怪癖、formats/extLst、非 OLAP 切片器），
-        // 启用前须确保 Excel 能无修复打开；暂以环境变量门控（默认关闭）。
-        if (Environment.GetEnvironmentVariable("LITEXCEL_ENABLE_PIVOT_WIRING") == "1")
+        // 默认启用；如需回退到「丢弃+上报」的安全降级路径，可设 LITEXCEL_DISABLE_PIVOT_WIRING=1。
+        if (Environment.GetEnvironmentVariable("LITEXCEL_DISABLE_PIVOT_WIRING") != "1")
         {
             TranscodePivotParts(result, targetMap);
             TranscodeSlicerParts(result, targetMap);

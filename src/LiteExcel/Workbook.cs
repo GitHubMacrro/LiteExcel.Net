@@ -416,8 +416,15 @@ public sealed class Workbook
             return;
         }
 
-        // 跨格式：BIFF12 高级部件（透视表/切片器/连接/Power Query/数据模型）尚未转码，
-        // 写出时将被丢弃；格式无关部件（VBA/主题/customXml/媒体/ActiveX 等）会保留。
+        // 跨格式：目标 xlsx/xlsm 时，BIFF12 高级部件（透视表/切片器/连接/PQ/数据模型）会经转码器保留；
+        // 仅当目标为 xls/csv 等无法承载这些部件的格式时才上报/阻止。
+        if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
+        {
+            bool disabled = Environment.GetEnvironmentVariable("LITEXCEL_DISABLE_PIVOT_WIRING") == "1";
+            if (!disabled)
+                return; // 透视/切片器/连接/数据模型已转码保留
+        }
+
         ReportOrBlockAdvancedXlsb(format,
             $"源 XLSB 文件包含高级部件（透视表/切片器/连接/Power Query/数据模型等），转换为 {format} 时这些部件无法保留；" +
             "VBA、主题、customXml、媒体、ActiveX 等格式无关部件会保留。");

@@ -152,11 +152,14 @@ public class XlsbToXlsxConversionTests
     }
 
     [Fact]
-    public void XlsbToXlsx_ReportsAdvancedPartsDegradation()
+    public void XlsbToXlsx_TranscodesPivotTableParts()
     {
         var spec = SpecWithCell();
-        spec.ExtraParts["xl/pivotTables/pivotTable1.bin"] = new byte[] { 1, 2, 3, 4 };
-        spec.ExtraOverrides["/xl/pivotTables/pivotTable1.bin"] = PivotCt;
+        spec.ExtraParts["xl/pivotTables/pivotTable1.bin"] = XlsbTestFile.BuildPivotTableBin(
+            1, "PivotTable1", "Values", "00000000-0000-0000-0000-000000000000", null,
+            "PACKAGE GROUP", new[] { (0, 0), (1, -1) }, new[] { 0 }, 0x03F0, "PivotStyleLight16");
+        spec.ExtraParts["xl/pivotCache/pivotCacheDefinition1.bin"] = XlsbTestFile.BuildPivotCacheBin(
+            1, 0, "Admin", new[] { (0, 1, 0u, "[T].[A]", "A", new[] { "x", "y" }) });
         spec.ExtraRels["xl/worksheets/_rels/sheet1.bin.rels"] =
             $"<Relationship Id=\"rIdP\" Type=\"{OfficeRelNs}/pivotTable\" Target=\"../pivotTables/pivotTable1.bin\"/>";
 
@@ -168,9 +171,12 @@ public class XlsbToXlsxConversionTests
             wb.AllowFeatureLossOnSave = true;
             wb.SaveAs(outPath, ExcelFormat.Xlsx);
 
-            Assert.Contains(wb.SaveDegradations, d => d.Capability == DegradationCapability.PivotTables);
+            // 透视表部件已转码保留（不再上报降级）。
+            Assert.DoesNotContain(wb.SaveDegradations, d => d.Capability == DegradationCapability.PivotTables);
 
             using var zip = ZipFile.OpenRead(outPath);
+            Assert.NotNull(zip.GetEntry("xl/pivotTables/pivotTable1.xml"));
+            Assert.NotNull(zip.GetEntry("xl/pivotCache/pivotCacheDefinition1.xml"));
             Assert.Null(zip.GetEntry("xl/pivotTables/pivotTable1.bin"));
             AssertNoDangling(zip);
         }
@@ -178,11 +184,14 @@ public class XlsbToXlsxConversionTests
     }
 
     [Fact]
-    public void XlsbToXlsx_StrictMode_BlocksWhenAdvancedParts()
+    public void XlsbToXlsx_StrictMode_DoesNotBlockWhenPivotTranscodable()
     {
         var spec = SpecWithCell();
-        spec.ExtraParts["xl/pivotTables/pivotTable1.bin"] = new byte[] { 1, 2, 3, 4 };
-        spec.ExtraOverrides["/xl/pivotTables/pivotTable1.bin"] = PivotCt;
+        spec.ExtraParts["xl/pivotTables/pivotTable1.bin"] = XlsbTestFile.BuildPivotTableBin(
+            1, "PivotTable1", "Values", "00000000-0000-0000-0000-000000000000", null,
+            "PACKAGE GROUP", new[] { (0, 0), (1, -1) }, new[] { 0 }, 0x03F0, "PivotStyleLight16");
+        spec.ExtraParts["xl/pivotCache/pivotCacheDefinition1.bin"] = XlsbTestFile.BuildPivotCacheBin(
+            1, 0, "Admin", new[] { (0, 1, 0u, "[T].[A]", "A", new[] { "x", "y" }) });
         spec.ExtraRels["xl/worksheets/_rels/sheet1.bin.rels"] =
             $"<Relationship Id=\"rIdP\" Type=\"{OfficeRelNs}/pivotTable\" Target=\"../pivotTables/pivotTable1.bin\"/>";
 
@@ -192,7 +201,9 @@ public class XlsbToXlsxConversionTests
         {
             var wb = Excel.Open(src);
             wb.AllowFeatureLossOnSave = false;
-            Assert.Throws<LiteExcelException>(() => wb.SaveAs(outPath, ExcelFormat.Xlsx));
+            wb.SaveAs(outPath, ExcelFormat.Xlsx);
+            using var zip = ZipFile.OpenRead(outPath);
+            Assert.NotNull(zip.GetEntry("xl/pivotTables/pivotTable1.xml"));
         }
         finally { Cleanup(src, outPath); }
     }
