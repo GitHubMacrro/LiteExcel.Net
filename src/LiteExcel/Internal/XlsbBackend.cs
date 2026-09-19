@@ -1164,9 +1164,11 @@ internal static class XlsbBackend
     }
 
     /// <summary>BrtBeginAFilter：rfx = rwFirst(4) + rwLast(4) + colFirst(4) + colLast(4) = 16 字节。</summary>
-    /// <summary>由 BrtBeginSlicer 捕获的 rId 合成 sheet 的 &lt;extLst&gt;&lt;x14:slicerList&gt;（跨格式转换用）。</summary>
+    /// <summary>由 BrtBeginSlicer 捕获的 rId 合成 sheet 的 &lt;extLst&gt;&lt;x14:slicerList&gt;（跨格式转换用）。
+    /// 仅在启用透视/切片器接线时合成；否则切片器部件被丢弃，sheet extLst 会成为悬空引用。</summary>
     private static void BuildSheetSlicerExtLst(SheetData sheet)
     {
+        if (Environment.GetEnvironmentVariable("LITEXCEL_ENABLE_PIVOT_WIRING") != "1") return;
         if (sheet.SlicerRIds is not { Count: > 0 } rids) return;
         var sb = new System.Text.StringBuilder();
         sb.Append("<extLst><ext uri=\"{A8765BA9-456A-4dab-B4F3-ACF838C121DE}\" " +
