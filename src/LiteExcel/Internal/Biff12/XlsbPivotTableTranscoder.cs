@@ -42,6 +42,9 @@ internal static class XlsbPivotTableTranscoder
     private const int RtRowHierarchyUsage = 0x0140;
     private const int RtColHierarchyUsage = 0x0142;
     private const int RtTableStyleClient = 0x0201;
+    private const int RtFrtPivotTableDef = 0x0426;
+    private const int RtActiveTabTopLevelEntity = 0x0856;
+    private const int RtPivotTableDefinition16 = 0x1388;
 
     private const string MainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
@@ -103,6 +106,11 @@ internal static class XlsbPivotTableTranscoder
         public readonly List<ushort> Hierarchies = new();
         public readonly List<int> RowHierarchyUsage = new();
         public readonly List<int> ColHierarchyUsage = new();
+        public bool FillDownLabelsDefault;
+        public bool HasPivotTableDefinitionExt;
+        public string? ActiveTabTopLevelEntity;
+        public bool SubtotalsOnTopDefault;
+        public bool HasPivotTableDefinition16;
     }
 
     public static PivotTableInfo Parse(byte[] data)
@@ -190,6 +198,29 @@ internal static class XlsbPivotTableTranscoder
                     if (style.Length > 0) info.PivotStyle = style;
                     break;
                 }
+                case RtFrtPivotTableDef:
+                    // BrtPivotTableDefinition (FRT 0x0E02)：flags@4；bit0 = fillDownLabelsDefault。
+                    if (d.Length >= 5)
+                    {
+                        info.HasPivotTableDefinitionExt = true;
+                        info.FillDownLabelsDefault = (d[4] & 0x01) != 0;
+                    }
+                    break;
+                case RtActiveTabTopLevelEntity:
+                    // 0x0856：reserved(8) + XLWideString。
+                    if (d.Length >= 12)
+                    {
+                        int off = 8;
+                        info.ActiveTabTopLevelEntity = ReadWideString(d, ref off);
+                    }
+                    break;
+                case RtPivotTableDefinition16:
+                    if (d.Length >= 2)
+                    {
+                        info.HasPivotTableDefinition16 = true;
+                        info.SubtotalsOnTopDefault = d[1] == 0;
+                    }
+                    break;
             }
         }
         return info;
@@ -383,8 +414,43 @@ internal static class XlsbPivotTableTranscoder
             sb.Append("</colHierarchiesUsage>");
         }
 
+        AppendExtLst(sb, p);
+
         sb.Append("</pivotTableDefinition>");
         return sb.ToString();
+    }
+
+    /// <summary>由 FRT 块（0x0426 / 0x0818+0x0856 / 0x1388）合成 pivotTable 的 &lt;extLst&gt;。</summary>
+    private static void AppendExtLst(StringBuilder sb, PivotTableInfo p)
+    {
+        if (!p.HasPivotTableDefinitionExt && p.ActiveTabTopLevelEntity is null && !p.HasPivotTableDefinition16)
+            return;
+        sb.Append("<extLst>");
+        if (p.HasPivotTableDefinitionExt)
+        {
+            sb.Append("<ext uri=\"{962EF5D1-5CA2-4c93-8EF4-DBF5C05439D2}\" " +
+                      "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\">" +
+                      "<x14:pivotTableDefinition");
+            if (p.FillDownLabelsDefault) sb.Append(" fillDownLabelsDefault=\"1\"");
+            sb.Append(" calculatedMembersInFilters=\"1\" hideValuesRow=\"1\" " +
+                      "xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\"/></ext>");
+        }
+        if (p.ActiveTabTopLevelEntity is not null)
+        {
+            sb.Append("<ext uri=\"{E67621CE-5B39-4880-91FE-76760E9C1902}\" " +
+                      "xmlns:x15=\"http://schemas.microsoft.com/office/spreadsheetml/2010/11/main\">" +
+                      "<x15:pivotTableUISettings><x15:activeTabTopLevelEntity name=\"" +
+                      Esc(p.ActiveTabTopLevelEntity) + "\"/></x15:pivotTableUISettings></ext>");
+        }
+        if (p.HasPivotTableDefinition16)
+        {
+            sb.Append("<ext uri=\"{747A6164-185A-40DC-8AA5-F01512510D54}\" " +
+                      "xmlns:xpdl=\"http://schemas.microsoft.com/office/spreadsheetml/2016/pivotdefaultlayout\">" +
+                      "<xpdl:pivotTableDefinition16");
+            if (p.SubtotalsOnTopDefault) sb.Append(" SubtotalsOnTopDefault=\"0\"");
+            sb.Append("/></ext>");
+        }
+        sb.Append("</extLst>");
     }
 
     private static void AppendDataFields(StringBuilder sb, PivotTableInfo p)
