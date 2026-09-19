@@ -92,8 +92,7 @@ internal static class XlsbConnectionTranscoder
                     break;
                 case RtConnRange:
                     if (cur is not null) cur.RangeSourceName = ReadWideAt(d, 4);
-                    break;
-            }
+                    break;            }
         }
         return list;
     }
@@ -157,6 +156,15 @@ internal static class XlsbConnectionTranscoder
         return Encoding.Unicode.GetString(d, off, (int)cch * 2);
     }
 
+    /// <summary>16 字节 GUID（LE 前三段）→ <c>{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}</c>。</summary>
+    private static string FormatXr16Uid(byte[] d, int off)
+    {
+        var g = new Guid(
+            Biff12Records.ReadU32(d, off), Biff12Records.ReadU16(d, off + 4), Biff12Records.ReadU16(d, off + 6),
+            d[off + 8], d[off + 9], d[off + 10], d[off + 11], d[off + 12], d[off + 13], d[off + 14], d[off + 15]);
+        return "{" + g.ToString().ToUpperInvariant() + "}";
+    }
+
     /// <summary>生成 connections.xml 全文。</summary>
     public static string ToXml(IReadOnlyList<ConnectionInfo> conns)
     {
@@ -176,18 +184,25 @@ internal static class XlsbConnectionTranscoder
             if (c.Credentials != 0) sb.Append(" credentials=\"none\"");
             sb.Append('>');
 
+            bool isDataModel = string.Equals(c.DbCommand, "Model", StringComparison.Ordinal);
             if (c.DbConnection is not null)
-                sb.Append($"<dbPr connection=\"{Esc(c.DbConnection)}\" command=\"{Esc(c.DbCommand ?? "")}\"/>");
+            {
+                sb.Append($"<dbPr connection=\"{Esc(c.DbConnection)}\" command=\"{Esc(c.DbCommand ?? "")}\"");
+                if (isDataModel) sb.Append(" commandType=\"1\"");
+                sb.Append("/>");
+            }
             if (c.HasOlapPr)
                 sb.Append($"<olapPr sendLocale=\"1\" rowDrillCount=\"{c.RowDrillCount}\"/>");
 
-            if (c.X15Id is not null || c.RangeSourceName is not null)
+            if (c.X15Id is not null || c.RangeSourceName is not null || isDataModel)
             {
                 sb.Append("<extLst><ext uri=\"{DE250136-89BD-433C-8126-D09CA5730AF9}\" ");
-                sb.Append($"xmlns:x15=\"{X15Ns}\"><x15:connection id=\"{Esc(c.X15Id ?? "")}\">");
+                sb.Append($"xmlns:x15=\"{X15Ns}\">");
                 if (c.RangeSourceName is not null)
-                    sb.Append($"<x15:rangePr sourceName=\"{Esc(c.RangeSourceName)}\"/>");
-                sb.Append("</x15:connection></ext></extLst>");
+                    sb.Append($"<x15:connection id=\"{Esc(c.X15Id ?? "")}\"><x15:rangePr sourceName=\"{Esc(c.RangeSourceName)}1\"/></x15:connection>");
+                else
+                    sb.Append($"<x15:connection id=\"{Esc(c.X15Id ?? "")}\" model=\"1\"/>");
+                sb.Append("</ext></extLst>");
             }
             sb.Append("</connection>");
         }
@@ -210,6 +225,8 @@ internal static class XlsbConnectionTranscoder
         uint connectionId = 0;
         ushort autoFormatId = 0;
         uint nextId = 0;
+        string uid = "";
+        bool unboundColumnsRight = false;
         var fields = new List<(uint Id, uint ColId, string Name)>();
 
         foreach (var rec in Biff12Records.ReadAll(data))
@@ -217,6 +234,9 @@ internal static class XlsbConnectionTranscoder
             var d = rec.Data;
             switch (rec.Rt)
             {
+                case 0x0C00:
+                    if (d.Length >= 16) uid = FormatXr16Uid(d, 0);
+                    break;
                 case RtBeginQueryTable:
                     if (d.Length >= 14)
                     {
@@ -228,14 +248,16 @@ internal static class XlsbConnectionTranscoder
                     break;
                 case RtBeginQueryTableRefresh:
                     if (d.Length >= 6) nextId = Biff12Records.ReadU32(d, 2);
+                    if (d.Length >= 9 && d[8] != 0) unboundColumnsRight = true;
                     break;
                 case RtQueryTableField:
-                    if (d.Length >= 16)
+                    if (d.Length >= 12)
                     {
                         uint id = Biff12Records.ReadU32(d, 4);
                         uint colId = Biff12Records.ReadU32(d, 8);
                         int off = 12;
-                        fields.Add((id, colId, ReadWideString(d, ref off)));
+                        var fn = ReadWideString(d, ref off);
+                        fields.Add((id, colId, fn));
                     }
                     break;
             }
@@ -243,13 +265,26 @@ internal static class XlsbConnectionTranscoder
 
         var sb = new StringBuilder(512);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
-        sb.Append($"<queryTable xmlns=\"{QueryTableNs}\" name=\"{Esc(name)}\" backgroundRefresh=\"0\" " +
-                  $"connectionId=\"{connectionId}\" autoFormatId=\"{autoFormatId}\" " +
+        sb.Append($"<queryTable xmlns=\"{QueryTableNs}\"");
+        if (uid.Length > 0)
+            sb.Append($" xmlns:mc=\"{McNs}\" mc:Ignorable=\"xr16\" " +
+                      "xmlns:xr16=\"http://schemas.microsoft.com/office/spreadsheetml/2017/revision16\"");
+        sb.Append($" name=\"{Esc(name)}\" backgroundRefresh=\"0\" " +
+                  $"connectionId=\"{connectionId}\"");
+        if (uid.Length > 0) sb.Append($" xr16:uid=\"{uid}\"");
+        sb.Append($" autoFormatId=\"{autoFormatId}\" " +
                   "applyNumberFormats=\"0\" applyBorderFormats=\"0\" applyFontFormats=\"0\" " +
                   "applyPatternFormats=\"0\" applyAlignmentFormats=\"0\" applyWidthHeightFormats=\"0\">");
-        sb.Append($"<queryTableRefresh nextId=\"{nextId}\"><queryTableFields count=\"{fields.Count}\">");
+        sb.Append($"<queryTableRefresh nextId=\"{nextId}\"");
+        if (unboundColumnsRight) sb.Append(" unboundColumnsRight=\"1\"");
+        sb.Append($"><queryTableFields count=\"{fields.Count}\">");
         foreach (var (id, colId, fn) in fields)
-            sb.Append($"<queryTableField id=\"{id}\" name=\"{Esc(fn)}\" tableColumnId=\"{colId}\"/>");
+        {
+            if (fn.Length == 0)
+                sb.Append($"<queryTableField id=\"{id}\" dataBound=\"0\" tableColumnId=\"{colId}\"/>");
+            else
+                sb.Append($"<queryTableField id=\"{id}\" name=\"{Esc(fn)}\" tableColumnId=\"{colId}\"/>");
+        }
         sb.Append("</queryTableFields></queryTableRefresh></queryTable>");
         return sb.ToString();
     }

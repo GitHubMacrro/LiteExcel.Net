@@ -378,8 +378,9 @@ public sealed class Workbook
             foreach (var c in Internal.Biff12.XlsbConnectionTranscoder.Parse(connBin))
             {
                 if (c.Type != 102 || string.IsNullOrEmpty(c.RangeSourceName)) continue;
-                if (!seen.Add(c.RangeSourceName! + "|-1")) continue;
-                sb.Append($"<definedName name=\"{XlsxWriter.XmlEscape(c.RangeSourceName!)}\" hidden=\"1\">{XlsxWriter.XmlEscape((c.X15Id ?? "") + "[]")}</definedName>");
+                var nm = c.RangeSourceName! + "1";
+                if (!seen.Add(nm + "|-1")) continue;
+                sb.Append($"<definedName name=\"{XlsxWriter.XmlEscape(nm)}\" hidden=\"1\">{XlsxWriter.XmlEscape((c.X15Id ?? "") + "[]")}</definedName>");
             }
         }
         return sb.Length > 0 ? "<definedNames>" + sb + "</definedNames>" : "";
