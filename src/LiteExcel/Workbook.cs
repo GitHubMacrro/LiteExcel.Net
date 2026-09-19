@@ -65,6 +65,10 @@ public sealed class Workbook
 
     internal bool SourceHasAdvancedXlsbParts { get; set; }
 
+    /// <summary>源 xlsb 含尚无转码器覆盖的高级部件（如时间线 timelineCaches/timelines），
+    /// 跨格式转换时无法保留，须显式上报/阻止。</summary>
+    internal bool SourceHasUncoveredAdvancedXlsbParts { get; set; }
+
     internal HashSet<int> AdvancedXlsbSheetIndexes { get; } = new();
 
     /// <summary>是否允许保存时丢失不支持的高级功能（如 VBA 宏、BIFF8 透视表、xlsb 高级部件）。默认 true：不受支持的能力会被丢弃但经 <see cref="SaveDegradations"/> 记录（非静默）。
@@ -417,11 +421,11 @@ public sealed class Workbook
         }
 
         // 跨格式：目标 xlsx/xlsm 时，BIFF12 高级部件（透视表/切片器/连接/PQ/数据模型）会经转码器保留；
-        // 仅当目标为 xls/csv 等无法承载这些部件的格式时才上报/阻止。
+        // 仅当目标为 xls/csv 等无法承载这些部件的格式，或含尚无转码器覆盖的部件（如时间线）时才上报/阻止。
         if (format == ExcelFormat.Xlsx || format == ExcelFormat.Xlsm)
         {
             bool disabled = Environment.GetEnvironmentVariable("LITEXCEL_DISABLE_PIVOT_WIRING") == "1";
-            if (!disabled)
+            if (!disabled && !SourceHasUncoveredAdvancedXlsbParts)
                 return; // 透视/切片器/连接/数据模型已转码保留
         }
 

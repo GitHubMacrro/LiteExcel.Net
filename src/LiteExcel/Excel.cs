@@ -866,6 +866,7 @@ public static class Excel
 
         // 工作簿级高级部件（透视表/切片缓存/连接/PQ 查询表/数据模型）同样无法在跨格式或结构变更时保留。
         bool workbookLevelAdvanced = false;
+        bool uncoveredAdvanced = false;
         if (preserved.Parts is not null)
         {
             foreach (var key in preserved.Parts.Keys)
@@ -879,13 +880,19 @@ public static class Excel
                     || key == "xl/model/item.data")
                 {
                     workbookLevelAdvanced = true;
-                    break;
+                }
+                // 尚无转码器覆盖的高级部件（如时间线）跨格式时无法保留，须上报。
+                if (key.StartsWith("xl/timelineCaches/", StringComparison.Ordinal)
+                    || key.StartsWith("xl/timelines/", StringComparison.Ordinal))
+                {
+                    uncoveredAdvanced = true;
                 }
             }
         }
 
         workbook.SourceHasAdvancedXlsbParts =
             workbook.SourceHasAdvancedXlsbParts || workbook.AdvancedXlsbSheetIndexes.Count > 0 || workbookLevelAdvanced;
+        workbook.SourceHasUncoveredAdvancedXlsbParts = uncoveredAdvanced;
     }
 
     private static SheetData NormalizeSheetData(SheetData sheet, bool firstRowIsHeader)
