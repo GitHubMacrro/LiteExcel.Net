@@ -69,6 +69,10 @@ public sealed class SheetData
     /// 内部使用：r:id 在写出时按关系重编号映射改写 </summary>
     internal string? SheetExtLstXml { get; set; }
 
+    /// <summary>读取时捕获的 worksheet 切片器引用（BrtBeginSlicer 的 rId，0x0439）。
+    /// 跨格式转换时用于合成 sheet 的 &lt;extLst&gt;&lt;x14:slicerList&gt;。</summary>
+    internal List<string>? SlicerRIds { get; set; }
+
     /// <summary>读取时捕获的 workbook.xml 中 &lt;sheet&gt; 元素原始 sheetId 属性值。
     /// 切片器缓存等扩展部件以 tabId 引用工作表，sheetId 必须与原文件一致，否则切片器缓存无法链接到工作表。
     /// 默认空字符串 = 新建工作簿场景，写出时按 1-based 位置序号分配。</summary>

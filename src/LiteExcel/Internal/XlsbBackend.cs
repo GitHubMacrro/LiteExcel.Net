@@ -253,6 +253,7 @@ internal static class XlsbBackend
             sd.SheetState = SheetVisibilityMap.ToOoxml(SheetVisibilityMap.FromBiff(sheets[i].HsState));
             ReadCommentsForSheet(zip, sheetPaths[i], sd);
             ReadTablesForSheet(zip, sheetPaths[i], data, sd);
+            BuildSheetSlicerExtLst(sd);
             result.Add(sd);
         }
 
@@ -944,6 +945,17 @@ internal static class XlsbBackend
                 case BrtDVal:
                     ParseDVal(d, sheet);
                     break;
+                case 0x0439:
+                    if (d.Length >= 6)
+                    {
+                        int cch = Biff12Records.ReadU16(d, 4);
+                        if (6 + cch * 2 <= d.Length && cch > 0)
+                        {
+                            var rid = System.Text.Encoding.Unicode.GetString(d, 6, cch * 2);
+                            (sheet.SlicerRIds ??= new List<string>()).Add(rid);
+                        }
+                    }
+                    break;
             }
         }
 
@@ -1140,8 +1152,7 @@ internal static class XlsbBackend
             colWidths[c] = w;
     }
 
-    private static void ParseMergeCell(byte[] d, SheetData sheet)
-    {
+    private static void ParseMergeCell(byte[] d, SheetData sheet)    {
         if (d.Length < 16) return;
         int rwFirst = ReadS32(d, 0);
         int rwLast = ReadS32(d, 4);
@@ -1151,6 +1162,19 @@ internal static class XlsbBackend
     }
 
     /// <summary>BrtBeginAFilter：rfx = rwFirst(4) + rwLast(4) + colFirst(4) + colLast(4) = 16 字节。</summary>
+    /// <summary>由 BrtBeginSlicer 捕获的 rId 合成 sheet 的 &lt;extLst&gt;&lt;x14:slicerList&gt;（跨格式转换用）。</summary>
+    private static void BuildSheetSlicerExtLst(SheetData sheet)
+    {
+        if (sheet.SlicerRIds is not { Count: > 0 } rids) return;
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<extLst><ext uri=\"{A8765BA9-456A-4dab-B4F3-ACF838C121DE}\" " +
+                  "xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:slicerList>");
+        foreach (var rid in rids)
+            sb.Append($"<x14:slicer r:id=\"{rid}\"/>");
+        sb.Append("</x14:slicerList></ext></extLst>");
+        sheet.SheetExtLstXml = sb.ToString();
+    }
+
     private static void ParseBeginAFilter(byte[] d, SheetData sheet)
     {
         if (d.Length < 16) return;
