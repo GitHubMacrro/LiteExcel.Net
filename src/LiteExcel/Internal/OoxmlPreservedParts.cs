@@ -38,6 +38,16 @@ internal sealed class OoxmlPreservedParts
     /// <summary>打开时捕获的 workbook.xml 中 pivotCaches 元素原始 XML，保存时同步重映射关系 ID 后回写。</summary>
     public string? PivotCachesXml { get; set; }
 
+    /// <summary>跨格式（xlsb→xlsx）转码后的 styles.xml &lt;dxfs&gt; 全文（含透视表 formats 引用的 dxf 样式）。
+    /// 为 null 时 XlsxWriter 按模型 CF/表样式生成 dxfs；非 null 时优先使用此串（恒等索引：xlsb dxf 序号 = xlsx dxfId）。</summary>
+    public string? DxfsXml { get; set; }
+
+    /// <summary>dxf 引用的自定义 numFmt（numFmtId≥164 → formatCode），须并入 styles.xml &lt;numFmts&gt;。</summary>
+    public Dictionary<int, string>? DxfNumFmts { get; set; }
+
+    /// <summary>原始 xlsb dxf 序号 → 去重后 dxfId 映射；pivot &lt;formats&gt; 的 dxfId 据此重映射。</summary>
+    public Dictionary<int, int>? DxfIndexMap { get; set; }
+
     /// <summary>打开时捕获的 workbook.xml 中 externalReferences 元素原始 XML，保存时同步重映射关系 ID 后回写。</summary>
     public string? ExternalReferencesXml { get; set; }
 
@@ -262,6 +272,18 @@ internal sealed class OoxmlPreservedParts
 
         // 透视表（Stage D 接线）+ 切片器（Stage E 接线）：二者必须一起启用（透视表强依赖切片器）。
         // 默认启用；如需回退到「丢弃+上报」的安全降级路径，可设 LITEXCEL_DISABLE_PIVOT_WIRING=1。
+        // dxf 转码须先于 pivot 转码：pivot <formats> 的 dxfId 按去重映射引用 styles.xml <dxfs>。
+        // styles.bin 在 VerbatimBinaries（xlsb 源打开时捕获的原始二进制部件）。
+        // 默认启用；如需回退，可设 LITEXCEL_DISABLE_PIVOT_FORMATS=1（不输出 dxfs/formats）。
+        if (Environment.GetEnvironmentVariable("LITEXCEL_DISABLE_PIVOT_FORMATS") != "1"
+            && VerbatimBinaries is not null && VerbatimBinaries.TryGetValue("xl/styles.bin", out var stylesBin))
+        {
+            var dxfResult = Biff12.XlsbDxfTranscoder.TranscodeAll(stylesBin);
+            result.DxfsXml = Biff12.XlsbDxfTranscoder.BuildDxfsXml(dxfResult.Dxfs);
+            if (dxfResult.CustomNumFmts.Count > 0)
+                result.DxfNumFmts = dxfResult.CustomNumFmts;
+            _dxfIndexMap = dxfResult.IndexMap;
+        }
         if (Environment.GetEnvironmentVariable("LITEXCEL_DISABLE_PIVOT_WIRING") != "1")
         {
             TranscodePivotParts(result, targetMap);
@@ -348,7 +370,7 @@ internal sealed class OoxmlPreservedParts
             int cacheId = cacheIdByFlags.TryGetValue(info.CacheId, out var pos) ? pos : (int)info.CacheId;
             usedCacheIds.Add(cacheId);
             var xmlPath = kv.Key.Substring(0, kv.Key.Length - 4) + ".xml";
-            var xml = Biff12.XlsbPivotWiring.PatchCacheId(Biff12.XlsbPivotTableTranscoder.ToXml(info), cacheId);
+            var xml = Biff12.XlsbPivotWiring.PatchCacheId(Biff12.XlsbPivotTableTranscoder.ToXml(info, _dxfIndexMap), cacheId);
             result.Parts[xmlPath] = Encoding.UTF8.GetBytes(xml);
             targetMap[kv.Key] = xmlPath;
             result.OverrideTypes.Add(("/" + xmlPath, "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"));
@@ -373,6 +395,9 @@ internal sealed class OoxmlPreservedParts
     }
 
     private string? _pivotCachesExt;
+
+    /// <summary>dxf 转码的原始序号→去重 dxfId 映射（供 pivot &lt;formats&gt; 重映射）；门控关闭时为 null。</summary>
+    private Dictionary<int, int>? _dxfIndexMap;
 
     /// <summary>Stage E 接线：slicerCacheN.bin / slicerN.bin → .xml + CT Override + workbook extLst + sheet rels 目标重写。</summary>
     private void TranscodeSlicerParts(OoxmlPreservedParts result, Dictionary<string, string> targetMap)

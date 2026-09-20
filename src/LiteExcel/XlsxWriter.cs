@@ -101,7 +101,14 @@ public static partial class XlsxWriter
         // （直通格式无关部件 + 重写关系/内容类型 + 剔除悬空引用），而非整体丢弃。
         // workbook/styles/sheet/pivot/connection 等需转码的部件由后续阶段处理，暂不写出。
         if (preserved is not null && preserved.VerbatimXmlParts is null)
+        {
             preserved = preserved.ToXlsxCompatible();
+            // 跨格式（xlsb→xlsx）：转码后的 styles.xml <dxfs>（恒等索引，供 pivot <formats> 引用）
+            if (preserved.DxfsXml is not null)
+                stylesheet.PreservedDxfsXml = preserved.DxfsXml;
+            if (preserved.DxfNumFmts is not null)
+                stylesheet.PreservedDxfNumFmts = preserved.DxfNumFmts;
+        }
 
         verbatim = verbatim && preserved?.VerbatimXmlParts is not null
             && preserved.VerbatimXmlParts.ContainsKey("xl/styles.xml");

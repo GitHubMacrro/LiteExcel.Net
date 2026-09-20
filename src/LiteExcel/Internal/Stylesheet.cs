@@ -34,6 +34,12 @@ internal sealed class Stylesheet
     private readonly List<DxfKey> _dxfs = new();
     private readonly Dictionary<DxfKey, int> _dxfIndex = new();
 
+    /// <summary>跨格式（xlsb→xlsx）转码后的 &lt;dxfs&gt; 全文；非 null 时 ToXml 优先输出此串而非模型 dxfs（恒等索引）。</summary>
+    internal string? PreservedDxfsXml;
+
+    /// <summary>dxf 引用的自定义 numFmt（numFmtId≥164 → formatCode），并入 &lt;numFmts&gt; 输出。</summary>
+    internal Dictionary<int, string>? PreservedDxfNumFmts;
+
     // cellXf dedup
     private readonly List<XfDef> _xfs = new();
     private readonly Dictionary<XfDef, int> _xfIndex = new();
@@ -226,13 +232,17 @@ internal sealed class Stylesheet
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
         sb.Append($"<styleSheet xmlns=\"{MainNs}\">");
 
-        // numFmts
-        if (_numFmtIndex.Count > 0)
+        // numFmts（模型分配的 + 跨格式转码的 dxf 自定义格式，按 numFmtId 去重）
+        var numFmts = new Dictionary<int, string>();
+        foreach (var pair in _numFmtIndex) numFmts[pair.Value] = pair.Key;
+        if (PreservedDxfNumFmts is not null)
+            foreach (var kv in PreservedDxfNumFmts) numFmts[kv.Key] = kv.Value;
+        if (numFmts.Count > 0)
         {
-            sb.Append($"<numFmts count=\"{_numFmtIndex.Count}\">");
-            foreach (var pair in _numFmtIndex)
+            sb.Append($"<numFmts count=\"{numFmts.Count}\">");
+            foreach (var kv in numFmts)
             {
-                sb.Append($"<numFmt numFmtId=\"{pair.Value}\" formatCode=\"{XlsxWriter.XmlEscape(pair.Key)}\"/>");
+                sb.Append($"<numFmt numFmtId=\"{kv.Key}\" formatCode=\"{XlsxWriter.XmlEscape(kv.Value)}\"/>");
             }
             sb.Append("</numFmts>");
         }
@@ -322,7 +332,12 @@ internal sealed class Stylesheet
         sb.Append("<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>");
 
         // dxfs：条件格式样式 / 超级表列格式
-        if (_dxfs.Count > 0)
+        if (PreservedDxfsXml is not null)
+        {
+            // 跨格式（xlsb→xlsx）：直接输出转码后的 <dxfs>（恒等索引，pivot <formats> 按序号引用）。
+            sb.Append(PreservedDxfsXml);
+        }
+        else if (_dxfs.Count > 0)
         {
             sb.Append($"<dxfs count=\"{_dxfs.Count}\">");
             foreach (var key in _dxfs)

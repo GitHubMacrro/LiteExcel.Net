@@ -46,6 +46,16 @@ internal static class XlsbPivotTableTranscoder
     private const int RtActiveTabTopLevelEntity = 0x0856;
     private const int RtPivotTableDefinition16 = 0x1388;
 
+    // 格式（<formats>）记录：pivotTableN.bin 的 0x00F7..0x012F 块序列。
+    private const int RtBeginPRule = 0x00F7;
+    private const int RtEndPRule = 0x00F8;
+    private const int RtBeginPivotArea = 0x00F9;
+    private const int RtEndPivotArea = 0x00FA;
+    private const int RtBeginPAreaRef = 0x00FB;
+    private const int RtEndPAreaRef = 0x00FC;
+    private const int RtXValue = 0x017E;
+    private const int RtDxfId = 0x012F;
+
     private const string MainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
     internal sealed class PivotItem
@@ -111,6 +121,28 @@ internal static class XlsbPivotTableTranscoder
         public string? ActiveTabTopLevelEntity;
         public bool SubtotalsOnTopDefault;
         public bool HasPivotTableDefinition16;
+        public readonly List<PivotFormat> Formats = new();
+    }
+
+    /// <summary>透视表单元格格式（&lt;format&gt;）：dxfId 引用 styles.xml &lt;dxfs&gt;（恒等索引）。
+    /// pivotArea 类型由 0x00F7 的 byte4(字段类型 01=普通/05=按钮) 与 byte5(标志变体 02/06/21/42/85) 决定。</summary>
+    internal sealed class PivotFormat
+    {
+        public int DxfId = -1;
+        public int Field;          // 0x00F7 bytes0-3（普通=-1，按钮=字段索引）
+        public byte FieldType;     // byte4：01=普通，05=按钮
+        public byte Flags;         // byte5：02/06/21/42/85
+        public byte FieldPosition; // byte6 高 nibble
+        public byte AxisCode;       // byte6 低 nibble：0=无、1=axisRow、2=axisCol、4=axisPage、8=axisValues
+        public string? Offset;     // byte5=42 时 "IV{n}"
+        public readonly List<PivotFormatRef> References = new();
+    }
+
+    internal sealed class PivotFormatRef
+    {
+        public int Field;       // 0x00FB bytes0-3
+        public byte Selected;   // byte10：0→selected="0"，1→默认(省略)
+        public readonly List<int> XValues = new();
     }
 
     public static PivotTableInfo Parse(byte[] data)
@@ -119,6 +151,9 @@ internal static class XlsbPivotTableTranscoder
         PivotField? curField = null;
         PivotLine? curLine = null;
         List<PivotLine>? curLines = null;
+        PivotFormat? _curFormat = null;
+        PivotFormatRef? _curFormatRef = null;
+        int _pendingDxfId = -1;
         foreach (var rec in Biff12Records.ReadAll(data))
         {
             var d = rec.Data;
@@ -221,8 +256,59 @@ internal static class XlsbPivotTableTranscoder
                         info.SubtotalsOnTopDefault = d[1] == 0;
                     }
                     break;
+                case RtBeginPRule:
+                {
+                    // 0x00F7（变长）：field(u32@0) + fieldType(u8@4) + flags(u8@5) + fieldPosition(u8@6) [+ offset 数据 当 flags=0x42]
+                    // 上一条 format 收尾（其 dxfId 由前置 0x012F 注入）。
+                    if (_curFormat is not null) info.Formats.Add(_curFormat);
+                    var pf = new PivotFormat();
+                    pf.DxfId = _pendingDxfId; _pendingDxfId = -1;
+                    if (d.Length >= 7)
+                    {
+                        pf.Field = (int)Biff12Records.ReadU32(d, 0);
+                        pf.FieldType = d[4];
+                        pf.Flags = d[5];
+                        pf.FieldPosition = (byte)(d[6] >> 4); // 高 nibble = fieldPosition
+                        pf.AxisCode = (byte)(d[6] & 0x0F);     // 低 nibble = axis
+                        if (pf.Flags == 0x42 && d.Length >= 12)
+                        {
+                            int offIdx = (int)Biff12Records.ReadU32(d, 8);
+                            pf.Offset = "IV" + (offIdx + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        }
+                    }
+                    _curFormat = pf;
+                    break;
+                }
+                case RtBeginPAreaRef:
+                    if (_curFormat is not null)
+                    {
+                        var r = new PivotFormatRef();
+                        if (d.Length >= 11)
+                        {
+                            r.Field = (int)Biff12Records.ReadU32(d, 0);
+                            r.Selected = d[10];
+                        }
+                        _curFormatRef = r;
+                        _curFormat.References.Add(r);
+                    }
+                    break;
+                case RtXValue:
+                    if (_curFormatRef is not null && d.Length >= 4)
+                        _curFormatRef.XValues.Add((int)Biff12Records.ReadU32(d, 0));
+                    break;
+                case RtEndPAreaRef:
+                    _curFormatRef = null;
+                    break;
+                case RtDxfId:
+                    // 0x012F（6B）：flags(u16) + dxfId(u32@2)。位于其 PRule(0x00F7) 之前；暂存待下一条 0x00F7 取用。
+                    // dxfId 按恒等索引 = styles.xml <dxfs> 序号（未去重）。
+                    if (d.Length >= 6)
+                        _pendingDxfId = (int)Biff12Records.ReadU32(d, 2);
+                    break;
             }
         }
+        // 收尾最后一条 format（其 dxfId 已由前置 0x012F 注入）。
+        if (_curFormat is not null) info.Formats.Add(_curFormat);
         return info;
     }
 
@@ -360,8 +446,9 @@ internal static class XlsbPivotTableTranscoder
         _ => "",
     };
 
-    /// <summary>生成 pivotTable 全文（核心段；colFields/colItems/SXPI/SXDI 等待补）。</summary>
-    public static string ToXml(PivotTableInfo p)
+    /// <summary>生成 pivotTable 全文（核心段；colFields/colItems/SXPI/SXDI 等待补）。
+    /// <paramref name="dxfIndexMap"/> 非 null 时按去重映射重写 &lt;formats&gt; 的 dxfId（原始 xlsb 序号→去重 dxfId）。</summary>
+    public static string ToXml(PivotTableInfo p, Dictionary<int, int>? dxfIndexMap = null)
     {
         var sb = new StringBuilder(1024);
         sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
@@ -386,6 +473,10 @@ internal static class XlsbPivotTableTranscoder
         AppendFields(sb, "colFields", p.ColFields);
         AppendLines(sb, "colItems", p.ColItems);
         AppendDataFields(sb, p);
+
+        // <formats>（透视表单元格格式）：dxfId 经 DxfIndexMap 去重重映射。默认启用（LITEXCEL_DISABLE_PIVOT_FORMATS=1 回退）。
+        if (Environment.GetEnvironmentVariable("LITEXCEL_DISABLE_PIVOT_FORMATS") != "1")
+            AppendFormats(sb, p, dxfIndexMap);
 
         if (p.Hierarchies.Count > 0)
         {
@@ -461,6 +552,83 @@ internal static class XlsbPivotTableTranscoder
             sb.Append($"<dataField name=\"{Esc(df.Name)}\" fld=\"{df.Field}\" baseField=\"{df.BaseField}\" baseItem=\"{df.BaseItem}\"/>");
         sb.Append("</dataFields>");
     }
+
+    /// <summary>生成 &lt;formats&gt;（透视表单元格格式）。dxfId 按恒等索引引用 styles.xml &lt;dxfs&gt;。
+    /// pivotArea 类型由 0x00F7 的 fieldType(byte4)/flags(byte5) 决定（真实样本标定）。</summary>
+    private static void AppendFormats(StringBuilder sb, PivotTableInfo p, Dictionary<int, int>? dxfIndexMap)
+    {
+        if (p.Formats.Count == 0) return;
+        sb.Append($"<formats count=\"{p.Formats.Count}\">");
+        foreach (var f in p.Formats)
+        {
+            sb.Append("<format");
+            if (f.DxfId >= 0)
+            {
+                int id = f.DxfId;
+                if (dxfIndexMap is not null && dxfIndexMap.TryGetValue(id, out var mapped)) id = mapped;
+                sb.Append($" dxfId=\"{id}\"");
+            }
+            sb.Append(">");
+            AppendPivotArea(sb, f);
+            sb.Append("</format>");
+        }
+        sb.Append("</formats>");
+    }
+
+    private static void AppendPivotArea(StringBuilder sb, PivotFormat f)
+    {
+        // 属性由 fieldType(byte4)/flags(byte5)/axisCode(byte6低nibble) 决定（真实样本标定）。
+        var attrs = new StringBuilder(120);
+        if (f.FieldType == 0x05)
+        {
+            // 按钮：field + type=button
+            attrs.Append($" field=\"{(uint)f.Field}\" type=\"button\"");
+        }
+        switch (f.Flags)
+        {
+            case 0x06:
+                attrs.Append(" dataOnly=\"0\" labelOnly=\"1\" grandRow=\"1\" outline=\"0\"");
+                break;
+            case 0x85:
+                attrs.Append(" grandRow=\"1\" outline=\"0\" collapsedLevelsAreSubtotals=\"1\"");
+                break;
+            case 0x21:
+                break; // 默认值（dataOnly/labelOnly/outline 省略）
+            case 0x42:
+                attrs.Append(" dataOnly=\"0\" labelOnly=\"1\" outline=\"0\"");
+                if (f.Offset is not null) attrs.Append($" offset=\"{Esc(f.Offset)}\"");
+                break;
+            default: // 0x02 等
+                attrs.Append(" dataOnly=\"0\" labelOnly=\"1\" outline=\"0\"");
+                break;
+        }
+        if (f.AxisCode != 0)
+            attrs.Append(" axis=\"").Append(AxisName(f.AxisCode)).Append("\"");
+        attrs.Append($" fieldPosition=\"{f.FieldPosition}\"");
+
+        if (f.References.Count == 0)
+        {
+            sb.Append("<pivotArea").Append(attrs).Append("/>");
+            return;
+        }
+        sb.Append("<pivotArea").Append(attrs).Append(">");
+        sb.Append($"<references count=\"{f.References.Count}\">");
+        foreach (var r in f.References)
+        {
+            sb.Append($"<reference field=\"{(uint)r.Field}\" count=\"{r.XValues.Count}\"");
+            if (r.Selected == 0) sb.Append(" selected=\"0\"");
+            sb.Append(">");
+            foreach (var x in r.XValues) sb.Append($"<x v=\"{x}\"/>");
+            sb.Append("</reference>");
+        }
+        sb.Append("</references>");
+        sb.Append("</pivotArea>");
+    }
+
+    private static string AxisName(int code) => code switch
+    {
+        1 => "axisRow", 2 => "axisCol", 4 => "axisPage", 8 => "axisValues", _ => "axisRow",
+    };
 
     private static void AppendFields(StringBuilder sb, PivotTableInfo p)
     {
