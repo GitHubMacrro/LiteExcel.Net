@@ -434,6 +434,22 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
     private static void WriteSurgicalXlsb(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject,
         OoxmlPreservedParts preserved, WorkbookProperties? properties)
     {
+        // 先写入内存缓冲，做包结构自检通过后再落盘：避免产出「孤儿 rels / 悬空引用」等
+        // 会让 Excel 报修复甚至闪退的损坏文件。自检失败直接抛错，不写坏文件。
+        using var buffer = new MemoryStream();
+        using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            WriteSurgicalXlsbCore(zip, sheets, vbaProject, preserved, properties);
+        }
+        buffer.Position = 0;
+        PackageIntegrity.ValidateOrThrow(buffer);
+        buffer.Position = 0;
+        buffer.CopyTo(stream);
+    }
+
+    private static void WriteSurgicalXlsbCore(ZipArchive zip, IReadOnlyList<SheetData> sheets, byte[]? vbaProject,
+        OoxmlPreservedParts preserved, WorkbookProperties? properties)
+    {
         var vb = preserved.VerbatimBinaries!;
 
         // 打开时表数（VerbatimBinaries 中的 sheetN.bin 条目数）
@@ -460,6 +476,16 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
 
         var origWbBin = vb["xl/workbook.bin"];
         var origRecords = Biff12Records.ReadAll(origWbBin);
+
+        // 删除工作表后，存活表公式中指向被删表的 3D 引用必须失效化为 #REF!（Excel 行为）。
+        // 否则残留的悬空 3D 引用会让 Excel 打开时崩溃（访问违例）。此处预计算「指向被删表的 XTI 条目下标」。
+        var deletedXtiIndexes = ComputeDeletedXtiIndexes(origRecords, deletedOrig);
+
+        // 删除工作表后，workbook.bin 定义名表中「挂被删表」的局部名会被移除（见 ModifyWorkbookBin）。
+        // 存活表的单元格公式、数据验证公式（BrtDVal）、表格公式（BrtTableFormula）以 PtgName(0x23)
+        // 按「名表 0 基下标」引用这些名；名表缩短后这些下标必须同步重映射，否则残留越界下标会让
+        // Excel 打开时报「已修复的记录: ... 部分的 公式」。此处预计算被移除名在原名表中的下标集合。
+        var deletedDefinedNameIndexes = ComputeDeletedDefinedNameIndexes(origRecords, deletedSheetNums);
 
         // workbook.bin 中透视缓存引用记录（0x0182 / 0x046D）按出现顺序 → 缓存部件路径的 0 基索引。
         // 透视表 BrtBeginPivotTable 的 cacheId 即其 rels 指向的缓存在该列表中的位置（真实 Excel 行为）。
@@ -507,6 +533,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
 
         // 被删表 rels 引用的部件（tableN.bin 等）+ 被删表 table 编号
         var deletedTableNums = new HashSet<int>();
+        var deletedPivotNums = new HashSet<int>();
         var deletedPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var d in deletedOrig)
         {
@@ -521,13 +548,176 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                 {
                     var mm = System.Text.RegularExpressions.Regex.Match(dep.Target, @"table(\d+)\.bin");
                     if (mm.Success) deletedTableNums.Add(int.Parse(mm.Groups[1].Value));
-                    deletedPaths.Add(ResolveRelsTarget("xl/worksheets", dep.Target));
+                    var mp = System.Text.RegularExpressions.Regex.Match(dep.Target, @"pivotTable(\d+)\.bin");
+                    if (mp.Success) deletedPivotNums.Add(int.Parse(mp.Groups[1].Value));
+                    var depAbs = ResolveRelsTarget("xl/worksheets", dep.Target);
+                    deletedPaths.Add(depAbs);
+                    // 关键：依赖部件本体被删时，其自身的 .rels 也必须一并删除。
+                    // 否则 .rels 会成为孤儿（父部件已不存在），Excel 打开时报“已修复的记录”或直接崩溃。
+                    // 例如被删表带图片/图表 drawing → 删 drawingN.xml 却漏删 xl/drawings/_rels/drawingN.xml.rels。
+                    deletedPaths.Add(RelsPathFor(depAbs));
                 }
+        }
+
+        // 被删透视表引用的透视缓存（pivotCacheDefinitionN.bin）也一并删除（Excel 行为）。
+        // 注意：pivotTables/_rels/*.rels 不在 preserved.Rels（仅合并 root/workbook/worksheet rels），而在 preserved.Parts。
+        string? PivotRels(string relsPath)
+        {
+            if (preserved.Rels.TryGetValue(relsPath, out var r1)) return r1;
+            if (preserved.Parts.TryGetValue(relsPath, out var b1)) return System.Text.Encoding.UTF8.GetString(b1);
+            return null;
+        }
+        var deletedPivotCacheNums = new HashSet<int>();
+        foreach (var pn in deletedPivotNums)
+        {
+            var ptRels = PivotRels($"xl/pivotTables/_rels/pivotTable{pn}.bin.rels");
+            if (ptRels is null) continue;
+            foreach (var dep in XlsxWriter.ParseRels(ptRels))
+            {
+                var depAbs = ResolveRelsTarget("xl/pivotTables", dep.Target);
+                var mc = System.Text.RegularExpressions.Regex.Match(depAbs, @"pivotCacheDefinition(\d+)\.bin$");
+                if (mc.Success) deletedPivotCacheNums.Add(int.Parse(mc.Groups[1].Value));
+                deletedPaths.Add(depAbs);
+                deletedPaths.Add(RelsPathFor(depAbs));
+            }
+        }
+
+        // 逐表出现的编号部件（drawingN / vmlDrawingN / activeXN / printerSettingsN）随表删除而重编号。
+        // 这些编号按「源表出现顺序」1 基递增；被删表占用的编号进入各自 deleted 集合，其余编号前移。
+        var deletedDrawingNums = new HashSet<int>();
+        var deletedVmlNums = new HashSet<int>();
+        var deletedActiveXNums = new HashSet<int>();
+        var deletedPrinterNums = new HashSet<int>();
+        bool disablePartRenumber = Environment.GetEnvironmentVariable("LITEXCEL_DISABLE_PART_RENUMBER") == "1";
+        if (!disablePartRenumber)
+        {
+            int dIdx = 0, vIdx = 0, aIdx = 0, pIdx = 0;
+            for (int orig = 0; orig < bundleShList.Count; orig++)
+            {
+                bool isDeleted = deletedOrig.Contains(orig);
+                if (orig >= bundleShList.Count) break;
+                if (!relIdToTarget.TryGetValue(bundleShList[orig].RelId, out var tgt)) continue;
+                var absSheet = tgt.StartsWith("/") ? tgt.TrimStart('/') : tgt.StartsWith("xl/") ? tgt : "xl/" + tgt;
+                var rp = "xl/worksheets/_rels/" + System.IO.Path.GetFileName(absSheet) + ".rels";
+                if (!preserved.Rels.TryGetValue(rp, out var sx)) continue;
+                foreach (var dep in XlsxWriter.ParseRels(sx))
+                {
+                    var md = System.Text.RegularExpressions.Regex.Match(dep.Target, @"drawings/drawing(\d+)\.xml$");
+                    if (md.Success) { dIdx++; if (isDeleted) deletedDrawingNums.Add(int.Parse(md.Groups[1].Value)); continue; }
+                    var mv = System.Text.RegularExpressions.Regex.Match(dep.Target, @"drawings/vmlDrawing(\d+)\.vml$");
+                    if (mv.Success) { vIdx++; if (isDeleted) deletedVmlNums.Add(int.Parse(mv.Groups[1].Value)); continue; }
+                    var ma = System.Text.RegularExpressions.Regex.Match(dep.Target, @"activeX/activeX(\d+)\.xml$");
+                    if (ma.Success) { aIdx++; if (isDeleted) deletedActiveXNums.Add(int.Parse(ma.Groups[1].Value)); continue; }
+                    var mpr = System.Text.RegularExpressions.Regex.Match(dep.Target, @"printerSettings/printerSettings(\d+)\.bin$");
+                    if (mpr.Success) { pIdx++; if (isDeleted) deletedPrinterNums.Add(int.Parse(mpr.Groups[1].Value)); continue; }
+                }
+            }
+        }
+
+        // 级联删除：被删部件（如 drawingN.xml）的 rels 所引用的部件（如 media/imageN.png）
+        // 若不再被任何存活部件引用，也必须一并删除，否则会留下“孤儿部件”。
+        // Excel 自身删表时会做此级联；缺失会导致包结构异常。
+        if (!disablePartRenumber)
+        {
+            var allRels = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            void AddRels(string relsPath, string text)
+            {
+                var src = SourcePartOfRels(relsPath);
+                if (src == null) return;
+                if (!allRels.TryGetValue(src, out var list)) { list = new List<string>(); allRels[src] = list; }
+                var srcDir = src.Contains('/') ? src.Substring(0, src.LastIndexOf('/')) : "";
+                foreach (var dep in XlsxWriter.ParseRels(text))
+                {
+                    if (dep.Target.Contains("://")) continue;
+                    list.Add(ResolveRelsTarget(srcDir, dep.Target));
+                }
+            }
+            foreach (var kv in preserved.Rels) AddRels(kv.Key, kv.Value);
+            foreach (var kv in preserved.Parts)
+                if (kv.Key.EndsWith(".rels", StringComparison.Ordinal))
+                    AddRels(kv.Key, System.Text.Encoding.UTF8.GetString(kv.Value));
+
+            bool changed = true;
+            while (changed)
+            {
+                changed = false;
+                var referencedByKept = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var kv in allRels)
+                {
+                    if (deletedPaths.Contains(kv.Key)) continue;
+                    foreach (var t in kv.Value) referencedByKept.Add(t);
+                }
+                foreach (var part in deletedPaths.ToList())
+                {
+                    if (!allRels.TryGetValue(part, out var targets)) continue;
+                    foreach (var t in targets)
+                    {
+                        if (referencedByKept.Contains(t)) continue;
+                        if (deletedPaths.Add(t)) { deletedPaths.Add(RelsPathFor(t)); changed = true; }
+                    }
+                }
+            }
+        }
+
+        // 被删表上的切片器（slicerN.bin）按名字引用的 slicerCacheN.bin 也随表删除（Excel 行为）。
+        // slicer → slicerCache 的关联不在 .rels 里（xl/slicers/_rels 不存在），靠 slicerCache 的
+        // Name 字段（如 "切片器_PACKAGEGROUP"）与 slicer 的 Cache 字段匹配。
+        // 仅当某 slicerCache 被「被删切片器」引用、且不再被任何存活切片器引用时才删除。
+        {
+            var deletedSlicerCacheNames = new HashSet<string>(StringComparer.Ordinal);
+            var liveSlicerCacheNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var kv in preserved.Parts)
+            {
+                if (!System.Text.RegularExpressions.Regex.IsMatch(kv.Key, @"^xl/slicers/slicer\d+\.bin$")) continue;
+                bool isDeleted = deletedPaths.Contains(kv.Key);
+                foreach (var sl in Biff12.XlsbSlicerTranscoder.ParseSlicers(kv.Value))
+                {
+                    if (sl.Cache.Length == 0) continue;
+                    if (isDeleted) deletedSlicerCacheNames.Add(sl.Cache);
+                    else liveSlicerCacheNames.Add(sl.Cache);
+                }
+            }
+            if (deletedSlicerCacheNames.Count > 0)
+            {
+                foreach (var kv in preserved.Parts)
+                {
+                    if (!System.Text.RegularExpressions.Regex.IsMatch(kv.Key, @"^xl/slicerCaches/slicerCache\d+\.bin$")) continue;
+                    var info = Biff12.XlsbSlicerTranscoder.ParseCache(kv.Value);
+                    if (info.Name.Length == 0) continue;
+                    if (deletedSlicerCacheNames.Contains(info.Name) && !liveSlicerCacheNames.Contains(info.Name))
+                    {
+                        deletedPaths.Add(kv.Key);
+                        deletedPaths.Add(RelsPathFor(kv.Key));
+                    }
+                }
+            }
+        }
+
+        // 指向被删部件（被删表的依赖、或上面识别出的孤儿切片器缓存）的 workbook.bin.rels 关系：
+        // 其对应的缓存引用记录（0x0182/0x046D/0x0430）必须整体移除，rel 本身也从 workbook.bin.rels
+        // 剔除、且不参与 rId 重编号。Excel 会连带删除这些“孤儿”缓存；残留会让 Excel 打开时报
+        // 「已删除的记录: /xl/slicerCaches/slicerCacheN.bin」并重写 workbook.bin（「已修复的记录: 工作簿属性」）。
+        var deletedCacheRelIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rel in XlsxWriter.ParseRels(origRelsXml))
+        {
+            var tgtAbs = ResolveRelsTarget("xl", rel.Target);
+            if (deletedPaths.Contains(tgtAbs)) deletedCacheRelIds.Add(rel.Id);
+        }
+        foreach (var id in deletedCacheRelIds)
+        {
+            int n = ParseRelId(id);
+            if (n >= 0) deletedRelIdNums.Add(n);
         }
 
         int NewSheet(int n) => n - deletedSheetNums.Count(x => x < n);
         int NewRel(int n) => n - deletedRelIdNums.Count(x => x < n);
         int NewTable(int n) => n - deletedTableNums.Count(x => x < n);
+        int NewPivot(int n) => n - deletedPivotNums.Count(x => x < n);
+        int NewPivotCache(int n) => n - deletedPivotCacheNums.Count(x => x < n);
+        int NewDrawing(int n) => n - deletedDrawingNums.Count(x => x < n);
+        int NewVml(int n) => n - deletedVmlNums.Count(x => x < n);
+        int NewActiveX(int n) => n - deletedActiveXNums.Count(x => x < n);
+        int NewPrinter(int n) => n - deletedPrinterNums.Count(x => x < n);
 
         string RenamePartName(string name)
         {
@@ -537,6 +727,18 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             if (m.Success) return $"{m.Groups[1].Value}binaryIndex{NewSheet(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
             m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)table(\d+)(\.bin(\.rels)?)$");
             if (m.Success) return $"{m.Groups[1].Value}table{NewTable(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)pivotTable(\d+)(\.bin(\.rels)?)$");
+            if (m.Success) return $"{m.Groups[1].Value}pivotTable{NewPivot(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)pivotCacheDefinition(\d+)(\.bin(\.rels)?)$");
+            if (m.Success) return $"{m.Groups[1].Value}pivotCacheDefinition{NewPivotCache(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)drawing(\d+)(\.xml(\.rels)?)$");
+            if (m.Success) return $"{m.Groups[1].Value}drawing{NewDrawing(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)vmlDrawing(\d+)(\.vml(\.rels)?)$");
+            if (m.Success) return $"{m.Groups[1].Value}vmlDrawing{NewVml(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)activeX(\d+)(\.(xml|bin)(\.rels)?)$");
+            if (m.Success) return $"{m.Groups[1].Value}activeX{NewActiveX(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
+            m = System.Text.RegularExpressions.Regex.Match(name, @"^(.*/)printerSettings(\d+)(\.bin)$");
+            if (m.Success) return $"{m.Groups[1].Value}printerSettings{NewPrinter(int.Parse(m.Groups[2].Value))}{m.Groups[3].Value}";
             return name;
         }
         string RenameRefs(string text)
@@ -544,10 +746,15 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             text = System.Text.RegularExpressions.Regex.Replace(text, @"sheet(\d+)\.bin", m => $"sheet{NewSheet(int.Parse(m.Groups[1].Value))}.bin");
             text = System.Text.RegularExpressions.Regex.Replace(text, @"binaryIndex(\d+)\.bin", m => $"binaryIndex{NewSheet(int.Parse(m.Groups[1].Value))}.bin");
             text = System.Text.RegularExpressions.Regex.Replace(text, @"table(\d+)\.bin", m => $"table{NewTable(int.Parse(m.Groups[1].Value))}.bin");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"pivotTable(\d+)\.bin", m => $"pivotTable{NewPivot(int.Parse(m.Groups[1].Value))}.bin");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"pivotCacheDefinition(\d+)\.bin", m => $"pivotCacheDefinition{NewPivotCache(int.Parse(m.Groups[1].Value))}.bin");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"drawings/drawing(\d+)\.xml", m => $"drawings/drawing{NewDrawing(int.Parse(m.Groups[1].Value))}.xml");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"drawings/vmlDrawing(\d+)\.vml", m => $"drawings/vmlDrawing{NewVml(int.Parse(m.Groups[1].Value))}.vml");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"activeX/activeX(\d+)\.xml", m => $"activeX/activeX{NewActiveX(int.Parse(m.Groups[1].Value))}.xml");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"activeX(\d+)\.bin", m => $"activeX{NewActiveX(int.Parse(m.Groups[1].Value))}.bin");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"printerSettings/printerSettings(\d+)\.bin", m => $"printerSettings/printerSettings{NewPrinter(int.Parse(m.Groups[1].Value))}.bin");
             return text;
         }
-
-        using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
         if (preserved.Rels.TryGetValue("_rels/.rels", out var rootRels))
             WriteEntry(zip, "_rels/.rels", System.Text.Encoding.UTF8.GetBytes(rootRels));
@@ -557,7 +764,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         WriteEntry(zip, "[Content_Types].xml", System.Text.Encoding.UTF8.GetBytes(
             ContentTypesAfterDeleteBinary(sheets.Count, vbaProject is not null, properties is not null, preserved, deletedPaths, deletedTableNums, RenameRefs)));
 
-        WriteEntry(zip, "xl/workbook.bin", ModifyWorkbookBin(origWbBin, deletedOrig, deletedSheetNums, deletedRelIdNums, NewSheet, NewRel));
+        WriteEntry(zip, "xl/workbook.bin", ModifyWorkbookBin(origWbBin, deletedOrig, deletedSheetNums, deletedRelIdNums, deletedCacheRelIds, NewSheet, NewRel));
 
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", System.Text.Encoding.UTF8.GetBytes(
             WorkbookRelsAfterDeleteBinary(origRelsXml, deletedRelIdNums, NewRel, RenameRefs)));
@@ -585,7 +792,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             if (!relIdToTarget.TryGetValue(bundleShList[s.OrigIndex].RelId, out var target)) continue;
             var abs = target.StartsWith("/") ? target.TrimStart('/') : target.StartsWith("xl/") ? target : "xl/" + target;
             if (vb.TryGetValue(abs, out var sheetBin))
-                WriteEntry(zip, RenamePartName(abs), sheetBin);
+                WriteEntry(zip, RenamePartName(abs), RewriteSheetRefsToDeleted(sheetBin, deletedXtiIndexes, deletedDefinedNameIndexes));
             var relsPath = "xl/worksheets/_rels/" + System.IO.Path.GetFileName(abs) + ".rels";
             if (preserved.Rels.TryGetValue(relsPath, out var sheetRels))
                 WriteEntry(zip, RenamePartName(relsPath), System.Text.Encoding.UTF8.GetBytes(RenameRefs(sheetRels)));
@@ -605,8 +812,79 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                 int cacheId = cacheAbs is not null && cacheIndexByTarget.TryGetValue(cacheAbs, out var ci) ? ci : -1;
                 if (cacheId >= 0) data = NormalizePivotTableBin(data, cacheId);
             }
+            // 表格（ListObject）定义内含结构化公式（BrtTableFormula 0x015F），其 3D 引用同样可能在删除表后悬空，
+            // 必须与工作表公式一并失效化为 #REF!，否则 Excel 打开崩溃。
+            else if (kv.Key.StartsWith("xl/tables/", StringComparison.Ordinal) && kv.Key.EndsWith(".bin", StringComparison.Ordinal))
+            {
+                data = RewriteTableRefsToDeleted(data, deletedXtiIndexes);
+            }
+            // 其它 .rels 部件的 Target 中若含被重编号的部件名（如 activeX/activeX2.bin、drawings/drawing3.xml），
+            // 也需同步重编号，否则产生悬空引用。
+            else if (kv.Key.EndsWith(".rels", StringComparison.Ordinal))
+            {
+                var txt = System.Text.Encoding.UTF8.GetString(data);
+                var renamed = RenameRefs(txt);
+                if (!ReferenceEquals(renamed, txt) && renamed != txt)
+                    data = System.Text.Encoding.UTF8.GetBytes(renamed);
+            }
             WriteEntry(zip, RenamePartName(kv.Key), data);
         }
+    }
+
+    /// <summary>改写表格定义二进制：BrtTableFormula(0x015F) 的 rgce 布局为 flags(1)+cce(u32)+rgce；
+    /// 把其中指向被删表的 3D 引用令牌（`18 19 <ixti>`）body 失效化为 `10 FF FF FF FF`（Excel 行为）。</summary>
+    internal static byte[] RewriteTableRefsToDeleted(byte[] tableBin, HashSet<int> deletedXti)
+    {
+        if (deletedXti.Count == 0) return tableBin;
+        var records = Biff12Records.ReadAll(tableBin);
+        bool any = false;
+        foreach (var rec in records)
+            if (rec.Rt == 0x015F && rec.Data.Length >= 5 && RgceHasDeletedRef(rec.Data, 5, deletedXti)) { any = true; break; }
+        if (!any) return tableBin;
+
+        using var ms = new MemoryStream(tableBin.Length);
+        foreach (var rec in records)
+        {
+            if (rec.Rt == 0x015F && rec.Data.Length >= 5)
+                WriteRecord(ms, rec.Rt, RewriteRgceAt(rec.Data, 5, deletedXti));
+            else
+                WriteRecord(ms, rec.Rt, rec.Data);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>rgce 位于 data 的 rgceOff 处（此前的 cce(u32) 在 rgceOff-4）。判断是否含指向被删表的 3D 引用。</summary>
+    private static bool RgceHasDeletedRef(byte[] d, int rgceOff, HashSet<int> deletedXti)
+    {
+        int end = d.Length;
+        for (int i = rgceOff; i + 6 <= end; i++)
+        {
+            if (d[i] == 0x18 && d[i + 1] == 0x19)
+            {
+                if (d[i + 4] == 0x01 && deletedXti.Contains(d[i + 2] | (d[i + 3] << 8))) return true;
+                i += 9;
+            }
+        }
+        return false;
+    }
+
+    private static byte[] RewriteRgceAt(byte[] d, int rgceOff, HashSet<int> deletedXti)
+    {
+        var work = (byte[])d.Clone();
+        for (int i = rgceOff; i + 6 <= work.Length; i++)
+        {
+            if (work[i] == 0x18 && work[i + 1] == 0x19)
+            {
+                if (work[i + 4] == 0x01 && i + 10 <= work.Length
+                    && deletedXti.Contains(work[i + 2] | (work[i + 3] << 8)))
+                {
+                    work[i + 5] = 0x10; work[i + 6] = 0xFF; work[i + 7] = 0xFF;
+                    work[i + 8] = 0xFF; work[i + 9] = 0xFF;
+                }
+                i += 9;
+            }
+        }
+        return work;
     }
 
     /// <summary>解析 "rIdN" → N（非 rId 前缀或非数字返回 -1）。</summary>
@@ -621,7 +899,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
     /// 定义名：sheet-local（挂被删表）移除、其余 itab 递减、引用被删表的 rgce 失效化、`_xlcn.LinkedTable_*` 去尾部 "1"；
     /// 0x0182（BookView 内 rId 引用）重编号；BrtBookView 的 activeTab/firstSheet 调整。</summary>
     private static byte[] ModifyWorkbookBin(byte[] source, List<int> deletedOrigIdx, HashSet<int> deletedSheetNums,
-        HashSet<int> deletedRelIdNums, Func<int, int> newSheet, Func<int, int> newRel)
+        HashSet<int> deletedRelIdNums, HashSet<string> deletedCacheRelIds, Func<int, int> newSheet, Func<int, int> newRel)
     {
         var records = Biff12Records.ReadAll(source);
         var deletedSet = new HashSet<int>(deletedOrigIdx);
@@ -696,6 +974,8 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             }
             if (rec.Rt == 0x0182 && rec.Data.Length >= 8) // BookView 内 rId 引用
             {
+                int o0 = 4;
+                if (deletedCacheRelIds.Contains(Biff12Records.ReadWideString(rec.Data, ref o0))) continue; // 指向被删缓存 → 移除记录
                 var nd = (byte[])rec.Data.Clone();
                 WriteU32To(nd, 0, (uint)rIdIdx); // flags 规范化为序号（源可能含异常值，如 0x1E）
                 int o = 4;
@@ -723,7 +1003,9 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                 int strEnd = 6 + cch * 2;
                 if (strEnd <= rec.Data.Length)
                 {
-                    int num = ParseRelId(Encoding.Unicode.GetString(rec.Data, 6, cch * 2));
+                    var rid0 = Encoding.Unicode.GetString(rec.Data, 6, cch * 2);
+                    if (deletedCacheRelIds.Contains(rid0)) continue; // 指向被删缓存 → 移除记录
+                    int num = ParseRelId(rid0);
                     if (num >= 0)
                     {
                         var newId = "rId" + newRel(num);
@@ -745,8 +1027,322 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         return ms.ToArray();
     }
 
+    /// <summary>计算指向被删工作表的 XTI 条目下标（BrtExternSheet 中 itabFirst/itabLast ∈ deletedOrig）。
+    /// 这些下标对应的 3D 引用在定义名与存活表公式中都必须失效化为 #REF!。</summary>
+    private static HashSet<int> ComputeDeletedXtiIndexes(IReadOnlyList<Biff12Records.Record> records, IReadOnlyCollection<int> deletedOrig)
+    {
+        var deleted = new HashSet<int>();
+        var deletedSet = deletedOrig as HashSet<int> ?? new HashSet<int>(deletedOrig);
+        foreach (var rec in records)
+        {
+            if (rec.Rt != 0x016A || rec.Data.Length < 4) continue;
+            int cXti = (int)Biff12Records.ReadU32(rec.Data, 0);
+            for (int i = 0; i < cXti; i++)
+            {
+                int off = 4 + i * 12;
+                if (off + 12 > rec.Data.Length) break;
+                int first = (int)Biff12Records.ReadU32(rec.Data, off + 4);
+                int last = (int)Biff12Records.ReadU32(rec.Data, off + 8);
+                if ((first >= 0 && deletedSet.Contains(first)) || (last >= 0 && deletedSet.Contains(last)))
+                    deleted.Add(i);
+            }
+            break; // 仅首个 BrtExternSheet
+        }
+        return deleted;
+    }
+
+    /// <summary>计算被删表所挂局部定义名（BrtDefinedName itab 指向被删表）在 workbook.bin 名表中的 0 基下标集合。
+    /// 删除工作表后这些名会被移除，名表随之缩短；存活表公式/数据验证/表格公式以 PtgName 按名表下标引用名，
+    /// 必须据此集合重映射，否则残留越界下标会让 Excel 打开时报「已修复的记录: ... 部分的 公式」。</summary>
+    private static HashSet<int> ComputeDeletedDefinedNameIndexes(IReadOnlyList<Biff12Records.Record> records,
+        HashSet<int> deletedSheetNums)
+    {
+        var deleted = new HashSet<int>();
+        int idx = 0;
+        foreach (var rec in records)
+        {
+            if (rec.Rt != 0x0027 || rec.Data.Length < 9) continue;
+            int itab = (int)Biff12Records.ReadU32(rec.Data, 5);
+            if (itab >= 0 && deletedSheetNums.Contains(itab + 1)) deleted.Add(idx);
+            idx++;
+        }
+        return deleted;
+    }
+
+    /// <summary>改写存活工作表二进制：
+    /// (1) 把公式 rgce 中指向被删表的 3D 引用令牌失效化为 #REF!（令牌布局：`18 19` + ixti(u16) + 5 字节 body；
+    ///     当 ixti 指向被删表的 XTI 条目时把 body 改为 `10 FF FF FF FF`，与 Excel 产出逐字节一致）。
+    /// (2) 把单元格公式与数据验证公式（BrtDVal）rgce 中以 PtgName(0x23) 按名表下标引用的名重映射，
+    ///     以补偿被删表局部定义名移除导致的名表缩短。
+    /// 不做 (1) 会残留悬空 3D 引用（Excel 崩溃 0xc0000005）；不做 (2) 会残留越界名下标
+    /// （Excel 打开报「已修复的记录: ... 部分的 公式」）。</summary>
+    internal static byte[] RewriteSheetRefsToDeleted(byte[] sheetBin, HashSet<int> deletedXti,
+        HashSet<int>? deletedNameIndexes = null)
+    {
+        bool remapNames = deletedNameIndexes is { Count: > 0 };
+        if (deletedXti.Count == 0 && !remapNames) return sheetBin;
+        var records = Biff12Records.ReadAll(sheetBin);
+        bool any = false;
+        foreach (var rec in records)
+        {
+            if (IsFormulaRecord(rec.Rt) && rec.Data.Length >= 12
+                && (deletedXti.Count > 0 && FormulaRefsDeleted(rec.Rt, rec.Data, deletedXti)
+                    || remapNames && FormulaHasNameRef(rec.Rt, rec.Data)))
+            { any = true; break; }
+            if (remapNames && rec.Rt == BrtDVal && DValHasNameRef(rec.Data)) { any = true; break; }
+        }
+        if (!any) return sheetBin;
+
+        using var ms = new MemoryStream(sheetBin.Length);
+        foreach (var rec in records)
+        {
+            if (IsFormulaRecord(rec.Rt))
+            {
+                var nd = rec.Data;
+                if (deletedXti.Count > 0) nd = RewriteFormulaRefs(rec.Rt, nd, deletedXti);
+                if (remapNames) nd = RewriteFormulaNames(rec.Rt, nd, deletedNameIndexes!);
+                WriteRecord(ms, rec.Rt, nd);
+            }
+            else if (remapNames && rec.Rt == BrtDVal)
+                WriteRecord(ms, rec.Rt, RewriteDValNames(rec.Data, deletedNameIndexes!));
+            else
+                WriteRecord(ms, rec.Rt, rec.Data);
+        }
+        return ms.ToArray();
+    }
+
+    private static bool IsFormulaRecord(int rt) => rt == 0x0008 || rt == 0x0009 || rt == 0x000A || rt == 0x000B;
+
+    /// <summary>定位公式记录中 rgce 的偏移（值区之后 2 字节 flags + cce(u32)）。返回 -1 表示布局不符。</summary>
+    private static int FormulaRgceOffset(int rt, byte[] d)
+    {
+        int valueOff = 8;
+        int valueLen;
+        switch (rt)
+        {
+            case 0x0008: // BrtFmlaString: cch(u32) + UTF-16
+                if (d.Length < 12) return -1;
+                uint cch = Biff12Records.ReadU32(d, valueOff);
+                valueLen = 4 + (int)cch * 2;
+                break;
+            case 0x0009: valueLen = 8; break;  // BrtFmlaNum
+            case 0x000A: valueLen = 1; break;  // BrtFmlaBool
+            case 0x000B: valueLen = 1; break;  // BrtFmlaError
+            default: return -1;
+        }
+        int fOff = valueOff + valueLen;
+        if (fOff + 6 > d.Length) return -1;
+        int cce = Biff12Records.ReadS32(d, fOff + 2);
+        if (cce <= 0 || fOff + 6 + cce > d.Length) return -1;
+        return fOff + 6;
+    }
+
+    private static bool FormulaRefsDeleted(int rt, byte[] d, HashSet<int> deletedXti)
+    {
+        int off = FormulaRgceOffset(rt, d);
+        if (off < 0) return false;
+        int end = d.Length;
+        for (int i = off; i + 6 <= end; i++)
+        {
+            if (d[i] == 0x18 && d[i + 1] == 0x19)
+            {
+                // 仅当形如 `18 19 <ixti> 01 <4 bytes>`（3D 引用令牌，第 5 字节为 0x01）才算数。
+                // 否则 `18 19` 只是恰好出现的普通令牌（如 PtgElfLel），误改会破坏工作表。
+                if (d[i + 4] == 0x01)
+                {
+                    int ixti = d[i + 2] | (d[i + 3] << 8);
+                    if (deletedXti.Contains(ixti)) return true;
+                }
+                i += 9; // 跳过整枚令牌（10 字节）
+            }
+        }
+        return false;
+    }
+
+    private static byte[] RewriteFormulaRefs(int rt, byte[] d, HashSet<int> deletedXti)
+    {
+        int off = FormulaRgceOffset(rt, d);
+        if (off < 0) return d;
+        var work = (byte[])d.Clone();
+        for (int i = off; i + 6 <= work.Length; i++)
+        {
+            if (work[i] == 0x18 && work[i + 1] == 0x19)
+            {
+                if (work[i + 4] == 0x01 && i + 10 <= work.Length)
+                {
+                    int ixti = work[i + 2] | (work[i + 3] << 8);
+                    if (deletedXti.Contains(ixti))
+                    {
+                        // 令牌：18 19 <ixti u16> 01 <body>，body 5 字节改为 10 FF FF FF FF
+                        work[i + 5] = 0x10; work[i + 6] = 0xFF; work[i + 7] = 0xFF;
+                        work[i + 8] = 0xFF; work[i + 9] = 0xFF;
+                    }
+                }
+                i += 9;
+            }
+        }
+        return work;
+    }
+
+    // ===== 定义名下标重映射（PtgName 0x23）=====
+    // 删除工作表后，挂被删表的局部定义名从 workbook.bin 名表中移除，名表缩短；
+    // 单元格公式、数据验证公式（BrtDVal）以 PtgName 按「名表 0 基下标」引用名，须同步重映射。
+
+    /// <summary>把 0 基名下标 oldIdx 映射为新名表下标（减去其前方被移除的名数量）。</summary>
+    private static int RemapNameIndex(int oldIdx, HashSet<int> deletedNameIndexes)
+    {
+        if (oldIdx < 0) return oldIdx;
+        int removed = 0;
+        foreach (var d in deletedNameIndexes)
+            if (d < oldIdx) removed++;
+        return oldIdx - removed;
+    }
+
+    /// <summary>按令牌长度遍历 rgce，对每枚 PtgName(0x23) 调用回调（参数为令牌起始偏移）。</summary>
+    private static void ForEachPtgName(byte[] d, int start, int end, Action<int> onName)
+    {
+        int i = start;
+        while (i < end)
+        {
+            byte ptg = d[i];
+            int body;
+            switch (ptg)
+            {
+                case 0x17: // PtgStr: cch(u16) + UTF-16
+                    if (i + 3 > end) return;
+                    body = 2 + (d[i + 1] | (d[i + 2] << 8)) * 2;
+                    break;
+                case 0x19: body = 3; break;                 // PtgAttr: grbit(u8)+data(u16)
+                case 0x1C: case 0x1D: body = 1; break;      // PtgErr / PtgBool
+                case 0x1E: body = 2; break;                 // PtgInt
+                case 0x1F: body = 8; break;                 // PtgNum
+                case 0x20: body = 7; break;                 // PtgArray
+                case 0x21: body = 2; break;                 // PtgFunc
+                case 0x22: body = 3; break;                 // PtgFuncVar
+                case 0x23: body = 4; break;                 // PtgName: index(u32)
+                case 0x24: body = 6; break;                 // PtgRef
+                case 0x25: body = 12; break;                // PtgArea
+                case 0x26: case 0x27: case 0x28: body = 6; break; // MemArea/MemErr/MemNoMem
+                case 0x29: body = 4; break;                 // PtgMemFunc
+                case 0x2A: body = 6; break;                 // PtgRefErr
+                case 0x2B: body = 12; break;                // PtgAreaErr
+                case 0x2C: body = 6; break;                 // PtgRefN
+                case 0x2D: body = 12; break;                // PtgAreaN
+                case 0x2E: case 0x2F: body = 6; break;      // MemAreaN / MemNoMemN
+                case 0x39: body = 6; break;                 // PtgNameX: ixti(u16)+index(u32)
+                case 0x3A: body = 8; break;                 // PtgRef3d
+                case 0x3B: body = 14; break;                // PtgArea3d
+                case 0x3C: body = 8; break;                 // PtgRefErr3d
+                case 0x3D: body = 14; break;                // PtgAreaErr3d
+                default:
+                    // ptg > 0x3D 为带类标记的变体（+0x20 / +0x40 等），归一到基类长度。
+                    int basePtg = ptg > 0x3D ? (ptg >= 0x60 && ptg <= 0x6F ? ptg - 0x40 : ptg - 0x20) : ptg;
+                    switch (basePtg)
+                    {
+                        case 0x1F: body = 8; break;
+                        case 0x22: body = 3; break;
+                        case 0x23: body = 4; break;
+                        case 0x24: body = 6; break;
+                        case 0x25: body = 12; break;
+                        case 0x2C: body = 6; break;
+                        case 0x2D: body = 12; break;
+                        case 0x39: body = 6; break;
+                        case 0x3A: body = 8; break;
+                        case 0x3B: body = 14; break;
+                        case 0x3C: body = 8; break;
+                        case 0x3D: body = 14; break;
+                        default: body = 0; break;
+                    }
+                    break;
+            }
+            if (ptg == 0x23 && i + 5 <= end) onName(i);
+            i += 1 + body;
+        }
+    }
+
+    private static bool FormulaHasNameRef(int rt, byte[] d)
+    {
+        int off = FormulaRgceOffset(rt, d);
+        if (off < 0) return false;
+        int cce = Biff12Records.ReadS32(d, off - 4);
+        bool found = false;
+        ForEachPtgName(d, off, off + cce, _ => found = true);
+        return found;
+    }
+
+    private static byte[] RewriteFormulaNames(int rt, byte[] d, HashSet<int> deletedNameIndexes)
+    {
+        int off = FormulaRgceOffset(rt, d);
+        if (off < 0) return d;
+        int cce = Biff12Records.ReadS32(d, off - 4);
+        var work = (byte[])d.Clone();
+        ForEachPtgName(work, off, off + cce, i =>
+        {
+            int old = Biff12Records.ReadS32(work, i + 1);
+            int nu = RemapNameIndex(old, deletedNameIndexes);
+            if (nu != old) WriteU32To(work, i + 1, (uint)nu);
+        });
+        return work;
+    }
+
+    /// <summary>BrtDVal 是否含 PtgName(0x23) 引用（用于快速跳过无需改写的记录）。</summary>
+    private static bool DValHasNameRef(byte[] d)
+    {
+        foreach (var (off, len) in DValRgceRanges(d))
+        {
+            bool found = false;
+            ForEachPtgName(d, off, off + len, _ => found = true);
+            if (found) return true;
+        }
+        return false;
+    }
+
+    /// <summary>重映射 BrtDVal 中 rgce1/rgce2 的 PtgName 下标。</summary>
+    private static byte[] RewriteDValNames(byte[] d, HashSet<int> deletedNameIndexes)
+    {
+        var work = (byte[])d.Clone();
+        foreach (var (off, len) in DValRgceRanges(work))
+        {
+            ForEachPtgName(work, off, off + len, i =>
+            {
+                int old = Biff12Records.ReadS32(work, i + 1);
+                int nu = RemapNameIndex(old, deletedNameIndexes);
+                if (nu != old) WriteU32To(work, i + 1, (uint)nu);
+            });
+        }
+        return work;
+    }
+
+    /// <summary>定位 BrtDVal 记录内 rgce1/rgce2 的 (偏移, 长度)。布局：
+    /// flags(4)+cRefs(4)+refs(16×cRefs)+promptTitle/prompt/errorTitle/errorMessage(可空宽串)
+    /// +cce1(4)+rgce1+reserved(4)+cce2(4)+rgce2+reserved(4)。布局不符返回空。</summary>
+    private static List<(int Off, int Len)> DValRgceRanges(byte[] d)
+    {
+        var res = new List<(int, int)>();
+        if (d.Length < 8) return res;
+        int cRefs = (int)Biff12Records.ReadU32(d, 4);
+        int o = 8 + 16 * cRefs;
+        if (cRefs < 0 || o > d.Length) return res;
+        for (int k = 0; k < 4; k++) // 4 个可空宽串
+        {
+            if (o + 4 > d.Length) return res;
+            int cch = Biff12Records.ReadS32(d, o); o += 4;
+            if (cch >= 0) o += cch * 2;
+            if (o > d.Length) return res;
+        }
+        if (o + 4 > d.Length) return res;
+        int cce1 = Biff12Records.ReadS32(d, o); o += 4;
+        if (cce1 < 0 || o + cce1 > d.Length) return res;
+        res.Add((o, cce1)); o += cce1;
+        o += 4; // reserved
+        if (o + 4 > d.Length) return res;
+        int cce2 = Biff12Records.ReadS32(d, o); o += 4;
+        if (cce2 < 0 || o + cce2 > d.Length) return res;
+        res.Add((o, cce2));
+        return res;
+    }
+
     /// <summary>改写定义名：rgce 引用被删表时失效化（名称本身原样保留）。
-    /// `_xlcn.LinkedTable_*` 名是纯元数据、无部件按字符串引用；Excel 另存时会自行追加 "1"，
     /// 库不应改写源名（旧「去尾部 1」会截断合法表名后缀 Table1→Table，且多次另存逐次降级）。
     /// rgce 布局（真实样本标定）：`18 19` + ixti(u16) + body(10)；当 ixti 指向已失效的 XTI 条目时，
     /// 把 body 的 `00 xx 00 00 00` 改为失效标记 `10 FF FF FF FF`（与 Excel 产出逐字节一致）。</summary>
@@ -792,6 +1388,37 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             stack.Add(seg);
         }
         return string.Join("/", stack);
+    }
+
+    /// <summary>返回包内某部件的 .rels 路径（如 "xl/drawings/drawing3.xml" → "xl/drawings/_rels/drawing3.xml.rels"）。
+    /// 部件路径为包内规范化绝对路径（不含前导 '/'）。</summary>
+    internal static string RelsPathFor(string partPath)
+    {
+        int slash = partPath.LastIndexOf('/');
+        var dir = slash >= 0 ? partPath.Substring(0, slash) : "";
+        var file = slash >= 0 ? partPath.Substring(slash + 1) : partPath;
+        return dir.Length == 0 ? "_rels/" + file + ".rels" : dir + "/_rels/" + file + ".rels";
+    }
+
+    /// <summary>RelsPathFor 的逆运算：由 ".rels" 路径求其描述的源部件路径。
+    /// 根 rels（"_rels/.rels"）无源部件，返回 null。</summary>
+    internal static string? SourcePartOfRels(string relsPath)
+    {
+        var segs = relsPath.Split('/');
+        for (int i = segs.Length - 1; i >= 0; i--)
+        {
+            if (segs[i] == "_rels")
+            {
+                if (i == 0) return null;
+                if (i != segs.Length - 2) return null;
+                var dir = string.Join("/", segs, 0, i);
+                var file = segs[segs.Length - 1];
+                if (!file.EndsWith(".rels", StringComparison.Ordinal)) return null;
+                var src = file.Substring(0, file.Length - 5);
+                return dir.Length == 0 ? src : dir + "/" + src;
+            }
+        }
+        return null;
     }
 
     /// <summary>修正 BrtExternSheet：**条目数量与顺序保持不变**。对每个 XTI 条目：
