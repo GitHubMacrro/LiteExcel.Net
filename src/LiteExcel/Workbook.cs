@@ -65,6 +65,10 @@ public sealed class Workbook
 
     internal bool SourceHasAdvancedXlsbParts { get; set; }
 
+    /// <summary>源 xlsb 的 workbook.bin 定义名表中是否含 Power Query 连接名（`_xlcn.LinkedTable_*`）。
+    /// 此类文件删除工作表时，Excel 会对定义名/XTI 做整套规范化，库目前无法完全复刻，输出可能被 Excel 拒开。</summary>
+    internal bool SourceHasLinkedTableNames { get; set; }
+
     /// <summary>源 xlsb 含尚无转码器覆盖的高级部件（如时间线 timelineCaches/timelines），
     /// 跨格式转换时无法保留，须显式上报/阻止。</summary>
     internal bool SourceHasUncoveredAdvancedXlsbParts { get; set; }
@@ -408,7 +412,21 @@ public sealed class Workbook
                 return;
             // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留（含数据模型/透视/连接等全部高级部件）。
             if (CanSurgicalXlsb(sheets))
+            {
+                // 安全网：源含 Power Query 连接定义名（`_xlcn.LinkedTable_*`）时，删除工作表会让 Excel
+                // 对 workbook.bin 做一整套定义名/XTI 规范化（去尾缀、补 CriteriaValue、重指向、重编号）。
+                // 库目前无法完全复刻该规范化，部分删除场景的输出会被 Excel 拒开（修复提示/闪退）。
+                // 此处经降级回调上报，便于调用方提示用户或改用其它方案，避免静默产出问题文件。
+                if (SourceHasLinkedTableNames)
+                    ReportDegradation(new DegradationInfo
+                    {
+                        Capability = DegradationCapability.PivotTables,
+                        TargetFormat = format,
+                        Message = "源 XLSB 含 Power Query 连接（_xlcn.LinkedTable_* 定义名）。删除工作表时 Excel 会对工作簿定义名做整套规范化，" +
+                                  "库目前无法完全复刻；部分删除场景的输出可能在 Excel 中触发修复提示或闪退。请在删除后用 Excel 验证输出，或避免删除此类文件的工作表。",
+                    });
                 return;
+            }
             bool anyAdvancedModified = AdvancedXlsbSheetIndexes.Count > 0
                 && AdvancedXlsbSheetIndexes.Any(i => i >= 0 && i < Worksheets.Count && Worksheets[i].IsModified);
             bool structureChanged = _openedSheetNames is not null

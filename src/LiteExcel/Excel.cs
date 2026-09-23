@@ -889,10 +889,33 @@ public static class Excel
                 }
             }
         }
-
         workbook.SourceHasAdvancedXlsbParts =
             workbook.SourceHasAdvancedXlsbParts || workbook.AdvancedXlsbSheetIndexes.Count > 0 || workbookLevelAdvanced;
         workbook.SourceHasUncoveredAdvancedXlsbParts = uncoveredAdvanced;
+
+        // 源 xlsb 是否含 Power Query 连接定义名（`_xlcn.LinkedTable_*`）。此类文件删除工作表时，
+        // Excel 会对定义名/XTI 做整套规范化，库目前无法完全复刻（见 XlsbWriter.ModifyWorkbookBin）。
+        if (preserved.VerbatimBinaries is not null
+            && preserved.VerbatimBinaries.TryGetValue("xl/workbook.bin", out var wbBin)
+            && wbBin is not null)
+        {
+            var needle = System.Text.Encoding.Unicode.GetBytes("_xlcn.LinkedTable_");
+            workbook.SourceHasLinkedTableNames = IndexOf(wbBin, needle) >= 0;
+        }
+    }
+
+    private static int IndexOf(byte[] haystack, byte[] needle)
+    {
+        if (needle.Length == 0 || haystack.Length < needle.Length) return -1;
+        int last = haystack.Length - needle.Length;
+        for (int i = 0; i <= last; i++)
+        {
+            bool ok = true;
+            for (int j = 0; j < needle.Length; j++)
+                if (haystack[i + j] != needle[j]) { ok = false; break; }
+            if (ok) return i;
+        }
+        return -1;
     }
 
     private static SheetData NormalizeSheetData(SheetData sheet, bool firstRowIsHeader)
