@@ -87,4 +87,12 @@ public sealed class SheetData
     /// <summary>打开时该表在源工作簿中的 0-based 序号；-1 表示本次新增（无原始保留部件/rels）。
     /// 用于删除/移动表后，仍能按原序号复用该表的保留 rels（绘图/超链接/透视表引用等），避免孤儿部件。</summary>
     internal int OrigIndex { get; set; } = -1;
+
+    /// <summary>本工作表内容是否被用户修改（SetValue/Merge/Import/Clear 等）。
+    /// 用于 xlsb 手术式编辑：仅对修改过的表做字节级补丁，其余表逐字节保留。</summary>
+    internal bool IsModified { get; set; }
+
+    /// <summary>被修改单元格的 0-based 坐标集合（key = (row &lt;&lt; 32) | col）。
+    /// 手术式编辑据此定位需补丁的单元格记录。</summary>
+    internal HashSet<long>? ModifiedCells { get; set; }
 }

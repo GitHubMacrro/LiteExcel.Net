@@ -157,7 +157,8 @@ internal static partial class XlsbWriter
         string? fileSharingHash = null, string? fileSharingSalt = null, int? fileSharingSpin = null, bool fileSharingReadOnlyRecommended = false,
         Action<DegradationInfo>? onDegradation = null, ExcelFormat targetFormat = ExcelFormat.Xlsb,
         OoxmlPreservedParts? preserved = null, WorkbookProperties? properties = null,
-        IReadOnlyList<NamedRange>? names = null, bool verbatim = false, bool surgical = false, bool allowFeatureLoss = false)
+        IReadOnlyList<NamedRange>? names = null, bool verbatim = false, bool surgical = false, bool allowFeatureLoss = false,
+        bool surgicalEdit = false)
     {
         if (sheets is null || sheets.Count == 0)
             throw new ArgumentException("至少需要一张工作表", nameof(sheets));
@@ -176,8 +177,6 @@ internal static partial class XlsbWriter
             preserved = null;
         }
 
-        ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
-
         // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留（含数据模型/透视/连接等全部高级部件）。
         if (surgical && preserved is not null && preserved.VerbatimBinaries is not null
             && preserved.VerbatimBinaries.ContainsKey("xl/workbook.bin"))
@@ -185,6 +184,17 @@ internal static partial class XlsbWriter
             WriteSurgicalXlsb(stream, sheets, vbaProject, preserved, properties);
             return;
         }
+
+        // 手术式编辑通道：表结构不变、仅内容修改，只对被改表做字节级单元格补丁，其余部件逐字节保留。
+        if (surgicalEdit && preserved is not null && preserved.VerbatimBinaries is not null
+            && preserved.VerbatimBinaries.ContainsKey("xl/workbook.bin"))
+        {
+            WriteSurgicalEditXlsb(stream, sheets, vbaProject, preserved, properties);
+            return;
+        }
+
+        // 手术式通道全部保真透传，不产生降级；重建/转换路径才上报降级。
+        ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
 
         if (!verbatim)
         {
@@ -445,6 +455,536 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         PackageIntegrity.ValidateOrThrow(buffer);
         buffer.Position = 0;
         buffer.CopyTo(stream);
+    }
+
+    /// <summary>
+    /// xlsb 手术式编辑：保留源包全部部件（透视表/切片器/连接/数据模型/宏/绘图等），
+    /// 只对「被用户修改过」的工作表做字节级单元格补丁写回其原始 sheetN.bin，其余部件逐字节透传。
+    /// 输出与 Excel 自身另存等价，避免整表重建丢失高级部件。
+    /// 仅用于「表结构不变（表数/顺序/表名一致）且仅内容修改」的场景。
+    /// </summary>
+    private static void WriteSurgicalEditXlsb(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject,
+        OoxmlPreservedParts preserved, WorkbookProperties? properties)
+    {
+        using var buffer = new MemoryStream();
+        using (var zip = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+            WriteSurgicalEditXlsbCore(zip, sheets, vbaProject, preserved, properties);
+        buffer.Position = 0;
+        PackageIntegrity.ValidateOrThrow(buffer, checkDanglingRels: false);
+        buffer.Position = 0;
+        buffer.CopyTo(stream);
+    }
+
+    private static void WriteSurgicalEditXlsbCore(ZipArchive zip, IReadOnlyList<SheetData> sheets, byte[]? vbaProject,
+        OoxmlPreservedParts preserved, WorkbookProperties? properties)
+    {
+        var vb = preserved.VerbatimBinaries!;
+
+        // 源共享字符串（文本单元格 → isst 索引；找不到则用内联字符串）
+        var sst = vb.TryGetValue("xl/sharedStrings.bin", out var sstBin)
+            ? XlsbBackend.ParseSharedStrings(sstBin)
+            : new List<string>();
+        var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < sst.Count; i++)
+            if (!sstIndex.ContainsKey(sst[i])) sstIndex[sst[i]] = i;
+
+        // 打开时表序号 → 包内 sheetN.bin 路径（按 workbook.bin 的 BrtBundleSh relId + workbook rels 解析）
+        var origRelsXml = preserved.Rels.TryGetValue("xl/_rels/workbook.bin.rels", out var wr) ? wr : "";
+        var relIdToTarget = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var rel in XlsxWriter.ParseRels(origRelsXml)) relIdToTarget[rel.Id] = rel.Target;
+        var bundleRelIds = new List<string>();
+        foreach (var rec in Biff12Records.ReadAll(vb["xl/workbook.bin"]))
+            if (rec.Rt == BrtBundleSh && rec.Data.Length >= 8)
+            {
+                int off = 8;
+                bundleRelIds.Add(Biff12Records.ReadWideString(rec.Data, ref off));
+            }
+        string SheetPath(int origIdx)
+        {
+            if (origIdx < 0 || origIdx >= bundleRelIds.Count) return "";
+            if (!relIdToTarget.TryGetValue(bundleRelIds[origIdx], out var t)) return "";
+            return t.StartsWith("/", StringComparison.Ordinal) ? t.TrimStart('/')
+                : t.StartsWith("xl/", StringComparison.Ordinal) ? t : "xl/" + t;
+        }
+
+        // 补丁被修改的工作表
+        var patchedPaths = new HashSet<string>(StringComparer.Ordinal);
+        var patchedBins = new List<(string Path, byte[] Data)>();
+        foreach (var s in sheets)
+        {
+            if (!s.IsModified || s.OrigIndex < 0 || s.ModifiedCells is null || s.ModifiedCells.Count == 0) continue;
+            var path = SheetPath(s.OrigIndex);
+            if (path.Length == 0 || !vb.TryGetValue(path, out var origBin)) continue;
+            patchedBins.Add((path, PatchSheetBin(origBin, s, sstIndex)));
+            patchedPaths.Add(path);
+        }
+
+        // 表格表头同步：若修改的单元格落在某个超级表的表头行，需同步更新该表的列名，
+        // 否则表定义与表头单元格不一致会让 Excel 报修复/崩溃。
+        var patchedTables = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var s in sheets)
+        {
+            if (!s.IsModified || s.OrigIndex < 0 || s.ModifiedCells is null || s.ModifiedCells.Count == 0) continue;
+            var sheetPath = SheetPath(s.OrigIndex);
+            if (sheetPath.Length == 0) continue;
+            var relsPath = "xl/worksheets/_rels/" + System.IO.Path.GetFileName(sheetPath) + ".rels";
+            if (!preserved.Rels.TryGetValue(relsPath, out var srx)) continue;
+            foreach (var rel in XlsxWriter.ParseRels(srx))
+            {
+                if (!rel.Type.EndsWith("/table", StringComparison.OrdinalIgnoreCase)) continue;
+                var abs = ResolveRelsTarget("xl/worksheets", rel.Target);
+                if (!preserved.Parts.TryGetValue(abs, out var tblBin)) continue;
+                var patchedTbl = PatchTableHeaderCells(tblBin, s);
+                if (patchedTbl is not null) patchedTables[abs] = patchedTbl;
+            }
+        }
+
+        // 新增工作表（仅允许追加在末尾）：生成 sheetN.bin，并记录待追加的 rel / tabId / 路径。
+        int openedCount = bundleRelIds.Count;
+        var newSheetPaths = new List<string>();
+        var newRelIds = new List<string>();
+        var newTabIds = new List<int>();
+        if (sheets.Count > openedCount)
+        {
+            var emptySst = new Dictionary<string, int>(StringComparer.Ordinal); // 新表文本用内联字符串，避免改动共享字符串表
+            Func<string?, int> xf0 = _ => 0;
+            int maxRel = 0;
+            foreach (var id in bundleRelIds) { int n = ParseRelId(id); if (n > maxRel) maxRel = n; }
+            foreach (var rel in XlsxWriter.ParseRels(origRelsXml)) { int n = ParseRelId(rel.Id); if (n > maxRel) maxRel = n; }
+            int maxTab = 0;
+            foreach (var rec in Biff12Records.ReadAll(vb["xl/workbook.bin"]))
+                if (rec.Rt == BrtBundleSh && rec.Data.Length >= 8) { int t = Biff12Records.ReadS32(rec.Data, 4); if (t > maxTab) maxTab = t; }
+            for (int i = openedCount; i < sheets.Count; i++)
+            {
+                var path = $"xl/worksheets/sheet{i + 1}.bin";
+                newSheetPaths.Add(path);
+                newRelIds.Add("rId" + (++maxRel));
+                newTabIds.Add(++maxTab);
+                patchedBins.Add((path, BuildWorksheetBin(sheets[i], emptySst, xf0, false, new List<string>(), null, null)));
+                patchedPaths.Add(path);
+            }
+        }
+
+        // 表名变更 / 新增表：改写 workbook.bin 的 BrtBundleSh
+        var patchedWb = PatchWorkbookBinForEdit(vb["xl/workbook.bin"], sheets, openedCount, newRelIds, newTabIds);
+
+        // workbook.bin.rels：若有新增表，追加 worksheet rel
+        string? patchedWbRels = null;
+        if (newSheetPaths.Count > 0 && preserved.Rels.TryGetValue("xl/_rels/workbook.bin.rels", out var wbRelsXml))
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append(wbRelsXml.Substring(0, wbRelsXml.LastIndexOf("</Relationships>", StringComparison.Ordinal)));
+            for (int k = 0; k < newSheetPaths.Count; k++)
+                sb.Append("<Relationship Id=\"").Append(newRelIds[k])
+                  .Append("\" Type=\"").Append(OfficeRelNs).Append("/worksheet\" Target=\"worksheets/")
+                  .Append(System.IO.Path.GetFileName(newSheetPaths[k])).Append("\"/>");
+            sb.Append("</Relationships>");
+            patchedWbRels = sb.ToString();
+        }
+
+        // 包结构
+        if (preserved.Rels.TryGetValue("_rels/.rels", out var rootRels))
+            WriteEntry(zip, "_rels/.rels", System.Text.Encoding.UTF8.GetBytes(rootRels));
+        else
+            WriteEntry(zip, "_rels/.rels", System.Text.Encoding.UTF8.GetBytes(RootRelsXml(properties is not null)));
+        WriteEntry(zip, "[Content_Types].xml", System.Text.Encoding.UTF8.GetBytes(
+            ContentTypesXmlFromPreserved(preserved, newSheetPaths)));
+
+        // 其余保留 rels（workbook / worksheet）逐字节透传
+        foreach (var kv in preserved.Rels)
+        {
+            if (kv.Key == "_rels/.rels") continue;
+            if (kv.Key == "xl/_rels/workbook.bin.rels" && patchedWbRels is not null)
+            {
+                WriteEntry(zip, kv.Key, System.Text.Encoding.UTF8.GetBytes(patchedWbRels));
+                continue;
+            }
+            WriteEntry(zip, kv.Key, System.Text.Encoding.UTF8.GetBytes(kv.Value));
+        }
+
+        // verbatim 二进制部件（跳过被补丁的表、docProps）
+        foreach (var kv in vb)
+        {
+            if (patchedPaths.Contains(kv.Key)) continue;
+            if (kv.Key == "xl/workbook.bin" && patchedWb is not null) continue;
+            if (kv.Key == "docProps/core.xml" || kv.Key == "docProps/app.xml") continue;
+            WriteEntry(zip, kv.Key, kv.Value);
+        }
+        if (patchedWb is not null) WriteEntry(zip, "xl/workbook.bin", patchedWb);
+
+        // docProps
+        if (properties is not null)
+        {
+            WriteEntry(zip, "docProps/core.xml", System.Text.Encoding.UTF8.GetBytes(XlsxWriter.CorePropsXml(properties)));
+            WriteEntry(zip, "docProps/app.xml", System.Text.Encoding.UTF8.GetBytes(XlsxWriter.AppPropsXml(properties, sheets)));
+        }
+        else
+        {
+            if (vb.TryGetValue("docProps/core.xml", out var core)) WriteEntry(zip, "docProps/core.xml", core);
+            if (vb.TryGetValue("docProps/app.xml", out var app)) WriteEntry(zip, "docProps/app.xml", app);
+        }
+
+        // 其余保留部件（高级部件 / media / 各部件 .rels 等）
+        foreach (var kv in preserved.Parts)
+        {
+            if (patchedTables.TryGetValue(kv.Key, out var pt)) WriteEntry(zip, kv.Key, pt);
+            else WriteEntry(zip, kv.Key, kv.Value);
+        }
+
+        // vbaProject 兜底
+        if (vbaProject is not null && vbaProject.Length > 0
+            && !preserved.Parts.ContainsKey("xl/vbaProject.bin") && !vb.ContainsKey("xl/vbaProject.bin"))
+            WriteEntry(zip, "xl/vbaProject.bin", vbaProject);
+
+        // 补丁后的工作表（最后写，避免与 vb 重复）
+        foreach (var (path, data) in patchedBins)
+            WriteEntry(zip, path, data);
+    }
+
+    private static string ContentTypesXmlFromPreserved(OoxmlPreservedParts preserved, IReadOnlyList<string>? newSheetPaths = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+        sb.Append("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
+        foreach (var (ext, ct) in preserved.DefaultTypes)
+            sb.Append("<Default Extension=\"").Append(ext).Append("\" ContentType=\"").Append(ct).Append("\"/>");
+        foreach (var (part, ct) in preserved.OverrideTypes)
+            sb.Append("<Override PartName=\"").Append(part).Append("\" ContentType=\"").Append(ct).Append("\"/>");
+        if (newSheetPaths is not null)
+            foreach (var p in newSheetPaths)
+                sb.Append("<Override PartName=\"/").Append(p).Append("\" ContentType=\"application/vnd.ms-excel.worksheet\"/>");
+        sb.Append("</Types>");
+        return sb.ToString();
+    }
+
+    private static bool IsCellRecord(int rt) => rt >= BrtCellBlank && rt <= BrtShortIsst;
+
+    /// <summary>改写 workbook.bin：既有 BrtBundleSh 改名；新增表时在 BrtEndBundleSh 前追加 BrtBundleSh 记录。
+    /// 返回 null 表示无需改动。</summary>
+    private static byte[]? PatchWorkbookBinForEdit(byte[] wbBin, IReadOnlyList<SheetData> sheets, int openedCount,
+        IReadOnlyList<string> newRelIds, IReadOnlyList<int> newTabIds)
+    {
+        var recs = Biff12Records.ReadAll(wbBin);
+        var names = new List<string>();
+        foreach (var rec in recs)
+        {
+            if (rec.Rt != BrtBundleSh || rec.Data.Length < 8) continue;
+            int o = 8;
+            Biff12Records.ReadWideString(rec.Data, ref o);
+            names.Add(Biff12Records.ReadWideString(rec.Data, ref o));
+        }
+        bool renamed = false;
+        for (int i = 0; i < names.Count && i < sheets.Count; i++)
+            if (!string.Equals(names[i], sheets[i].SheetName, StringComparison.Ordinal)) { renamed = true; break; }
+        bool addSheets = sheets.Count > openedCount;
+        if (!renamed && !addSheets) return null;
+
+        using var ms = new MemoryStream();
+        int idx = 0;
+        foreach (var rec in recs)
+        {
+            if (rec.Rt == BrtEndBundleShs && addSheets)
+            {
+                for (int k = openedCount; k < sheets.Count; k++)
+                {
+                    using var bs = new MemoryStream();
+                    WriteU32(bs, 0);                          // hsState = visible
+                    WriteU32(bs, (uint)newTabIds[k - openedCount]); // iTabID
+                    WriteWideString(bs, newRelIds[k - openedCount]);
+                    WriteWideString(bs, sheets[k].SheetName);
+                    WriteRecord(ms, BrtBundleSh, bs.ToArray());
+                }
+            }
+            if (rec.Rt == BrtBundleSh && rec.Data.Length >= 8)
+            {
+                int o = 8;
+                Biff12Records.ReadWideString(rec.Data, ref o);
+                int nameStart = o;
+                var oldName = Biff12Records.ReadWideString(rec.Data, ref o);
+                int nameEnd = o;
+                var newName = idx < sheets.Count ? sheets[idx].SheetName : oldName;
+                idx++;
+                if (string.Equals(newName, oldName, StringComparison.Ordinal)) { WriteRecord(ms, rec.Rt, rec.Data); continue; }
+                using var msr = new MemoryStream();
+                msr.Write(rec.Data, 0, nameStart);
+                WriteWideString(msr, newName);
+                msr.Write(rec.Data, nameEnd, rec.Data.Length - nameEnd);
+                WriteRecord(ms, rec.Rt, msr.ToArray());
+                continue;
+            }
+            WriteRecord(ms, rec.Rt, rec.Data);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// 超级表表头同步：源 tableN.bin 的 BrtBeginList 给出表范围，若被修改的单元格落在表头行（rwFirst）内，
+    /// 用工作表模型中的对应单元格文本替换该列的 BrtBeginListCol.stCaption。
+    /// 返回 null 表示无需改动（无表头单元格被修改）。
+    /// </summary>
+    private static byte[]? PatchTableHeaderCells(byte[] tableBin, SheetData sheet)
+    {
+        // 解析记录
+        var recs = new List<(int Rt, int Start, int End, byte[] Data)>();
+        int pos = 0;
+        while (pos < tableBin.Length)
+        {
+            int start = pos;
+            int rt = Biff12Records.ReadVarInt(tableBin, ref pos);
+            int cb = Biff12Records.ReadVarInt(tableBin, ref pos);
+            if (cb < 0 || pos + cb > tableBin.Length) break;
+            var d = new byte[cb];
+            Array.Copy(tableBin, pos, d, 0, cb);
+            pos += cb;
+            recs.Add((rt, start, pos, d));
+        }
+
+        // 表范围
+        int rwFirst = -1, colFirst = -1, colLast = -1;
+        for (int i = 0; i < recs.Count; i++)
+        {
+            if (recs[i].Rt != BrtBeginList || recs[i].Data.Length < 16) continue;
+            rwFirst = Biff12Records.ReadS32(recs[i].Data, 0);
+            colFirst = Biff12Records.ReadS32(recs[i].Data, 8);
+            colLast = Biff12Records.ReadS32(recs[i].Data, 12);
+            break;
+        }
+        if (rwFirst < 0 || colFirst < 0) return null;
+
+        // 是否存在落在表头行的被修改单元格
+        bool anyHeader = false;
+        foreach (var key in sheet.ModifiedCells!)
+        {
+            int r0 = (int)(key >> 32), c0 = (int)(key & 0xFFFFFFFF);
+            if (r0 == rwFirst && c0 >= colFirst && c0 <= colLast) { anyHeader = true; break; }
+        }
+        if (!anyHeader) return null;
+
+        // 重写每个 BrtBeginListCol 的 stCaption（列序号 = colFirst + 该列在表内 0-based 位置）
+        using var ms = new MemoryStream(tableBin.Length + 32);
+        int colOrdinal = 0;
+        foreach (var (rt, start, end, d) in recs)
+        {
+            if (rt != BrtBeginListCol)
+            {
+                WriteRecord(ms, rt, d);
+                continue;
+            }
+            int c0 = colFirst + colOrdinal;
+            colOrdinal++;
+            string? newName = null;
+            if (c0 <= colLast && rwFirst < sheet.Rows.Count && c0 < sheet.Rows[rwFirst].Count)
+            {
+                var cell = sheet.Rows[rwFirst][c0];
+                if (cell.Type == CellType.Text && cell.Text is not null) newName = cell.Text;
+            }
+            if (newName is null) { WriteRecord(ms, rt, d); continue; }
+
+            // 解析 stName 与 stCaption 的偏移
+            int off = 0;
+            off += 4; off += 4 * 4; off += 4; // idField + ilta + 3×nDxf + idqsif
+            var stName = ReadNullableWideAt(d, ref off);
+            int capLenOff = off;
+            var stCaption = ReadNullableWideAt(d, ref off);
+            int afterCap = off;
+            if (stCaption is null || newName == stCaption) { WriteRecord(ms, rt, d); continue; }
+            var newCap = NullableWideString(newName);
+            var buf = new byte[capLenOff + newCap.Length + (d.Length - afterCap)];
+            Array.Copy(d, 0, buf, 0, capLenOff);
+            Array.Copy(newCap, 0, buf, capLenOff, newCap.Length);
+            Array.Copy(d, afterCap, buf, capLenOff + newCap.Length, d.Length - afterCap);
+            WriteRecord(ms, rt, buf);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>从 data 的 off 处读取 nullable wide string（cch==0xFFFFFFFF 表示 null）。</summary>
+    private static string? ReadNullableWideAt(byte[] d, ref int off)
+    {
+        if (off + 4 > d.Length) return null;
+        int cch = Biff12Records.ReadS32(d, off); off += 4;
+        if (cch < 0) return null;
+        if (off + cch * 2 > d.Length) return null;
+        var s = Encoding.Unicode.GetString(d, off, cch * 2);
+        off += cch * 2;
+        return s;
+    }
+
+    /// <summary>
+    /// 对源 sheetN.bin 做字节级单元格补丁：只改写/插入/删除「被修改」的单元格记录，
+    /// 其余记录（行头、表格部件引用、what-if、打印设置、binaryIndex 引用等）逐字节保留。
+    /// </summary>
+    private static byte[] PatchSheetBin(byte[] orig, SheetData sheet, Dictionary<string, int> sstIndex)
+    {
+        var records = new List<(int Rt, int Start, int DataStart, int End, byte[] Data)>();
+        int pos = 0;
+        while (pos < orig.Length)
+        {
+            int start = pos;
+            int rt = Biff12Records.ReadVarInt(orig, ref pos);
+            int cb = Biff12Records.ReadVarInt(orig, ref pos);
+            if (cb < 0 || pos + cb > orig.Length) break;
+            int ds = pos;
+            var d = new byte[cb];
+            Array.Copy(orig, ds, d, 0, cb);
+            pos += cb;
+            records.Add((rt, start, ds, pos, d));
+        }
+
+        // 建立 (row0,col0) → 记录下标；并记录每行的 cell 记录区间
+        var cellIndex = new Dictionary<long, int>();
+        var rowCellStart = new Dictionary<int, int>();   // row0 → 首个 cell 记录下标
+        var rowCellEnd = new Dictionary<int, int>();      // row0 → 末个 cell 记录下标 + 1
+        var rowHdrIndex = new Dictionary<int, int>();     // row0 → BrtRowHdr 记录下标
+        int curRow = -1, prevCol = -1;
+        for (int i = 0; i < records.Count; i++)
+        {
+            var (rt, _, _, _, d) = records[i];
+            if (rt == BrtRowHdr)
+            {
+                if (d.Length >= 4) { curRow = Biff12Records.ReadS32(d, 0); rowHdrIndex[curRow] = i; }
+                prevCol = -1;
+                continue;
+            }
+            if (rt == BrtEndSheetData) { curRow = -1; continue; }
+            if (curRow < 0 || !IsCellRecord(rt)) continue;
+            bool isShort = rt >= BrtShortBlank;
+            int col = isShort ? prevCol + 1 : (d.Length >= 4 ? Biff12Records.ReadS32(d, 0) : prevCol + 1);
+            if (col < 0) col = prevCol + 1;
+            prevCol = col;
+            cellIndex[((long)curRow << 32) | (uint)col] = i;
+            if (!rowCellStart.ContainsKey(curRow)) rowCellStart[curRow] = i;
+            rowCellEnd[curRow] = i + 1;
+        }
+
+        // 计算编辑（offset, oldLen, newBytes）；newBytes 为 null 表示删除
+        var edits = new List<(int Offset, int OldLen, byte[]? New)>();
+        var inserted = new List<(int Offset, byte[] New)>();
+        foreach (var key in sheet.ModifiedCells!)
+        {
+            int r0 = (int)(key >> 32);
+            int c0 = (int)(key & 0xFFFFFFFF);
+            Cell? model = (r0 >= 0 && r0 < sheet.Rows.Count && c0 >= 0 && c0 < sheet.Rows[r0].Count)
+                ? sheet.Rows[r0][c0] : null;
+            bool empty = model is null || model.IsEmpty;
+
+            if (cellIndex.TryGetValue(key, out var ri))
+            {
+                var rec = records[ri];
+                int xf = CellRecordXf(rec.Rt, rec.Data);
+                if (empty)
+                    edits.Add((rec.Start, rec.End - rec.Start, null));
+                else
+                    edits.Add((rec.Start, rec.End - rec.Start, EncodeCellRecord(c0, xf, model!, sstIndex)));
+            }
+            else if (!empty)
+            {
+                // 新单元格：插入到该行 cell 记录中「按列有序」的位置
+                int insertOffset;
+                if (rowCellStart.TryGetValue(r0, out var cs) && rowCellEnd.TryGetValue(r0, out var ce))
+                {
+                    int at = ce;
+                    for (int i = cs; i < ce; i++)
+                    {
+                        int c = CellRecordCol(records, i);
+                        if (c > c0) { at = i; break; }
+                    }
+                    insertOffset = records[at].Start;
+                }
+                else if (rowHdrIndex.TryGetValue(r0, out var h))
+                {
+                    insertOffset = records[h].End;
+                }
+                else
+                {
+                    // 新行：插到「按行有序」的位置（默认行头之后无 cell）
+                    int at = records.Count;
+                    for (int i = 0; i < records.Count; i++)
+                    {
+                        if (records[i].Rt == BrtEndSheetData) { at = i; break; }
+                        if (records[i].Rt == BrtRowHdr && records[i].Data.Length >= 4
+                            && Biff12Records.ReadS32(records[i].Data, 0) > r0) { at = i; break; }
+                    }
+                    var rowBytes = new MemoryStream();
+                    WriteRecord(rowBytes, BrtRowHdr, RowHdr(r0, c0, c0, sheet, r0));
+                    rowBytes.Write(EncodeCellRecord(c0, 0, model!, sstIndex), 0, EncodeCellRecord(c0, 0, model!, sstIndex).Length);
+                    inserted.Add((records[at].Start, rowBytes.ToArray()));
+                    continue;
+                }
+                inserted.Add((insertOffset, EncodeCellRecord(c0, 0, model!, sstIndex)));
+            }
+        }
+
+        if (edits.Count == 0 && inserted.Count == 0) return orig;
+
+        // 应用：先处理替换/删除（按 offset 降序），再处理插入（按 offset 降序）
+        var result = orig;
+        foreach (var (offset, oldLen, newBytes) in edits.OrderByDescending(e => e.Offset))
+        {
+            int newLen = newBytes?.Length ?? 0;
+            var buf = new byte[offset + newLen + (result.Length - offset - oldLen)];
+            Array.Copy(result, 0, buf, 0, offset);
+            if (newBytes is not null) Array.Copy(newBytes, 0, buf, offset, newLen);
+            Array.Copy(result, offset + oldLen, buf, offset + newLen, result.Length - offset - oldLen);
+            result = buf;
+        }
+        foreach (var (offset, newBytes) in inserted.OrderByDescending(e => e.Offset))
+        {
+            var buf = new byte[offset + newBytes.Length + (result.Length - offset)];
+            Array.Copy(result, 0, buf, 0, offset);
+            Array.Copy(newBytes, 0, buf, offset, newBytes.Length);
+            Array.Copy(result, offset, buf, offset + newBytes.Length, result.Length - offset);
+            result = buf;
+        }
+        return result;
+    }
+
+    private static int CellRecordCol(List<(int Rt, int Start, int DataStart, int End, byte[] Data)> records, int i)
+    {
+        var (rt, _, _, _, d) = records[i];
+        bool isShort = rt >= BrtShortBlank;
+        if (isShort) return -1; // 短记录列号需顺序推导，此处不用于排序判定
+        return d.Length >= 4 ? Biff12Records.ReadS32(d, 0) : -1;
+    }
+
+    private static int CellRecordXf(int rt, byte[] d)
+    {
+        bool isShort = rt >= BrtShortBlank;
+        int off = isShort ? 0 : 4;
+        if (off + 3 > d.Length) return 0;
+        return d[off] | (d[off + 1] << 8) | (d[off + 2] << 16);
+    }
+
+    /// <summary>把模型单元格编码为一条完整（含记录头）的非短 BIFF12 单元格记录。</summary>
+    private static byte[] EncodeCellRecord(int col, int xf, Cell cell, Dictionary<string, int> sstIndex)
+    {
+        int rt;
+        byte[] data;
+        switch (cell.Type)
+        {
+            case CellType.Text:
+                if (cell.Text is null) { rt = BrtCellBlank; data = Cell(col, xf); }
+                else if (sstIndex.TryGetValue(cell.Text, out var idx)) { rt = BrtCellIsst; data = CellIsst(col, xf, idx); }
+                else { rt = BrtCellSt; data = CellSt(col, xf, cell.Text); }
+                break;
+            case CellType.Boolean:
+                rt = BrtCellBool; data = CellBool(col, xf, cell.Boolean);
+                break;
+            case CellType.Date:
+                rt = BrtCellReal; data = CellReal(col, xf, FormatDetector.DateToSerial(cell.Date, false));
+                break;
+            case CellType.Number:
+                double v = cell.Number;
+                if (v == Math.Floor(v) && v > -1000 && v < 1000) { rt = BrtCellRk; data = CellRk(col, xf, v); }
+                else { rt = BrtCellReal; data = CellReal(col, xf, v); }
+                break;
+            default:
+                rt = BrtCellBlank; data = Cell(col, xf);
+                break;
+        }
+        using var ms = new MemoryStream();
+        WriteRecord(ms, rt, data);
+        return ms.ToArray();
     }
 
     private static void WriteSurgicalXlsbCore(ZipArchive zip, IReadOnlyList<SheetData> sheets, byte[]? vbaProject,

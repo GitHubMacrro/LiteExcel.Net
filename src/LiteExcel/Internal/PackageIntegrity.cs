@@ -31,8 +31,10 @@ internal static class PackageIntegrity
         public override string ToString() => $"[{Kind}] {Detail}";
     }
 
-    /// <summary>校验一个已打开的 zip 包，返回全部结构违规（空列表表示通过）。</summary>
-    public static List<Violation> Validate(ZipArchive zip)
+    /// <summary>校验一个已打开的 zip 包，返回全部结构违规（空列表表示通过）。
+    /// <paramref name="checkDanglingRels"/> = false 时跳过「悬空引用」检查（用于手术式编辑：源包 rels 逐字节透传，
+    /// 源文件本身可能含 Excel 可容忍的非常规相对路径，忠实保留不应视为我们引入的损坏）。</summary>
+    public static List<Violation> Validate(ZipArchive zip, bool checkDanglingRels = true)
     {
         var violations = new List<Violation>();
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -61,6 +63,7 @@ internal static class PackageIntegrity
             if (!names.Contains(parent))
                 violations.Add(new Violation { Kind = "Orphan-Rels", Detail = $"关系文件无对应部件：{name}（父部件 {parent} 不存在）" });
 
+            if (!checkDanglingRels) continue;
             string xml;
             using (var s = e.Open())
             using (var r = new StreamReader(s, Encoding.UTF8))
@@ -79,11 +82,11 @@ internal static class PackageIntegrity
     }
 
     /// <summary>校验可寻址的包流；存在结构违规时抛出 <see cref="LiteExcelException"/>（阻止写出损坏文件）。</summary>
-    public static void ValidateOrThrow(Stream packageStream)
+    public static void ValidateOrThrow(Stream packageStream, bool checkDanglingRels = true)
     {
         packageStream.Position = 0;
         using var zip = new ZipArchive(packageStream, ZipArchiveMode.Read, leaveOpen: true);
-        var v = Validate(zip);
+        var v = Validate(zip, checkDanglingRels);
         if (v.Count > 0)
             throw new LiteExcelException(
                 "包结构自检失败（已阻止写出损坏文件，避免 Excel 打开时报修复/闪退）：\n - "

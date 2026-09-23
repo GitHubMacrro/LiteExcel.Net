@@ -14,6 +14,12 @@ public sealed class Worksheet
     private readonly List<List<Cell>> _grid = new();
     private readonly List<CellRange> _mergedRanges = new();
 
+    /// <summary>被用户修改过的单元格坐标集合（key = (0-based row &lt;&lt; 32) | (0-based col)）。
+    /// 供 xlsb 手术式编辑做精确字节补丁，避免整表重建丢失高级部件。</summary>
+    internal readonly HashSet<long> ModifiedCells = new();
+
+    internal static long CellKey(int row0, int col0) => ((long)row0 << 32) | (uint)col0;
+
     /// <summary>工作表是否被用户修改过（SetValue/Merge/Import/Clear 等）。
     /// 打开文件时为 false；XLSB verbatim 保留路径用它判断是否可原样透传 sheetN.bin </summary>
     internal bool IsModified { get; set; }
@@ -902,6 +908,7 @@ public sealed class Worksheet
     {
         if (!ReferenceEquals(cell.Owner, this)) return;
         IsModified = true;
+        ModifiedCells.Add(CellKey(cell.OwnerRow - 1, cell.OwnerCol - 1));
         SetCell(cell.OwnerRow, cell.OwnerCol, cell);
     }
 
@@ -935,6 +942,8 @@ public sealed class Worksheet
             SheetState = SheetVisibilityMap.ToOoxml(_visible),
             TabColor = _tabColor,
             OrigIndex = OrigIndex,
+            IsModified = IsModified,
+            ModifiedCells = ModifiedCells.Count > 0 ? new HashSet<long>(ModifiedCells) : null,
             ColumnWidths = ToColumnWidthsList(ColumnWidths),
             Comments = Comments,
             Validations = Validations,

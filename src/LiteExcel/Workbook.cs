@@ -284,12 +284,13 @@ public sealed class Workbook
                 var (fsHashB, fsSaltB, fsSpinB, fsRoB) = BuildFileSharingParams();
                 bool verbatimB = CanVerbatimXlsb(xlsbSheets);
                 bool surgicalB = CanSurgicalXlsb(xlsbSheets);
+                bool surgicalEditB = CanSurgicalEditXlsb(xlsbSheets);
                 if (!string.IsNullOrEmpty(openPwdB))
                 {
                     using var zipMs = new MemoryStream();
                     XlsbWriter.Write(zipMs, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
                         fsHashB, fsSaltB, fsSpinB, fsRoB, OnDeg, ExcelFormat.Xlsb,
-                        PreservedParts, Properties, Names, verbatim: verbatimB, surgical: surgicalB, allowFeatureLoss: AllowFeatureLossOnSave);
+                        PreservedParts, Properties, Names, verbatim: verbatimB, surgical: surgicalB, allowFeatureLoss: AllowFeatureLossOnSave, surgicalEdit: surgicalEditB);
                     zipMs.Position = 0;
                     var encrypted = Internal.Encryption.OoxmlEncryptor.Encrypt(zipMs.ToArray(), openPwdB);
                     stream.Write(encrypted, 0, encrypted.Length);
@@ -298,7 +299,7 @@ public sealed class Workbook
                 {
                     XlsbWriter.Write(stream, xlsbSheets, VbaProjectBytes, WorkbookCodeName, Date1904,
                         fsHashB, fsSaltB, fsSpinB, fsRoB, OnDeg, ExcelFormat.Xlsb,
-                        PreservedParts, Properties, Names, verbatim: verbatimB, surgical: surgicalB, allowFeatureLoss: AllowFeatureLossOnSave);
+                        PreservedParts, Properties, Names, verbatim: verbatimB, surgical: surgicalB, allowFeatureLoss: AllowFeatureLossOnSave, surgicalEdit: surgicalEditB);
                 }
                 break;
             }
@@ -598,6 +599,37 @@ public sealed class Workbook
             if (ws.IsModified) return false;
 
         // 修改密码变动时需重建 workbook.bin
+        if (Security.ModifyPasswordTouched || Security.HasModifyPassword) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// 是否可对 XLSB 做「手术式编辑」：源为 xlsb、打开时的表按原顺序保留（允许改表名/改内容），
+    /// 新表只能追加在末尾（不允许删除/插入/移动），原始二进制部件已捕获、无密码变动。
+    /// 命中时保留源包全部部件（透视表/切片器/宏/数据模型等），只对被改的表做字节级单元格补丁、对新表追加部件。
+    /// </summary>
+    private bool CanSurgicalEditXlsb(List<SheetData> sheets)
+    {
+        if (Format != ExcelFormat.Xlsb) return false;
+        if (_openedSheetNames is null) return false;
+        if (PreservedParts?.VerbatimBinaries is null) return false;
+        if (!PreservedParts.VerbatimBinaries.ContainsKey("xl/workbook.bin")) return false;
+        int opened = _openedSheetNames.Count;
+        if (sheets.Count < opened) return false; // 删除走手术式删除通道
+        for (int i = 0; i < opened; i++)
+            if (sheets[i].OrigIndex != i) return false; // 打开时的表按原位置保留
+        for (int i = opened; i < sheets.Count; i++)
+            if (sheets[i].OrigIndex != -1) return false; // 其余必须为新增
+        bool anyChange = sheets.Count > opened;
+        for (int i = 0; i < opened; i++)
+        {
+            bool nameChanged = !string.Equals(sheets[i].SheetName, _openedSheetNames[i], StringComparison.Ordinal);
+            bool cellChanged = sheets[i].ModifiedCells is { Count: > 0 };
+            // 手术式编辑只支持「单元格内容修改」与「改表名」；其它修改（可见性/标签色/合并/导入等）回退重建。
+            if (sheets[i].IsModified && !cellChanged && !nameChanged) return false;
+            if (cellChanged || nameChanged) anyChange = true;
+        }
+        if (!anyChange) return false;
         if (Security.ModifyPasswordTouched || Security.HasModifyPassword) return false;
         return true;
     }

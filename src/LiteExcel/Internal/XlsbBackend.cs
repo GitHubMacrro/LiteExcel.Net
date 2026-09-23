@@ -442,7 +442,7 @@ internal static class XlsbBackend
         return (result, unsupported);
     }
 
-    private static List<string> ParseSharedStrings(byte[] data)
+    internal static List<string> ParseSharedStrings(byte[] data)
     {
         var records = Biff12Records.ReadAll(data);
         var result = new List<string>();
