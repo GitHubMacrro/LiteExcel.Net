@@ -10,6 +10,11 @@
 - **xlsb → xlsx/xlsm 跨格式转换（阶段 B3：绘图 / ActiveX 形状）**：`xl/drawings/drawing*.xml` 的 xlsb 专有表达（`xdr:graphicFrame` + `com14:compatSp`）转码为 OOXML `xdr:sp`（`a14:compatExt spid` + `a14:hiddenLine`），使含 ActiveX 形状的工作簿能被 Excel 打开。
 - **xlsb → xlsx/xlsm 跨格式转换（阶段 D：透视表）**：`xl/pivotCache/pivotCacheDefinitionN.bin` 与 `xl/pivotTables/pivotTableN.bin` 转码为 OOXML（头 / location / pivotFields / items / rowFields / rowItems / colFields / colItems / dataFields / pivotHierarchies / 样式，以及 OLAP 数据模型的 dimensions / measureGroups / maps / cacheHierarchies / 数值·日期 sharedItems / slicerData 缓存）。合成 workbook `<pivotCaches>`（cacheId 按 workbook.bin 缓存列表位置映射）与 x14 extLst。
 - **xlsb → xlsx/xlsm 跨格式转换（阶段 E：切片器）**：`xl/slicerCaches/slicerCacheN.bin` 与 `xl/slicers/slicerN.bin` 转码为 OOXML，接线 CT / workbook rels / workbook extLst（x14 slicerCaches）/ 工作表 rels / 工作表级 `x14:slicerList`；保留原始 xlsb `sheetId` 以保证切片器 `tabId` 链接。
+- **XLSB 手术式编辑（修改内容 / 改表名 / 添加表，保真保留高级部件）**：源为含透视表/切片器/连接/Power Query/数据模型/宏的 xlsb 时，改动后另存不再走「整本重建」（会丢 sheet 记录、产生孤儿/重复部件、致 Excel 拒开），而是逐字节保留源包全部部件，只补丁改动处：
+  - **修改单元格内容**：对受影响的 `sheetN.bin` 做字节级单元格记录补丁（保留行头、表格部件引用、what-if、打印设置、`binaryIndex` 引用等）；改动落在超级表表头行时同步更新该表列名（`BrtBeginListCol.stCaption`）。
+  - **改表名**：改写 `workbook.bin` 的 `BrtBundleSh` 名称。
+  - **添加表（仅追加末尾）**：生成新 `sheetN.bin`，追加 `BrtBundleSh` + worksheet rel + Content-Types override。
+  - 通过 `Worksheet.ModifiedCells` 跟踪被改单元格；仅当打开时的表按原位置保留且只发生「内容修改 / 改名 / 末尾追加」时启用（可见性、标签色、导入等其它修改仍回退重建）。经 Excel COM 正常打开验证：任意表内容修改、改名、添加表均无修复/闪退。
 
 ### Fixed
 
@@ -20,6 +25,11 @@
 
 - **`xl/drawings/drawing*.xml` 暂不直通**：该部件是 xlsb 专有的 ActiveX 图形表达（`xdr:graphicFrame` + `com14:compatSp`），混入 xlsx 会被 Excel 拒绝打开（`0x800A03EC`）；阶段 B3 已做 drawing 转码。`vmlDrawing*` 保留。
 - **透视表/切片器接线默认启用**：`raw_repro.xlsb` → xlsx/xlsm 经 Excel 打开验证为 9 表 + 4 透视表、无修复。剩余保真差异（不影响打开）：pivotFields 翻倍怪癖、pivotTable `<formats>`/`<extLst>`、definedNames 中的结构化表引用（`ptgElfLel`）暂未解码。
+- **⚠️ 已知限制：删除含 Power Query 连接的 xlsb 工作表，部分场景输出会被 Excel 拒开**。删除某工作表时，若该表是某个 Power Query 连接的数据源，Excel 会对 `workbook.bin` 做**整套「另存为」规范化**：重建定义名表（`_xlcn.LinkedTable_*` 去尾缀、为被删表新建全局占位名如 `CriteriaValue`/`DataSelectionCriteria`、把失效名的 rgce 改写成 `PtgName` 重指向、重排/重编号），并同步重建 `BrtExternSheet`(XTI) 表、重映射所有 3D 引用的 `ixti`、重编号 pivot/sheet 部件、重编码 `styles`/`sharedStrings`。库当前仅做**手术式**改动（标记失效化、局部重编号），**无法完全复刻**该规范化，因此：
+  - **可用**：删除 `DayList`、以及 `DayList` + `Data Selection Criteria`（已在 Excel 验证正常打开）；
+  - **不可用（会被 Excel 报修复或闪退）**：单独删除其余工作表（如 `BE Production Yield`、`FTLRGroupName`、`ConnectionInfo`、`BE Lot Loss Details`、`BE Lot Loss Details Data`、`Data Selection Criteria`、`ProductGroupData`、`BUSP_VW_BEPRODUCTIONYIELD Data`）。
+  - **安全网**：删除此类文件的工作表时，库会经 `Workbook.SaveDegradations` 上报 `DegradationCapability.PivotTables` 警告（"输出可能在 Excel 触发修复/闪退"），调用方可据此提示用户。**未做静默丢弃，但也无法保证输出可打开。**
+  - **建议**：删除含 PQ 数据模型的工作表属于高风险操作；如需任意删表，请改用 Excel COM 直接执行删除，或删除后用 Excel 验证输出。
 
 ### Tests
 
