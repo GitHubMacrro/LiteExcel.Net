@@ -565,4 +565,110 @@ public class DeleteSheetTests
             if (File.Exists(outPath)) File.Delete(outPath);
         }
     }
+
+    private static XlsbTestFile.WorkbookSpec BuildGraphSpec(int graphXtiIndex)
+    {
+        // 3 张表 + XTI（每表一条 itab=i）+ `_xlcn.LinkedTable_X` 名 rgce 指向 graphXtiIndex 对应的表。
+        var spec = new XlsbTestFile.WorkbookSpec
+        {
+            HasDataModelPart = true,
+            HasExternSheet = true,
+            DataModelName = "_xlcn.LinkedTable_Table1",
+            DataModelNameXtiIndex = graphXtiIndex,
+        };
+        for (int i = 0; i < 3; i++)
+        {
+            spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S" + i });
+            spec.Sheets[i].Rows.Add(new XlsbTestFile.RowSpec { Cells = { new XlsbTestFile.CellSpec { Col = 0, Text = "v" + i } } });
+        }
+        return spec;
+    }
+
+    [Fact]
+    public void Delete_XlsbGraph_OutOfGraphSheet_NoWarning()
+    {
+        // 删「数据模型依赖图」外的表（S2，未被任何 _xlcn.LinkedTable_* 名的 rgce 指向）→ 安全，无降级上报。
+        var file = XlsbTestFile.Build(BuildGraphSpec(graphXtiIndex: 0)); // 图 = {S0}
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            opened.Worksheets.First(w => w.Name == "S2").Delete();
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+            Assert.Empty(opened.SaveDegradations);
+            var reopened = Excel.Open(outPath);
+            Assert.Equal(2, reopened.Worksheets.Count);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
+
+    [Fact]
+    public void Delete_XlsbGraph_InGraphSheet_LenientWarnsAndSaves()
+    {
+        // 删「数据模型依赖图」内的表（S0，被 _xlcn.LinkedTable_* 名的 rgce 指向）→ 宽松模式：上报 + 正常产出，不抛异常。
+        var file = XlsbTestFile.Build(BuildGraphSpec(graphXtiIndex: 0));
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            Assert.True(opened.AllowFeatureLossOnSave); // 默认宽松
+            opened.Worksheets.First(w => w.Name == "S0").Delete();
+            opened.SaveAs(outPath, ExcelFormat.Xlsb); // 不得抛异常
+            Assert.True(File.Exists(outPath));
+            Assert.Single(opened.SaveDegradations);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
+
+    [Fact]
+    public void Delete_XlsbGraph_InGraphSheet_StrictThrows()
+    {
+        // 删图内表 + 严格模式（AllowFeatureLossOnSave=false）→ 抛 LiteExcelException，提示设回 true 重试。
+        var file = XlsbTestFile.Build(BuildGraphSpec(graphXtiIndex: 0));
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            opened.AllowFeatureLossOnSave = false;
+            opened.Worksheets.First(w => w.Name == "S0").Delete();
+            var ex = Assert.Throws<LiteExcelException>(() => opened.SaveAs(outPath, ExcelFormat.Xlsb));
+            Assert.Contains("AllowFeatureLossOnSave", ex.Message);
+            Assert.False(File.Exists(outPath));
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
+
+    [Fact]
+    public void Delete_XlsbGraph_OutOfGraphSheet_StrictSucceeds()
+    {
+        // 删图外表 + 严格模式 → 仍成功（真安全，无需降级放行）。
+        var file = XlsbTestFile.Build(BuildGraphSpec(graphXtiIndex: 0));
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            opened.AllowFeatureLossOnSave = false;
+            opened.Worksheets.First(w => w.Name == "S2").Delete();
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+            Assert.True(File.Exists(outPath));
+            Assert.Empty(opened.SaveDegradations);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
 }

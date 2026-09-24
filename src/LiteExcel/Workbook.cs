@@ -69,6 +69,15 @@ public sealed class Workbook
     /// 此类文件删除工作表时，Excel 会对定义名/XTI 做整套规范化，库目前无法完全复刻，输出可能被 Excel 拒开。</summary>
     internal bool SourceHasLinkedTableNames { get; set; }
 
+    /// <summary>「数据模型依赖图」中的工作表下标（0 基）：每个 `_xlcn.LinkedTable_*` 定义名的 rgce
+    /// （`18 19 &lt;ixti&gt;`）经 BrtExternSheet(XTI) 指向的源表。删除这些表会触发 Excel 对定义名/XTI
+    /// 的整套规范化（库无法复刻）；删除图外表（不在此集合）则安全。</summary>
+    internal HashSet<int> DataModelSheetIndexes { get; } = new();
+
+    /// <summary>源含 `_xlcn.LinkedTable_*` 但存在带 rgce 却无法定位源表的连接名（依赖图不可完全解析）。
+    /// 此时无法判定「图外表」，保守起见对任何删除都按危险处理。</summary>
+    internal bool DataModelGraphUnknown { get; set; }
+
     /// <summary>源 xlsb 含尚无转码器覆盖的高级部件（如时间线 timelineCaches/timelines），
     /// 跨格式转换时无法保留，须显式上报/阻止。</summary>
     internal bool SourceHasUncoveredAdvancedXlsbParts { get; set; }
@@ -413,18 +422,23 @@ public sealed class Workbook
             // 手术式删除通道：仅删除若干工作表，其余二进制部件原样保留（含数据模型/透视/连接等全部高级部件）。
             if (CanSurgicalXlsb(sheets))
             {
-                // 安全网：源含 Power Query 连接定义名（`_xlcn.LinkedTable_*`）时，删除工作表会让 Excel
-                // 对 workbook.bin 做一整套定义名/XTI 规范化（去尾缀、补 CriteriaValue、重指向、重编号）。
-                // 库目前无法完全复刻该规范化，部分删除场景的输出会被 Excel 拒开（修复提示/闪退）。
-                // 此处经降级回调上报，便于调用方提示用户或改用其它方案，避免静默产出问题文件。
-                if (SourceHasLinkedTableNames)
-                    ReportDegradation(new DegradationInfo
-                    {
-                        Capability = DegradationCapability.PivotTables,
-                        TargetFormat = format,
-                        Message = "源 XLSB 含 Power Query 连接（_xlcn.LinkedTable_* 定义名）。删除工作表时 Excel 会对工作簿定义名做整套规范化，" +
-                                  "库目前无法完全复刻；部分删除场景的输出可能在 Excel 中触发修复提示或闪退。请在删除后用 Excel 验证输出，或避免删除此类文件的工作表。",
-                    });
+                // 安全网：源含 Power Query 连接定义名（`_xlcn.LinkedTable_*`）时，删除「数据模型依赖图」
+                // 内的工作表会让 Excel 对 workbook.bin 做一整套定义名/XTI 规范化（去尾缀、补占位名、
+                // 重指向、重编号），库目前无法完全复刻，输出可能被 Excel 拒开（修复提示/闪退）。
+                // 删除图外表（不在依赖图内）则安全：Excel 只做极小改动，可逐字节复刻，无需提示。
+                var deletedGraphSheets = DeletedSheetsInDataModelGraph(sheets);
+                bool graphUnknown = DataModelGraphUnknown;
+                if (deletedGraphSheets.Count > 0 || graphUnknown)
+                {
+                    var names = deletedGraphSheets.Count > 0
+                        ? string.Join("、", deletedGraphSheets.OrderBy(i => i)
+                            .Select(i => i >= 0 && i < _openedSheetNames!.Count ? _openedSheetNames[i] : $"#{i + 1}"))
+                        : "（无法定位）";
+                    ReportOrBlockAdvancedXlsb(format,
+                        $"源 XLSB 含 Power Query 连接（_xlcn.LinkedTable_* 定义名），且本次删除了数据模型依赖图中的工作表（{names}）。" +
+                        "Excel 会对工作簿定义名做整套规范化，库无法完全复刻，输出可能在 Excel 中触发修复提示或闪退。" +
+                        "请改用 Excel 删除此类工作表，或避免删除这些表。");
+                }
                 return;
             }
             bool anyAdvancedModified = AdvancedXlsbSheetIndexes.Count > 0
@@ -467,6 +481,21 @@ public sealed class Workbook
         }
         throw new LiteExcelException(
             message + "\n默认已阻止本次保存。如确认接受功能丢失，请设 workbook.AllowFeatureLossOnSave = true 后重试。");
+    }
+
+    /// <summary>本次删除中落入「数据模型依赖图」（<see cref="DataModelSheetIndexes"/>）的工作表 0 基下标。
+    /// 被删表 = 打开时的表序号去掉当前保留表（<see cref="SheetData.OrigIndex"/>）后的余集。</summary>
+    private List<int> DeletedSheetsInDataModelGraph(List<SheetData> sheets)
+    {
+        var result = new List<int>();
+        if (_openedSheetNames is null || DataModelSheetIndexes.Count == 0) return result;
+        var kept = new HashSet<int>();
+        foreach (var s in sheets)
+            if (s.OrigIndex >= 0) kept.Add(s.OrigIndex);
+        for (int i = 0; i < _openedSheetNames.Count; i++)
+            if (!kept.Contains(i) && DataModelSheetIndexes.Contains(i))
+                result.Add(i);
+        return result;
     }
 
     /// <summary>记录一次能力降级：累积进 <see cref="SaveDegradations"/> 并透传外部回调。</summary>

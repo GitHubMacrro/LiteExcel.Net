@@ -901,6 +901,72 @@ public static class Excel
         {
             var needle = System.Text.Encoding.Unicode.GetBytes("_xlcn.LinkedTable_");
             workbook.SourceHasLinkedTableNames = IndexOf(wbBin, needle) >= 0;
+            bool unresolved = false;
+            if (workbook.SourceHasLinkedTableNames)
+                ComputeDataModelSheetIndexes(wbBin, workbook.DataModelSheetIndexes, out unresolved);
+            workbook.DataModelGraphUnknown = unresolved;
+        }
+    }
+
+    /// <summary>从 workbook.bin 计算「数据模型依赖图」工作表集：每个 `_xlcn.LinkedTable_*` 定义名的
+    /// rgce（`18 19 &lt;ixti&gt;`）经 BrtExternSheet(XTI) 指向的源表下标。删除这些表会触发 Excel 的
+    /// 整套定义名/XTI 规范化，库无法复刻；删除集合外的工作表则安全。
+    /// <paramref name="anyUnresolved"/> 表示存在带非空 rgce 却无法定位源表的连接名（保守起见应视为危险）。</summary>
+    private static void ComputeDataModelSheetIndexes(byte[] workbookBin, HashSet<int> result, out bool anyUnresolved)
+    {
+        anyUnresolved = false;
+        var records = Internal.Biff12.Biff12Records.ReadAll(workbookBin);
+
+        // XTI 表（BrtExternSheet 0x016A）：cXti(u32) + 每项 (iSupBook u32, itabFirst u32, itabLast u32)
+        List<(int First, int Last)>? xti = null;
+        foreach (var rec in records)
+        {
+            if (rec.Rt != 0x016A || rec.Data.Length < 4) continue;
+            var d = rec.Data;
+            int cXti = (int)Internal.Biff12.Biff12Records.ReadU32(d, 0);
+            xti = new List<(int, int)>(cXti);
+            for (int i = 0; i < cXti; i++)
+            {
+                int off = 4 + i * 12;
+                if (off + 12 > d.Length) break;
+                xti.Add(((int)Internal.Biff12.Biff12Records.ReadU32(d, off + 4),
+                         (int)Internal.Biff12.Biff12Records.ReadU32(d, off + 8)));
+            }
+            break; // 仅首个 BrtExternSheet
+        }
+
+        // 每个 `_xlcn.LinkedTable_*` 定义名：解析 rgce 起始 `18 19 <ixti>`，取 XTI 项指向的源表范围。
+        var prefix = "_xlcn.LinkedTable_";
+        foreach (var rec in records)
+        {
+            if (rec.Rt != 0x0027) continue;
+            var d = rec.Data;
+            if (d.Length < 13) continue;
+            int cch = (int)Internal.Biff12.Biff12Records.ReadU32(d, 9);
+            if (cch <= 0) continue;
+            int nameOff = 13;
+            if (nameOff + cch * 2 + 4 > d.Length) continue;
+            var name = System.Text.Encoding.Unicode.GetString(d, nameOff, cch * 2);
+            if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            int cce = (int)Internal.Biff12.Biff12Records.ReadU32(d, nameOff + cch * 2);
+            int rgceOff = nameOff + cch * 2 + 4;
+            if (cce <= 0) continue; // 无 rgce（合成样本）→ 无图信息，不视为「未知」
+            bool resolved = false;
+            if (xti is not null && rgceOff + 4 <= d.Length && d[rgceOff] == 0x18 && d[rgceOff + 1] == 0x19)
+            {
+                int ixti = d[rgceOff + 2] | (d[rgceOff + 3] << 8);
+                if (ixti >= 0 && ixti < xti.Count)
+                {
+                    var (first, last) = xti[ixti];
+                    if (first >= 0)
+                    {
+                        int end = last < first ? first : last;
+                        for (int s = first; s <= end; s++) result.Add(s);
+                        resolved = true;
+                    }
+                }
+            }
+            if (!resolved) anyUnresolved = true; // 有 rgce 但无法定位源表 → 保守视为危险
         }
     }
 

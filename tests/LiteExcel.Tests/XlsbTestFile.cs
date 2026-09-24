@@ -98,6 +98,10 @@ internal static class XlsbTestFile
         /// <summary>非 null 时写出该名称的全局 BrtDefinedName（用于模拟数据模型定义名，如 _xlcn./_xlfn.）。</summary>
         public string? DataModelName;
 
+        /// <summary>非 null 时给 <see cref="DataModelName"/> 写可解析的 rgce（`18 19 &lt;ixti&gt;`），
+        /// 指向该 XTI 下标对应的源表；用于测试「数据模型依赖图」判定。</summary>
+        public int? DataModelNameXtiIndex;
+
         /// <summary>是否写出 BrtExternSheet（每个表一条 XTI 条目，itab=i）。</summary>
         public bool HasExternSheet;
 
@@ -650,7 +654,19 @@ internal static class XlsbTestFile
             b.WriteByte(0);                  // pad
             WriteU32(b, 0xFFFFFFFF);         // itab = -1（全局）
             WriteWideString(b, spec.DataModelName);
-            WriteU32(b, 0);                  // cce = 0（无 rgce）
+            if (spec.DataModelNameXtiIndex is int xtiIdx)
+            {
+                // rgce：PtgRef3d 前缀 `18 19 <ixti:u16>` + 12 字节负载（cce=14）
+                WriteU32(b, 14);             // cce
+                b.WriteByte(0x18);
+                b.WriteByte(0x19);
+                WriteU16(b, (ushort)xtiIdx);
+                for (int k = 0; k < 10; k++) b.WriteByte(0);
+            }
+            else
+            {
+                WriteU32(b, 0);              // cce = 0（无 rgce）
+            }
             WriteRecord(ms, 0x0027, b.ToArray()); // BrtDefinedName
         }
         foreach (var cr in spec.CacheRefs)

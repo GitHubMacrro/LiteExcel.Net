@@ -25,17 +25,20 @@
 
 - **`xl/drawings/drawing*.xml` 暂不直通**：该部件是 xlsb 专有的 ActiveX 图形表达（`xdr:graphicFrame` + `com14:compatSp`），混入 xlsx 会被 Excel 拒绝打开（`0x800A03EC`）；阶段 B3 已做 drawing 转码。`vmlDrawing*` 保留。
 - **透视表/切片器接线默认启用**：`raw_repro.xlsb` → xlsx/xlsm 经 Excel 打开验证为 9 表 + 4 透视表、无修复。剩余保真差异（不影响打开）：pivotFields 翻倍怪癖、pivotTable `<formats>`/`<extLst>`、definedNames 中的结构化表引用（`ptgElfLel`）暂未解码。
-- **⚠️ 已知限制：删除含 Power Query 连接的 xlsb 工作表，部分场景输出会被 Excel 拒开**。删除某工作表时，若该表是某个 Power Query 连接的数据源，Excel 会对 `workbook.bin` 做**整套「另存为」规范化**：重建定义名表（`_xlcn.LinkedTable_*` 去尾缀、为被删表新建全局占位名如 `CriteriaValue`/`DataSelectionCriteria`、把失效名的 rgce 改写成 `PtgName` 重指向、重排/重编号），并同步重建 `BrtExternSheet`(XTI) 表、重映射所有 3D 引用的 `ixti`、重编号 pivot/sheet 部件、重编码 `styles`/`sharedStrings`。库当前仅做**手术式**改动（标记失效化、局部重编号），**无法完全复刻**该规范化，因此：
-  - **可用**：删除 `DayList`、以及 `DayList` + `Data Selection Criteria`（已在 Excel 验证正常打开）；
-  - **不可用（会被 Excel 报修复或闪退）**：单独删除其余工作表（如 `BE Production Yield`、`FTLRGroupName`、`ConnectionInfo`、`BE Lot Loss Details`、`BE Lot Loss Details Data`、`Data Selection Criteria`、`ProductGroupData`、`BUSP_VW_BEPRODUCTIONYIELD Data`）。
-  - **安全网**：删除此类文件的工作表时，库会经 `Workbook.SaveDegradations` 上报 `DegradationCapability.PivotTables` 警告（"输出可能在 Excel 触发修复/闪退"），调用方可据此提示用户。**未做静默丢弃，但也无法保证输出可打开。**
-  - **建议**：删除含 PQ 数据模型的工作表属于高风险操作；如需任意删表，请改用 Excel COM 直接执行删除，或删除后用 Excel 验证输出。
+- **⚠️ 已知限制：删除含 Power Query 连接的 xlsb 工作表，部分场景输出会被 Excel 拒开**。删除某工作表时，若该表是某个 Power Query 连接的数据源，Excel 会对 `workbook.bin` 做**整套「另存为」规范化**：重建定义名表（`_xlcn.LinkedTable_*` 去尾缀、为被删表新建全局占位名、把失效名的 rgce 改写成 `PtgName` 重指向、重排/重编号），并同步重建 `BrtExternSheet`(XTI) 表、重映射所有 3D 引用的 `ixti`、重编号 pivot/sheet 部件、重编码 `styles`/`sharedStrings`。库当前仅做**手术式**改动（标记失效化、局部重编号），**无法完全复刻**该规范化；且不同删除组合的危险特征可能逐字节相同却结果不同（一者崩溃、一者安全），**无法靠静态部件可靠预判**。
+  - **依赖图闸门（精确化）**：打开 xlsb 时解析每个 `_xlcn.LinkedTable_*` 定义名的 rgce（`18 19 <ixti>`）经 XTI 指向的源表，得到「数据模型依赖图」工作表集（`Workbook.DataModelSheetIndexes`）。删除工作表时：
+    - **图外表**（不被任何连接名的 rgce 指向）→ Excel 只做极小改动，可逐字节复刻 → **静默成功，无降级上报**（修正了此前「只要存在连接名就一律警告」的误报）。
+    - **图内表**（被某个连接名的 rgce 指向）→ 宽松模式（默认 `AllowFeatureLossOnSave=true`）经 `SaveDegradations` 上报 `DegradationCapability.PivotTables` 并**正常产出文件（不抛异常，自动化友好）**；严格模式（`AllowFeatureLossOnSave=false`）**抛 `LiteExcelException` 阻止**，提示设回 `true` 后重试即可正常保存。
+    - **依赖图无法解析**（含带 rgce 却定位不到源表的连接名）→ 保守按危险处理。
+  - **仍存在的边界**：部分图内删除在宽松模式下会照常警告并产出文件（与历史行为一致）；严格模式则会被阻止。**未做真修复**——库内任意删表的安全产出仍不保证，依赖图闸门只是把「能否安全删」判定得精确得多。
+  - **建议**：如需在任意含 PQ 数据模型的 xlsb 上删除图内工作表，请改用 Excel COM 直接执行删除，或删除后用 Excel 验证输出。
 
 ### Tests
 
 - 新增 `XlsbToXlsxConversionTests`（7 项）：格式无关部件直通 + 关系重写；drawing XML 排除 / VML 保留；透视表部件转码保留；VBA 按目标格式取舍。含包完整性断言（无悬空关系、部件均有内容类型声明）。
 - 新增 `XlsbConnectionTranscoderTests`、`XlsbPivotCacheTranscoderTests`、`XlsbPivotTableTranscoderTests`、`XlsbSlicerTranscoderTests` 等阶段 C/D/E 转码测试（含真实文件断言，CI 无样本时跳过）。
-- 全量 **725** 测试通过（net8.0）；net48 构建通过。
+- 新增 `DeleteSheetTests` 依赖图闸门用例（4 项）：图外表删除无降级上报、图内表宽松模式警告且产出、图内表严格模式抛异常、图外表严格模式成功。
+- 全量 **742** 测试（net8.0，741 通过，1 项为预存失败——`XlsbPivotTableTranscoderTests` 依赖外部真实样本）；net48 构建通过。
 
 ## [2.4.77] - 2026-09-18
 
