@@ -483,6 +483,55 @@ public class DeleteSheetTests
     }
 
     [Fact]
+    public void Delete_XlsbSurgical_RemovesOrphanCacheRefEndRecords()
+    {
+        // 回归：缓存引用是 BEGIN/END 成对记录（0x0182/0x0183、0x046D/0x046E、0x0430/0x0431）。
+        // 当 BEGIN 因指向被删缓存而被移除时，其紧邻的 END 也必须一并移除；否则残留孤立 END 记录，
+        // 结构性非法会让 Excel 拒开（hr=0x800A03EC）。
+        // 布局：3 张表(rId1..3) + pivotTable1 挂 S1 + pivotCacheDefinition1(rId4)；删 S1 → 删缓存 → 删引用对。
+        var spec = new XlsbTestFile.WorkbookSpec { CacheRefEndCompanions = true };
+        for (int i = 0; i < 3; i++) spec.Sheets.Add(new XlsbTestFile.SheetSpec { Name = "S" + i });
+        spec.ExtraParts["xl/pivotCache/pivotCacheDefinition1.bin"] = new byte[] { 0 };
+        spec.ExtraParts["xl/pivotTables/pivotTable1.bin"] = XlsbTestFile.BuildPivotTableBin(0, "PivotTable1");
+        spec.ExtraRels["xl/pivotTables/_rels/pivotTable1.bin.rels"] =
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"../pivotCache/pivotCacheDefinition1.bin\"/>";
+        spec.ExtraRels["xl/worksheets/_rels/sheet2.bin.rels"] =
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable\" Target=\"../pivotTables/pivotTable1.bin\"/>";
+        spec.ExtraRels["xl/_rels/workbook.bin.rels"] =
+            "<Relationship Id=\"rId4\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition\" Target=\"pivotCache/pivotCacheDefinition1.bin\"/>";
+        // 0x0182 引用 pivotCache1(rId4)，紧跟 END 0x0183
+        spec.CacheRefs.Add(new XlsbTestFile.CacheRefSpec { Rt = 0x0182, Flags = 0, RelId = 4 });
+
+        var file = XlsbTestFile.Build(spec);
+        var outPath = GetTempFile(".xlsb");
+        try
+        {
+            var opened = Excel.Open(file);
+            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            opened.SaveAs(outPath, ExcelFormat.Xlsb);
+
+            byte[] wb;
+            using (var zip = System.IO.Compression.ZipFile.OpenRead(outPath))
+            {
+                using var s = zip.GetEntry("xl/workbook.bin")!.Open();
+                using var ms = new MemoryStream();
+                s.CopyTo(ms);
+                wb = ms.ToArray();
+            }
+
+            var types = XlsbTestFile.ReadRecordTypes(wb);
+            // BEGIN 记录（0x0182）与其 END 伙伴（0x0183）必须成对消失。
+            Assert.DoesNotContain(0x0182, types);
+            Assert.DoesNotContain(0x0183, types);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (File.Exists(outPath)) File.Delete(outPath);
+        }
+    }
+
+    [Fact]
     public void Delete_XlsbSurgical_RepairsPivotTableCacheId()
     {
         // 回归（真实 raw_repro.xlsb 修复）：BrtBeginPivotTable(0x0118) 的 cacheId(off28) 必须归位为

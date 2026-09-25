@@ -20,13 +20,14 @@
 
 - **跨格式静默丢弃高级部件**（违反保真契约）：源为 xlsb、目标为非 xlsb 时，含透视表/切片器/连接/Power Query/数据模型等高级部件此前会被静默丢弃。阶段 A 改为显式上报 `DegradationCapability.PivotTables`（记入 `Workbook.SaveDegradations`），`AllowFeatureLossOnSave=false` 时阻止保存；阶段 C/D/E 落地后这些部件已可转码保留，对 xlsx/xlsm 目标不再上报/阻止（可用 `LITEXCEL_DISABLE_PIVOT_WIRING=1` 回退到丢弃+上报）。
 - **高级部件检测扩展**：`SourceHasAdvancedXlsbParts` 现同时覆盖工作簿级部件（`pivotCache` / `pivotTables` / `slicerCaches` / `slicers` / `queryTables` / `connections` / 数据模型），而非仅工作表 rels 中的透视/切片引用。
+- **手术式删表残留孤立缓存引用 END 记录**：`workbook.bin` 中缓存引用是 BEGIN/END 成对记录（透视缓存 `0x0182`/`0x0183`、数据模型缓存 `0x046D`/`0x046E`、切片缓存 `0x0430`/`0x0431`）。此前 `ModifyWorkbookBin` 在缓存目标被删时只移除 BEGIN、未移除其紧邻的 END，产出结构性非法的孤立 END 记录。现删 BEGIN 时同步移除紧邻 END。
 
 ### Notes
 
 - **`xl/drawings/drawing*.xml` 暂不直通**：该部件是 xlsb 专有的 ActiveX 图形表达（`xdr:graphicFrame` + `com14:compatSp`），混入 xlsx 会被 Excel 拒绝打开（`0x800A03EC`）；阶段 B3 已做 drawing 转码。`vmlDrawing*` 保留。
 - **透视表/切片器接线默认启用**：`raw_repro.xlsb` → xlsx/xlsm 经 Excel 打开验证为 9 表 + 4 透视表、无修复。剩余保真差异（不影响打开）：pivotFields 翻倍怪癖、pivotTable `<formats>`/`<extLst>`、definedNames 中的结构化表引用（`ptgElfLel`）暂未解码。
 - **⚠️ 已知限制：删除含 Power Query 连接的 xlsb 工作表，输出会被 Excel 拒开**。删除某工作表时，Excel 会对 `workbook.bin` 做**整套「另存为」规范化**：重建定义名表（`_xlcn.LinkedTable_*` 去尾缀、为被删表新建全局占位名、把失效名的 rgce 改写成 `PtgName` 重指向、重排/重编号），并同步重建 `BrtExternSheet`(XTI) 表、重映射 3D 引用的 `ixti`、重编号 pivot/sheet/chart/slicer 部件、清理孤儿部件与缓存引用（`0x0182`/`0x046D`/`0x0430`）、重编码 `styles`/`sharedStrings`/`connections` 等。库当前仅做**手术式**改动（标记失效化、局部重编号、局部孤儿清理），**无法完全复刻**该规范化。
-  - **实测（真实数据模型样本，11 个删除场景）**：库输出仅 2 个能被 Excel 正常打开（删 `DayList`、删 `DayList`+`Data Selection Criteria`），其余 9 个被 Excel 拒开（`hr=0x800A03EC`）；而 Excel 自身删除这 11 个场景**全部**正常打开。**危险与否无法在保存时静态预判**——删除看似与连接无关的表（如 `BE Lot Loss Details`）同样导致拒开。因此库**无法保证**此类删除的输出可打开。
+  - **实测（真实数据模型样本，11 个删除场景）**：库输出仅 2 个能被 Excel 正常打开，其余 9 个被 Excel 拒开（`hr=0x800A03EC`）；而 Excel 自身删除这 11 个场景**全部**正常打开。**危险与否无法在保存时静态预判**——删除看似与连接无关的表同样导致拒开。因此库**无法保证**此类删除的输出可打开。
   - **安全网（保守）**：源 xlsb 含 `_xlcn.LinkedTable_*` 连接名时，删除**任意**工作表：
     - 宽松模式（默认 `AllowFeatureLossOnSave=true`）→ 经 `SaveDegradations` 上报 `DegradationCapability.PivotTables` 警告，并**正常产出文件（不抛异常，自动化友好）**；
     - 严格模式（`AllowFeatureLossOnSave=false`）→ **抛 `LiteExcelException` 阻止**，提示设回 `true` 后重试即可正常保存。
@@ -38,7 +39,7 @@
 - 新增 `XlsbToXlsxConversionTests`（7 项）：格式无关部件直通 + 关系重写；drawing XML 排除 / VML 保留；透视表部件转码保留；VBA 按目标格式取舍。含包完整性断言（无悬空关系、部件均有内容类型声明）。
 - 新增 `XlsbConnectionTranscoderTests`、`XlsbPivotCacheTranscoderTests`、`XlsbPivotTableTranscoderTests`、`XlsbSlicerTranscoderTests` 等阶段 C/D/E 转码测试（含真实文件断言，CI 无样本时跳过）。
 - `DeleteSheetTests`：源含 `_xlcn.LinkedTable_*` 时删除任意工作表——宽松模式警告且产出、严格模式抛异常；另含手术式删除的重编号 / pivot cacheId / `_xlcn` 名保留等回归用例。
-- 全量 **742** 测试（net8.0，741 通过，1 项为预存失败——`XlsbPivotTableTranscoderTests` 依赖外部真实样本）；net48 构建通过。
+- 全量 **743** 测试（net8.0，全部通过）；net48 构建通过。
 
 ## [2.4.77] - 2026-09-18
 

@@ -1340,6 +1340,12 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("临时")).ToList(
 - **xlsb**：删除 XLSB 工作表后保存为 xlsb，同样完整保留透视表、透视缓存、超级表、连接、数据模型和 VBA 宏。
 - **xlsb → xlsm**：透视表等二进制部件保留（超级表转为重建）。
 
+> ⚠️ **已知限制（含 Power Query / 数据模型的 xlsb）**
+> 若源 xlsb 含 Power Query / 数据模型连接名（`_xlcn.LinkedTable_*`），删除**任意**工作表后另存 xlsb，Excel 可能拒开输出（`hr=0x800A03EC`）。原因是 Excel 会在此类删除时对 `workbook.bin` 做**整套「另存为」规范化**（重建定义名表 / XTI / 缓存引用 / 部件重编号等），库当前仅做手术式改动，**无法完全复刻**，且**无法在保存时静态预判**哪张表可安全删除。
+> - 宽松模式（默认 `AllowFeatureLossOnSave=true`）：经 `wb.SaveDegradations` 上报 `DegradationCapability.PivotTables` 警告并**正常产出**（不抛异常）；
+> - 严格模式（`AllowFeatureLossOnSave=false`）：抛 `LiteExcelException` 阻止；
+> - 如需在此类文件上删除工作表，建议改用 Excel COM 直接删除，或删除后用 Excel 验证输出。详见 [§20.5 打开-保存保真](#205-打开-保存保真)。
+
 ## 7.7 工作表可见性与标签颜色
 
 ```csharp
@@ -2959,6 +2965,8 @@ catch (LiteExcelException ex)
 打开已有文件再保存时，未改动的内容会被**原样保留**，不会因为库不认识它而丢失。这包括宏、图表、透视表、透视缓存、超级表、切片器、外部连接、数据模型、自定义 XML、工作表标签颜色、样式等高级部件。改表名不再丢图表关联；追加数据不再丢宏。
 
 删除工作表后保存也走同一套保真逻辑：被删表及其引用被摘除，其余内容完整保留，结果与 Excel 自身「删除工作表后另存」等价（xlsb 同样完整保留透视表 / 连接 / 数据模型 / VBA / 标签颜色）。
+
+> ⚠️ **例外（含 Power Query / 数据模型的 xlsb）**：源 xlsb 含 `_xlcn.LinkedTable_*` 连接名时，删除任意工作表后的输出**可能被 Excel 拒开**（`0x800A03EC`）——Excel 对此类删除会做整套「另存为」规范化，库无法完全复刻且无法静态预判。详见 [§7.6 删除整张工作表](#76-删除整张工作表-worksheetdelete) 的已知限制说明。
 
 保真不只是留下部件字节，引用它们的元素同样要保留，否则部件成孤儿、Excel 视同不存在。以下引用均随保存原样回写，关系编号被重排时同步改写：
 

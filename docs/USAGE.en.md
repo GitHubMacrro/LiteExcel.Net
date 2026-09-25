@@ -1253,6 +1253,12 @@ Saving after deleting a worksheet is equivalent to Excel's own "delete sheet the
 - **xlsb**: deleting an XLSB worksheet and saving as xlsb preserves pivot tables, pivot caches, tables, connections, the data model, and VBA macros.
 - **xlsb → xlsm**: binary advanced parts such as pivot tables are preserved (tables are rebuilt).
 
+> ⚠️ **Known limitation (xlsb with Power Query / data model)**
+> If the source xlsb contains Power Query / data-model connection names (`_xlcn.LinkedTable_*`), deleting **any** worksheet and saving as xlsb may produce a file Excel refuses to open (`hr=0x800A03EC`). Excel performs a full "Save As" normalization of `workbook.bin` on such deletes (rebuilding the defined-name table / XTI / cache references / part renumbering), which the library cannot fully replicate; whether a given sheet is safe to delete **cannot be statically predicted** at save time.
+> - Lenient mode (`AllowFeatureLossOnSave=true`, default): reports `DegradationCapability.PivotTables` via `wb.SaveDegradations` and **still produces the file** (never throws);
+> - Strict mode (`AllowFeatureLossOnSave=false`): throws `LiteExcelException` to block the save;
+> - To delete sheets in such files, prefer deleting via Excel COM, or verify the output in Excel. See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for details.
+
 ## 7.7 Sheet Visibility and Tab Color
 
 ```csharp
@@ -2897,6 +2903,8 @@ Cannot write Csv: Csv format does not support file-level passwords (open passwor
 When you open an existing file and save it, everything you did not change is **preserved as-is** — nothing is lost just because the library does not understand it. This covers macros, charts, pivot tables, pivot caches, tables, slicers, external connections, the data model, custom XML, sheet tab colors, styles, and other advanced parts. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros.
 
 Deleting a worksheet and saving goes through the same fidelity logic: the deleted sheet and its references are removed, everything else is preserved, and the result is equivalent to Excel's own "delete sheet then save" (xlsb likewise keeps pivot tables / connections / data model / VBA / tab colors in full).
+
+> ⚠️ **Exception (xlsb with Power Query / data model)**: when the source xlsb contains `_xlcn.LinkedTable_*` connection names, the output after deleting any worksheet may be refused by Excel (`0x800A03EC`) — Excel performs a full "Save As" normalization on such deletes that the library cannot fully replicate, and whether a sheet is safe to delete cannot be statically predicted. See the known-limitation note in [§7.6 Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete).
 
 Fidelity is more than keeping part bytes: the elements that reference them must survive too, otherwise a part is orphaned and Excel treats it as absent. The references below are written back verbatim on save, with relationship ids remapped whenever they get renumbered:
 

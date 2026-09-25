@@ -1465,8 +1465,15 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         int bundleIdx = 0;
         int rIdIdx = 0; // 0x0182 序号（flags 规范化）
 
-        foreach (var rec in records)
+        for (int ri = 0; ri < records.Count; ri++)
         {
+            var rec = records[ri];
+            // 缓存引用的 BEGIN 记录（0x0182/0x046D/0x0430）被移除时，其紧邻的 END 伙伴
+            // （0x0183/0x046E/0x0431）也必须一并移除，否则残留孤立的 END 记录会让 Excel 拒开。
+            void SkipEndIfNext(int endRt)
+            {
+                if (ri + 1 < records.Count && records[ri + 1].Rt == endRt) ri++;
+            }
             if (rec.Rt == BrtBundleSh)
             {
                 int cur = bundleIdx++;
@@ -1515,7 +1522,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             if (rec.Rt == 0x0182 && rec.Data.Length >= 8) // BookView 内 rId 引用
             {
                 int o0 = 4;
-                if (deletedCacheRelIds.Contains(Biff12Records.ReadWideString(rec.Data, ref o0))) continue; // 指向被删缓存 → 移除记录
+                if (deletedCacheRelIds.Contains(Biff12Records.ReadWideString(rec.Data, ref o0))) { SkipEndIfNext(0x0183); continue; } // 指向被删缓存 → 移除记录
                 var nd = (byte[])rec.Data.Clone();
                 WriteU32To(nd, 0, (uint)rIdIdx); // flags 规范化为序号（源可能含异常值，如 0x1E）
                 int o = 4;
@@ -1544,7 +1551,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                 if (strEnd <= rec.Data.Length)
                 {
                     var rid0 = Encoding.Unicode.GetString(rec.Data, 6, cch * 2);
-                    if (deletedCacheRelIds.Contains(rid0)) continue; // 指向被删缓存 → 移除记录
+                    if (deletedCacheRelIds.Contains(rid0)) { SkipEndIfNext(rec.Rt == 0x046D ? 0x046E : 0x0431); continue; } // 指向被删缓存 → 移除记录
                     int num = ParseRelId(rid0);
                     if (num >= 0)
                     {

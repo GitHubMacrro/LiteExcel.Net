@@ -108,6 +108,9 @@ internal static class XlsbTestFile
         /// <summary>额外的 workbook.bin rId 引用记录（透视缓存 0x0182/0x046D、切片缓存 0x0430）。</summary>
         public List<CacheRefSpec> CacheRefs { get; } = new();
 
+        /// <summary>true 时为每条缓存引用紧跟写出其 END 伙伴（0x0183/0x046E/0x0431），模拟真实 Excel 产出。</summary>
+        public bool CacheRefEndCompanions;
+
         /// <summary>额外写入的 zip 部件（原样字节，不重建）。</summary>
         public Dictionary<string, byte[]> ExtraParts { get; } = new();
 
@@ -300,6 +303,22 @@ internal static class XlsbTestFile
             WriteRecord(ms, 0x0118, b.ToArray());
         }
         return ms.ToArray();
+    }
+
+    /// <summary>读取部件中全部记录的类型号，按出现顺序返回。</summary>
+    public static List<int> ReadRecordTypes(byte[] part)
+    {
+        var result = new List<int>();
+        int pos = 0;
+        while (pos < part.Length)
+        {
+            int rt = ReadVarInt(part, ref pos);
+            int cb = ReadVarInt(part, ref pos);
+            if (cb < 0 || pos + cb > part.Length) break;
+            result.Add(rt);
+            pos += cb;
+        }
+        return result;
     }
 
     /// <summary>读取 xlsb 部件中全部记录的内嵌 rId（UTF-16 "rIdN"），按出现顺序返回。</summary>
@@ -685,6 +704,11 @@ internal static class XlsbTestFile
                 if (cr.Rt == 0x046D) WriteU32(b, cr.Trailing);
             }
             WriteRecord(ms, cr.Rt, b.ToArray());
+            if (spec.CacheRefEndCompanions)
+            {
+                int endRt = cr.Rt == 0x0182 ? 0x0183 : cr.Rt == 0x046D ? 0x046E : 0x0431;
+                WriteRecord(ms, endRt, Empty());
+            }
         }
         WriteRecord(ms, BrtEndBook, Empty());
         return ms.ToArray();
