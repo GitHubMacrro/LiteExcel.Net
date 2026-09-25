@@ -378,9 +378,10 @@ public class DeleteSheetTests
     }
 
     [Fact]
-    public void Delete_XlsbDataModel_StrictMode_Succeeds()
+    public void Delete_XlsbDataModel_LenientSucceeds_StrictBlocks()
     {
-        // 保真手术式删除现可在严格模式（AllowFeatureLossOnSave=false）下成功——不丢数据模型/高级部件，无需降级放行。
+        // 源含 `_xlcn.LinkedTable_*`（数据模型连接名）时，删除工作表的安全性无法在保存时可靠预判：
+        // 宽松模式（默认）警告 + 正常产出；严格模式（AllowFeatureLossOnSave=false）阻止并抛异常。
         var spec = new XlsbTestFile.WorkbookSpec
         {
             HasDataModelPart = true,
@@ -394,18 +395,31 @@ public class DeleteSheetTests
         var file = XlsbTestFile.Build(spec);
         try
         {
-            var opened = Excel.Open(file);
-            opened.AllowFeatureLossOnSave = false;
-            opened.Worksheets.First(w => w.Name == "S1").Delete();
+            // 宽松模式：产出文件 + 一条降级上报
+            var lenient = Excel.Open(file);
+            lenient.Worksheets.First(w => w.Name == "S1").Delete();
             var outPath = GetTempFile(".xlsb");
             try
             {
-                opened.SaveAs(outPath, ExcelFormat.Xlsb);
+                lenient.SaveAs(outPath, ExcelFormat.Xlsb);
                 Assert.True(File.Exists(outPath));
+                Assert.Single(lenient.SaveDegradations);
                 using var zip = System.IO.Compression.ZipFile.OpenRead(outPath);
                 Assert.NotNull(zip.GetEntry("xl/model/item.data"));
             }
             finally { if (File.Exists(outPath)) File.Delete(outPath); }
+
+            // 严格模式：阻止并抛异常
+            var strict = Excel.Open(file);
+            strict.AllowFeatureLossOnSave = false;
+            strict.Worksheets.First(w => w.Name == "S1").Delete();
+            var strictOut = GetTempFile(".xlsb");
+            try
+            {
+                Assert.Throws<LiteExcelException>(() => strict.SaveAs(strictOut, ExcelFormat.Xlsb));
+                Assert.False(File.Exists(strictOut));
+            }
+            finally { if (File.Exists(strictOut)) File.Delete(strictOut); }
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
@@ -585,9 +599,10 @@ public class DeleteSheetTests
     }
 
     [Fact]
-    public void Delete_XlsbGraph_OutOfGraphSheet_NoWarning()
+    public void Delete_XlsbLinkedTable_AnySheet_LenientWarnsAndSaves()
     {
-        // 删「数据模型依赖图」外的表（S2，未被任何 _xlcn.LinkedTable_* 名的 rgce 指向）→ 安全，无降级上报。
+        // 源含 `_xlcn.LinkedTable_*` 时，删除任意工作表（含不被该名引用的表）都无法在保存时可靠预判安全性，
+        // 一律保守上报：宽松模式经 SaveDegradations 警告 + 正常产出，不抛异常。
         var file = XlsbTestFile.Build(BuildGraphSpec(graphXtiIndex: 0)); // 图 = {S0}
         var outPath = GetTempFile(".xlsb");
         try
@@ -595,7 +610,8 @@ public class DeleteSheetTests
             var opened = Excel.Open(file);
             opened.Worksheets.First(w => w.Name == "S2").Delete();
             opened.SaveAs(outPath, ExcelFormat.Xlsb);
-            Assert.Empty(opened.SaveDegradations);
+            Assert.True(File.Exists(outPath));
+            Assert.Single(opened.SaveDegradations);
             var reopened = Excel.Open(outPath);
             Assert.Equal(2, reopened.Worksheets.Count);
         }
@@ -609,7 +625,7 @@ public class DeleteSheetTests
     [Fact]
     public void Delete_XlsbGraph_InGraphSheet_LenientWarnsAndSaves()
     {
-        // 删「数据模型依赖图」内的表（S0，被 _xlcn.LinkedTable_* 名的 rgce 指向）→ 宽松模式：上报 + 正常产出，不抛异常。
+        // 删被 _xlcn.LinkedTable_* 名的 rgce 指向的表 → 宽松模式：上报 + 正常产出，不抛异常。
         var file = XlsbTestFile.Build(BuildGraphSpec(graphXtiIndex: 0));
         var outPath = GetTempFile(".xlsb");
         try
@@ -651,9 +667,9 @@ public class DeleteSheetTests
     }
 
     [Fact]
-    public void Delete_XlsbGraph_OutOfGraphSheet_StrictSucceeds()
+    public void Delete_XlsbLinkedTable_AnySheet_StrictThrows()
     {
-        // 删图外表 + 严格模式 → 仍成功（真安全，无需降级放行）。
+        // 源含 `_xlcn.LinkedTable_*` 时，严格模式对任意删除都阻止（无法可靠预判安全性）。
         var file = XlsbTestFile.Build(BuildGraphSpec(graphXtiIndex: 0));
         var outPath = GetTempFile(".xlsb");
         try
@@ -661,9 +677,9 @@ public class DeleteSheetTests
             var opened = Excel.Open(file);
             opened.AllowFeatureLossOnSave = false;
             opened.Worksheets.First(w => w.Name == "S2").Delete();
-            opened.SaveAs(outPath, ExcelFormat.Xlsb);
-            Assert.True(File.Exists(outPath));
-            Assert.Empty(opened.SaveDegradations);
+            var ex = Assert.Throws<LiteExcelException>(() => opened.SaveAs(outPath, ExcelFormat.Xlsb));
+            Assert.Contains("AllowFeatureLossOnSave", ex.Message);
+            Assert.False(File.Exists(outPath));
         }
         finally
         {

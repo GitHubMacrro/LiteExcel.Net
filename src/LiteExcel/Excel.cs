@@ -901,20 +901,15 @@ public static class Excel
         {
             var needle = System.Text.Encoding.Unicode.GetBytes("_xlcn.LinkedTable_");
             workbook.SourceHasLinkedTableNames = IndexOf(wbBin, needle) >= 0;
-            bool unresolved = false;
             if (workbook.SourceHasLinkedTableNames)
-                ComputeDataModelSheetIndexes(wbBin, workbook.DataModelSheetIndexes, out unresolved);
-            workbook.DataModelGraphUnknown = unresolved;
+                ComputeDataModelSheetIndexes(wbBin, workbook.DataModelSheetIndexes);
         }
     }
 
     /// <summary>从 workbook.bin 计算「数据模型依赖图」工作表集：每个 `_xlcn.LinkedTable_*` 定义名的
-    /// rgce（`18 19 &lt;ixti&gt;`）经 BrtExternSheet(XTI) 指向的源表下标。删除这些表会触发 Excel 的
-    /// 整套定义名/XTI 规范化，库无法复刻；删除集合外的工作表则安全。
-    /// <paramref name="anyUnresolved"/> 表示存在带非空 rgce 却无法定位源表的连接名（保守起见应视为危险）。</summary>
-    private static void ComputeDataModelSheetIndexes(byte[] workbookBin, HashSet<int> result, out bool anyUnresolved)
+    /// rgce（`18 19 &lt;ixti&gt;`）经 BrtExternSheet(XTI) 指向的源表下标。仅用于删除风险提示的文字说明。</summary>
+    private static void ComputeDataModelSheetIndexes(byte[] workbookBin, HashSet<int> result)
     {
-        anyUnresolved = false;
         var records = Internal.Biff12.Biff12Records.ReadAll(workbookBin);
 
         // XTI 表（BrtExternSheet 0x016A）：cXti(u32) + 每项 (iSupBook u32, itabFirst u32, itabLast u32)
@@ -934,6 +929,7 @@ public static class Excel
             }
             break; // 仅首个 BrtExternSheet
         }
+        if (xti is null) return;
 
         // 每个 `_xlcn.LinkedTable_*` 定义名：解析 rgce 起始 `18 19 <ixti>`，取 XTI 项指向的源表范围。
         var prefix = "_xlcn.LinkedTable_";
@@ -950,9 +946,8 @@ public static class Excel
             if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
             int cce = (int)Internal.Biff12.Biff12Records.ReadU32(d, nameOff + cch * 2);
             int rgceOff = nameOff + cch * 2 + 4;
-            if (cce <= 0) continue; // 无 rgce（合成样本）→ 无图信息，不视为「未知」
-            bool resolved = false;
-            if (xti is not null && rgceOff + 4 <= d.Length && d[rgceOff] == 0x18 && d[rgceOff + 1] == 0x19)
+            if (cce <= 0) continue; // 无 rgce（合成样本）→ 无图信息
+            if (rgceOff + 4 <= d.Length && d[rgceOff] == 0x18 && d[rgceOff + 1] == 0x19)
             {
                 int ixti = d[rgceOff + 2] | (d[rgceOff + 3] << 8);
                 if (ixti >= 0 && ixti < xti.Count)
@@ -962,11 +957,9 @@ public static class Excel
                     {
                         int end = last < first ? first : last;
                         for (int s = first; s <= end; s++) result.Add(s);
-                        resolved = true;
                     }
                 }
             }
-            if (!resolved) anyUnresolved = true; // 有 rgce 但无法定位源表 → 保守视为危险
         }
     }
 
