@@ -1254,10 +1254,12 @@ Saving after deleting a worksheet is equivalent to Excel's own "delete sheet the
 - **xlsb → xlsm**: binary advanced parts such as pivot tables are preserved (tables are rebuilt).
 
 > ⚠️ **Known limitation (xlsb with Power Query / data model)**
-> If the source xlsb contains Power Query / data-model connection names (`_xlcn.LinkedTable_*`), deleting **any** worksheet and saving as xlsb may produce a file Excel refuses to open (`hr=0x800A03EC`). Excel performs a full "Save As" normalization of `workbook.bin` on such deletes (rebuilding the defined-name table / XTI / cache references / part renumbering), which the library cannot fully replicate; whether a given sheet is safe to delete **cannot be statically predicted** at save time.
-> - Lenient mode (`AllowFeatureLossOnSave=true`, default): reports `DegradationCapability.PivotTables` via `wb.SaveDegradations` and **still produces the file** (never throws);
-> - Strict mode (`AllowFeatureLossOnSave=false`): throws `LiteExcelException` to block the save;
-> - To delete sheets in such files, prefer deleting via Excel COM, or verify the output in Excel. See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for details.
+> If the source xlsb contains Power Query / data-model connection names (`_xlcn.LinkedTable_*`), **any operation that falls back to the full-rebuild path** may produce a file Excel refuses to open (`hr=0x800A03EC`): deleting a worksheet, inserting/deleting rows or columns, changing sheet visibility / tab color, adding or removing a super table on a data-model-referenced sheet, etc. Excel performs a full "Save As" normalization of `workbook.bin` for such operations (rebuilding the defined-name table / XTI / cache references / part renumbering), which the library cannot fully replicate and **cannot statically predict** at save time.
+> - The **surgical path is fixed and usable** (edit cell values, rename a sheet, append a plain worksheet) — these have been verified to open cleanly in Excel even on data-model xlsb files;
+> - Every rebuild-fallback operation is explicitly reported via `wb.SaveDegradations` (never silent):
+>   - Lenient mode (`AllowFeatureLossOnSave=true`, default): reports `DegradationCapability.PivotTables` and **still produces the file** (never throws);
+>   - Strict mode (`AllowFeatureLossOnSave=false`): throws `LiteExcelException` to block the save;
+> - To perform such operations on these files, prefer Excel COM, or verify the output in Excel. See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for details.
 
 ## 7.7 Sheet Visibility and Tab Color
 
@@ -2904,7 +2906,7 @@ When you open an existing file and save it, everything you did not change is **p
 
 Deleting a worksheet and saving goes through the same fidelity logic: the deleted sheet and its references are removed, everything else is preserved, and the result is equivalent to Excel's own "delete sheet then save" (xlsb likewise keeps pivot tables / connections / data model / VBA / tab colors in full).
 
-> ⚠️ **Exception (xlsb with Power Query / data model)**: when the source xlsb contains `_xlcn.LinkedTable_*` connection names, the output after deleting any worksheet may be refused by Excel (`0x800A03EC`) — Excel performs a full "Save As" normalization on such deletes that the library cannot fully replicate, and whether a sheet is safe to delete cannot be statically predicted. See the known-limitation note in [§7.6 Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete).
+> ⚠️ **Exception (xlsb with Power Query / data model)**: when the source xlsb contains `_xlcn.LinkedTable_*` connection names, the output after **any operation that falls back to the full-rebuild path** (deleting a worksheet, inserting/deleting rows or columns, changing visibility / tab color, adding or removing a super table, etc.) may be refused by Excel (`0x800A03EC`) — Excel performs a full "Save As" normalization that the library cannot fully replicate and cannot statically predict; the surgical path (cell edits / rename / append plain sheet) is fixed and usable. See the known-limitation note in [§7.6 Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete).
 
 Fidelity is more than keeping part bytes: the elements that reference them must survive too, otherwise a part is orphaned and Excel treats it as absent. The references below are written back verbatim on save, with relationship ids remapped whenever they get renumbered:
 

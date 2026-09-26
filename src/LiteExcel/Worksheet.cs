@@ -24,6 +24,11 @@ public sealed class Worksheet
     /// 打开文件时为 false；XLSB verbatim 保留路径用它判断是否可原样透传 sheetN.bin </summary>
     internal bool IsModified { get; set; }
 
+    /// <summary>超级表集合是否被增删（AddTable/RemoveTable）。
+    /// 手术式编辑/verbatim 路径只补丁单元格内容、并原样透传表部件，无法体现表的增删，
+    /// 故表集合变动时必须回退到重建路径。</summary>
+    internal bool TablesModified { get; set; }
+
     /// <summary>工作表名 </summary>
     public string Name { get; set; } = "Sheet1";
 
@@ -377,6 +382,7 @@ public sealed class Worksheet
         var tbl = CreateTableCore(refAddress, name);
         tbl.Style = style ?? TableStyleStyle.Medium9;
         AddTableInternal(tbl);
+        TablesModified = true;
         return tbl;
     }
 
@@ -386,6 +392,7 @@ public sealed class Worksheet
         var tbl = CreateTableCore(refAddress, name);
         tbl.CustomStyleName = styleName;
         AddTableInternal(tbl);
+        TablesModified = true;
         return tbl;
     }
 
@@ -397,6 +404,7 @@ public sealed class Worksheet
             if (string.Equals(_tables[i].Name, name, StringComparison.OrdinalIgnoreCase))
             {
                 _tables.RemoveAt(i);
+                TablesModified = true;
                 return true;
             }
         }

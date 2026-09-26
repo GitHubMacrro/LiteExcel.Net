@@ -601,7 +601,7 @@ public sealed class Workbook
             if (!string.Equals(sheets[i].SheetName, _openedSheetNames[i], System.StringComparison.Ordinal))
                 return false;
         foreach (var ws in Worksheets)
-            if (ws.IsModified)
+            if (ws.IsModified || ws.TablesModified)
                 return false;
         if (PreservedParts?.VerbatimBinaries is null) return false;
         if (!PreservedParts.VerbatimBinaries.ContainsKey("xl/workbook.bin")) return false;
@@ -638,7 +638,7 @@ public sealed class Workbook
 
         // 无任何工作表被修改
         foreach (var ws in Worksheets)
-            if (ws.IsModified) return false;
+            if (ws.IsModified || ws.TablesModified) return false;
 
         // 修改密码变动时需重建 workbook.bin
         if (Security.ModifyPasswordTouched || Security.HasModifyPassword) return false;
@@ -662,12 +662,16 @@ public sealed class Workbook
             if (sheets[i].OrigIndex != i) return false; // 打开时的表按原位置保留
         for (int i = opened; i < sheets.Count; i++)
             if (sheets[i].OrigIndex != -1) return false; // 其余必须为新增
+        // 新增表若含超级表，手术式路径写不出表部件，回退重建。
+        for (int i = opened; i < sheets.Count; i++)
+            if (Worksheets[i].TablesModified || (sheets[i].Tables is { Count: > 0 })) return false;
         bool anyChange = sheets.Count > opened;
         for (int i = 0; i < opened; i++)
         {
             bool nameChanged = !string.Equals(sheets[i].SheetName, _openedSheetNames[i], StringComparison.Ordinal);
             bool cellChanged = sheets[i].ModifiedCells is { Count: > 0 };
-            // 手术式编辑只支持「单元格内容修改」与「改表名」；其它修改（可见性/标签色/合并/导入等）回退重建。
+            // 手术式编辑只支持「改单元格内容」与「改表名」，超级表增删等其余修改一律回退重建。
+            if (Worksheets[i].TablesModified) return false;
             if (sheets[i].IsModified && !cellChanged && !nameChanged) return false;
             if (cellChanged || nameChanged) anyChange = true;
         }

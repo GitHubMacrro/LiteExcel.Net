@@ -287,6 +287,9 @@ internal static partial class XlsbWriter
             {
                 if (rebuilt.Contains(kv.Key)) continue;
                 if (imageEntries.Contains(kv.Key)) continue;
+                // 超级表部件由下方按模型重建写出，源里的同名部件必须跳过，否则会重复。
+                if (kv.Key.StartsWith("xl/tables/table", StringComparison.Ordinal)
+                    && kv.Key.EndsWith(".bin", StringComparison.Ordinal)) continue;
                 WriteEntry(zip, kv.Key, kv.Value);
             }
         }
@@ -859,7 +862,14 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
 
         // 计算编辑（offset, oldLen, newBytes）；newBytes 为 null 表示删除
         var edits = new List<(int Offset, int OldLen, byte[]? New)>();
-        var inserted = new List<(int Offset, byte[] New)>();
+        // 新增单元格按「插入锚点」聚合：同一锚点的新增必须合并为一次插入，否则多条记录会互相错位。
+        // 每个锚点内按行号、列号升序排列，新建行在该行首个单元格前补一条行头。
+        var insertByAnchor = new Dictionary<int, List<(int Row, int Col, byte[] Rec, bool NewRow)>>();
+        void AddInsert(int anchor, int row, int col, byte[] rec, bool newRow)
+        {
+            if (!insertByAnchor.TryGetValue(anchor, out var list)) { list = new List<(int, int, byte[], bool)>(); insertByAnchor[anchor] = list; }
+            list.Add((row, col, rec, newRow));
+        }
         foreach (var key in sheet.ModifiedCells!)
         {
             int r0 = (int)(key >> 32);
@@ -879,25 +889,25 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             }
             else if (!empty)
             {
-                // 新单元格：插入到该行 cell 记录中「按列有序」的位置
-                int insertOffset;
+                var recBytes = EncodeCellRecord(c0, 0, model!, sstIndex);
                 if (rowCellStart.TryGetValue(r0, out var cs) && rowCellEnd.TryGetValue(r0, out var ce))
                 {
+                    // 已有该行：插入到该行 cell 记录中「按列有序」的位置
                     int at = ce;
                     for (int i = cs; i < ce; i++)
                     {
                         int c = CellRecordCol(records, i);
                         if (c > c0) { at = i; break; }
                     }
-                    insertOffset = records[at].Start;
+                    AddInsert(records[at].Start, r0, c0, recBytes, newRow: false);
                 }
                 else if (rowHdrIndex.TryGetValue(r0, out var h))
                 {
-                    insertOffset = records[h].End;
+                    AddInsert(records[h].End, r0, c0, recBytes, newRow: false);
                 }
                 else
                 {
-                    // 新行：插到「按行有序」的位置（默认行头之后无 cell）
+                    // 新行：插到「按行有序」的位置（该行需先写一条行头）
                     int at = records.Count;
                     for (int i = 0; i < records.Count; i++)
                     {
@@ -905,35 +915,51 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                         if (records[i].Rt == BrtRowHdr && records[i].Data.Length >= 4
                             && Biff12Records.ReadS32(records[i].Data, 0) > r0) { at = i; break; }
                     }
-                    var rowBytes = new MemoryStream();
-                    WriteRecord(rowBytes, BrtRowHdr, RowHdr(r0, c0, c0, sheet, r0));
-                    rowBytes.Write(EncodeCellRecord(c0, 0, model!, sstIndex), 0, EncodeCellRecord(c0, 0, model!, sstIndex).Length);
-                    inserted.Add((records[at].Start, rowBytes.ToArray()));
-                    continue;
+                    AddInsert(records[at].Start, r0, c0, recBytes, newRow: true);
                 }
-                inserted.Add((insertOffset, EncodeCellRecord(c0, 0, model!, sstIndex)));
             }
+        }
+        // 汇总插入：每个锚点内按行、列升序拼接；新建行在其首个单元格前补一条行头。
+        var inserted = new List<(int Offset, byte[] New)>();
+        foreach (var kv in insertByAnchor)
+        {
+            int anchor = kv.Key;
+            var list = kv.Value;
+            list.Sort((a, b) => a.Row != b.Row ? a.Row.CompareTo(b.Row) : a.Col.CompareTo(b.Col));
+            using var ms2 = new MemoryStream();
+            int i = 0;
+            while (i < list.Count)
+            {
+                int row = list[i].Row;
+                int j = i;
+                while (j < list.Count && list[j].Row == row) j++;
+                if (list[i].NewRow)
+                {
+                    int minCol = list[i].Col, maxCol = list[j - 1].Col;
+                    WriteRecord(ms2, BrtRowHdr, RowHdr(row, minCol, maxCol, sheet, row));
+                }
+                for (int k = i; k < j; k++) ms2.Write(list[k].Rec, 0, list[k].Rec.Length);
+                i = j;
+            }
+            inserted.Add((anchor, ms2.ToArray()));
         }
 
         if (edits.Count == 0 && inserted.Count == 0) return orig;
 
-        // 应用：先处理替换/删除（按 offset 降序），再处理插入（按 offset 降序）
+        // 替换与插入合并为单趟、按 offset 降序应用：低位的替换可能改变记录长度，
+        // 若插入另起一趟仍按原始坐标落点，就会提前切断记录。
+        var ops = new List<(int Offset, int OldLen, byte[]? New)>(edits.Count + inserted.Count);
+        ops.AddRange(edits);
+        foreach (var (offset, newBytes) in inserted) ops.Add((offset, 0, newBytes));
+
         var result = orig;
-        foreach (var (offset, oldLen, newBytes) in edits.OrderByDescending(e => e.Offset))
+        foreach (var (offset, oldLen, newBytes) in ops.OrderByDescending(o => o.Offset))
         {
             int newLen = newBytes?.Length ?? 0;
             var buf = new byte[offset + newLen + (result.Length - offset - oldLen)];
             Array.Copy(result, 0, buf, 0, offset);
             if (newBytes is not null) Array.Copy(newBytes, 0, buf, offset, newLen);
             Array.Copy(result, offset + oldLen, buf, offset + newLen, result.Length - offset - oldLen);
-            result = buf;
-        }
-        foreach (var (offset, newBytes) in inserted.OrderByDescending(e => e.Offset))
-        {
-            var buf = new byte[offset + newBytes.Length + (result.Length - offset)];
-            Array.Copy(result, 0, buf, 0, offset);
-            Array.Copy(newBytes, 0, buf, offset, newBytes.Length);
-            Array.Copy(result, offset, buf, offset + newBytes.Length, result.Length - offset);
             result = buf;
         }
         return result;
@@ -2244,7 +2270,16 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         string original = "";
         if (preserved is not null && preserved.Rels.TryGetValue($"xl/worksheets/_rels/sheet{sheetNumber}.bin.rels", out var r))
             original = r;
-        return XlsxWriter.MergeRelsXml(original, "xl/worksheets", new HashSet<string>(StringComparer.Ordinal), rebuilt);
+        // 源里的 table 关系需被重建产物替换：否则旧的 rId 关系会与重建的并存，
+        // 且与工作表记录中的 BrtTablePart 引用不一致。
+        var rebuiltTargets = new HashSet<string>(StringComparer.Ordinal);
+        if (sheet?.Tables is { Count: > 0 } && !string.IsNullOrEmpty(original))
+        {
+            foreach (var rel in XlsxWriter.ParseRels(original))
+                if (rel.Type.EndsWith("/table", StringComparison.OrdinalIgnoreCase))
+                    rebuiltTargets.Add(XlsxWriter.ResolveRelsTarget("xl/worksheets", rel.Target));
+        }
+        return XlsxWriter.MergeRelsXml(original, "xl/worksheets", rebuiltTargets, rebuilt);
     }
 
     /// <summary>xlsb 目标写出时，源为 XML-OOXML（xlsx/xlsm）的保留部件（透视表/切片器/连接/表格/查询表等）

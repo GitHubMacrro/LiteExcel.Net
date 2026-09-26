@@ -131,4 +131,79 @@ public class XlsbTableTests
         }
         finally { if (File.Exists(file)) File.Delete(file); }
     }
+
+    [Fact]
+    public void Xlsb_Table_AddOnOpenedWorkbook_Persists()
+    {
+        // 回归：在打开的文件上 AddTable 曾因未标记工作表修改而被手术式路径丢弃，新表必须落盘。
+        var baseFile = GetTempFile(".xlsb");
+        var outFile = GetTempFile(".xlsb");
+        try
+        {
+            {
+                var wb = Excel.Create(ExcelFormat.Xlsb);
+                var ws = wb.Worksheets[0];
+                ws.Name = "S0";
+                ws.SetValue("A1", "h"); ws.SetValue("A2", "a");
+                ws.AddTable("A1:A2", "TblA");
+                wb.SaveAs(baseFile, ExcelFormat.Xlsb);
+            }
+
+            var wb2 = Excel.Open(baseFile);
+            var ws2 = wb2.Worksheets[0];
+            ws2.SetValue("C1", "H"); ws2.SetValue("C2", "v");
+            ws2.AddTable("C1:C2", "TblB");
+            wb2.AllowFeatureLossOnSave = true;
+            wb2.SaveAs(outFile, ExcelFormat.Xlsb);
+
+            Assert.Equal(2, Excel.Open(outFile).Worksheets[0].ToSheetData().Tables.Count);
+        }
+        finally
+        {
+            if (File.Exists(baseFile)) File.Delete(baseFile);
+            if (File.Exists(outFile)) File.Delete(outFile);
+        }
+    }
+
+    [Fact]
+    public void Xlsb_Table_AddOnNewSheetOfOpenedWorkbook_NoDuplicateParts()
+    {
+        // 回归：新表上加超级表曾产生重复的表部件与残留关系；现要求包内无重复条目、两表均可读回。
+        var baseFile = GetTempFile(".xlsb");
+        var outFile = GetTempFile(".xlsb");
+        try
+        {
+            {
+                var wb = Excel.Create(ExcelFormat.Xlsb);
+                var s0 = wb.Worksheets[0];
+                s0.Name = "S0";
+                s0.SetValue("A1", "h"); s0.SetValue("A2", "a");
+                s0.AddTable("A1:A2", "TblA");
+                var s1 = wb.Worksheets.Add("S1");
+                s1.SetValue("A1", "x");
+                wb.SaveAs(baseFile, ExcelFormat.Xlsb);
+            }
+
+            var wb2 = Excel.Open(baseFile);
+            var s2 = wb2.Worksheets.Add("S2");
+            s2.SetValue("A1", "H"); s2.SetValue("A2", "v");
+            s2.AddTable("A1:A2", "TblC");
+            wb2.AllowFeatureLossOnSave = true;
+            wb2.SaveAs(outFile, ExcelFormat.Xlsb);
+
+            using (var zip = ZipFile.OpenRead(outFile))
+            {
+                var names = zip.Entries.Select(e => e.FullName).ToList();
+                Assert.Equal(names.Count, names.Distinct().Count());
+                Assert.Equal(2, names.Count(n => n.StartsWith("xl/tables/table") && n.EndsWith(".bin")));
+            }
+            Assert.Single(Excel.Open(outFile).Worksheets["S0"].ToSheetData().Tables);
+            Assert.Single(Excel.Open(outFile).Worksheets["S2"].ToSheetData().Tables);
+        }
+        finally
+        {
+            if (File.Exists(baseFile)) File.Delete(baseFile);
+            if (File.Exists(outFile)) File.Delete(outFile);
+        }
+    }
 }

@@ -21,6 +21,10 @@
 - **跨格式静默丢弃高级部件**（违反保真契约）：源为 xlsb、目标为非 xlsb 时，含透视表/切片器/连接/Power Query/数据模型等高级部件此前会被静默丢弃。阶段 A 改为显式上报 `DegradationCapability.PivotTables`（记入 `Workbook.SaveDegradations`），`AllowFeatureLossOnSave=false` 时阻止保存；阶段 C/D/E 落地后这些部件已可转码保留，对 xlsx/xlsm 目标不再上报/阻止（可用 `LITEXCEL_DISABLE_PIVOT_WIRING=1` 回退到丢弃+上报）。
 - **高级部件检测扩展**：`SourceHasAdvancedXlsbParts` 现同时覆盖工作簿级部件（`pivotCache` / `pivotTables` / `slicerCaches` / `slicers` / `queryTables` / `connections` / 数据模型），而非仅工作表 rels 中的透视/切片引用。
 - **手术式删表残留孤立缓存引用 END 记录**：`workbook.bin` 中缓存引用是 BEGIN/END 成对记录（透视缓存 `0x0182`/`0x0183`、数据模型缓存 `0x046D`/`0x046E`、切片缓存 `0x0430`/`0x0431`）。此前 `ModifyWorkbookBin` 在缓存目标被删时只移除 BEGIN、未移除其紧邻的 END，产出结构性非法的孤立 END 记录。现删 BEGIN 时同步移除紧邻 END。
+- **手术式编辑单元格补丁的坐标错位**：字节补丁把「替换/删除」与「新增单元格」分两趟按原始缓冲区坐标应用。当某个替换改变了记录长度（如 `CellIsst` 14 字节 → `CellSt` 16 字节）后，后续新增的原始坐标失效 → 插入落点提前、切断记录产生乱码记录，Excel 打开报修复/拒绝。现合并为**单趟按 offset 降序**应用，保证每个操作只影响其之后的字节。
+- **手术式编辑新建行的重复行头**：向新行写多个单元格时，此前每个单元格各写一条 `BrtRowHdr`（同一行重复行头）且列序颠倒，Excel 拒绝打开。现按「插入锚点」聚合：同一锚点的所有新增合并为一次插入，新建行先写**一条** `BrtRowHdr` 再跟按列升序的单元格记录。
+- **超级表在「打开-修改-另存」时被静默丢弃**：`AddTable`/`RemoveTable` 此前未标记工作表修改，导致 xlsb 手术式编辑/verbatim 路径原样透传旧 `sheetN.bin`，新增/删除的超级表被静默丢弃（模型已有新表、产出却没有）。现标记 `TablesModified`，凡表集合变动一律回退到重建路径正确写出。
+- **重建路径写超级表的重复部件与残留关系**：源已含 `xl/tables/tableN.bin` 时，重建路径既重建又原样透传 → zip **重复条目**；且源工作表 rels 的 table 关系未被替换，与重建的关系并存 → 同一表两个关系、与 `BrtTablePart` 引用不一致，Excel 拒绝打开。现重建路径跳过源 table 部件、并将源 table 关系目标纳入重建替换集。
 
 ### Notes
 
@@ -33,13 +37,16 @@
     - 严格模式（`AllowFeatureLossOnSave=false`）→ **抛 `LiteExcelException` 阻止**，提示设回 `true` 后重试即可正常保存。
   - **`Workbook.DataModelSheetIndexes`**：打开时解析每个 `_xlcn.LinkedTable_*` 名的 rgce 经 XTI 指向的源表，仅用于在警告文案中标注「哪些表属于数据模型依赖图」，**不用于放行判断**（它不能可靠区分安全/危险删除）。
   - **建议**：如需在含 PQ 数据模型的 xlsb 上删除工作表，请改用 Excel COM 直接执行删除，或删除后用 Excel 验证输出。
+- **⚠️ 已知限制的范围补充（2026-09-25 实测）**：上述「无法复刻 Excel 另存为规范化」的限制**不止于删表**。任何使 xlsb 写入**回退到整本重建路径**的操作（删除工作表、插入/删除行列、修改工作表可见性/标签色、向被数据模型引用的表增删超级表等），在**含 Power Query / 数据模型**的 xlsb 上都可能产出 Excel 拒开的文件。反之，**手术式路径**（仅改单元格内容、改表名、末尾追加普通工作表）已修复并通过 Excel 验证可用。所有回退重建的操作都会经 `SaveDegradations` 显式上报（不静默）。不含高级部件的普通 xlsb 上，重建路径工作正常。
 
 ### Tests
 
 - 新增 `XlsbToXlsxConversionTests`（7 项）：格式无关部件直通 + 关系重写；drawing XML 排除 / VML 保留；透视表部件转码保留；VBA 按目标格式取舍。含包完整性断言（无悬空关系、部件均有内容类型声明）。
 - 新增 `XlsbConnectionTranscoderTests`、`XlsbPivotCacheTranscoderTests`、`XlsbPivotTableTranscoderTests`、`XlsbSlicerTranscoderTests` 等阶段 C/D/E 转码测试（含真实文件断言，CI 无样本时跳过）。
 - `DeleteSheetTests`：源含 `_xlcn.LinkedTable_*` 时删除任意工作表——宽松模式警告且产出、严格模式抛异常；另含手术式删除的重编号 / pivot cacheId / `_xlcn` 名保留等回归用例。
-- 全量 **743** 测试（net8.0，全部通过）；net48 构建通过。
+- 新增 `SurgicalEditCellPatchTests`（3 项）：手术式编辑「替换+新增混合」不产生乱码记录、新建行块每行仅一条行头、记录缩短后后续插入坐标不错位。
+- `XlsbTableTests` 新增「打开的文件上 AddTable 持久化」「新表上 AddTable 无重复 zip 条目」回归。
+- 全量 **748** 测试（net8.0，全部通过）；net48 构建通过。
 
 ## [2.4.77] - 2026-09-18
 
