@@ -4,6 +4,7 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![CI](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
+![Native AOT](https://img.shields.io/badge/Native%20AOT-compatible-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A lightweight .NET library to read and write xlsx / xlsm / xlsb / xls / csv without installing Excel. Zero third-party dependencies, targets net48 and net8.0, AOT friendly.

@@ -4,6 +4,7 @@
 [![NuGet 下载量](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![CI](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
+![Native AOT](https://img.shields.io/badge/Native%20AOT-compatible-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 轻量级 .NET 库，无需安装 Excel 即可读写 xlsx / xlsm / xlsb / xls / csv 五种格式。零第三方依赖，net48 与 net8.0 双目标，AOT 友好。
