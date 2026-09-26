@@ -1338,15 +1338,13 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("临时")).ToList(
 
 - **xlsx / xlsm**：完整保留其余高级部件（透视表 / 图表 / 切片器 / ActiveX / 宏）。
 - **xlsb**：删除 XLSB 工作表后保存为 xlsb，同样完整保留透视表、透视缓存、超级表、连接、数据模型和 VBA 宏。
-- **xlsb → xlsm**：透视表等二进制部件保留（超级表转为重建）。
+- **xlsb → xlsm**：透视表、切片器、连接、数据模型等高级部件也会保留。
 
 > ⚠️ **已知限制（含 Power Query / 数据模型的 xlsb）**
-> 若源 xlsb 含 Power Query / 数据模型连接名（`_xlcn.LinkedTable_*`），**任何使保存回退到「整本重建」路径**的操作都可能产出 Excel 拒开的文件（`hr=0x800A03EC`）：删除工作表、插入/删除行列、修改工作表可见性/标签色、向被数据模型引用的表增删超级表等。原因是 Excel 会对 `workbook.bin` 做**整套「另存为」规范化**（重建定义名表 / XTI / 缓存引用 / 部件重编号等），库当前**无法完全复刻**，且**无法在保存时静态预判**。
-> - **手术式路径已修复且可用**（仅改单元格内容、改表名、末尾追加普通工作表）——这些操作在含数据模型的 xlsb 上经 Excel 验证可正常打开；
-> - 所有回退重建的操作都会经 `wb.SaveDegradations` 显式上报（不静默）：
->   - 宽松模式（默认 `AllowFeatureLossOnSave=true`）→ 上报 `DegradationCapability.PivotTables` 警告并**正常产出**（不抛异常）；
->   - 严格模式（`AllowFeatureLossOnSave=false`）→ 抛 `LiteExcelException` 阻止；
-> - 如需在此类文件上执行上述操作，建议改用 Excel COM 直接操作，或操作后用 Excel 验证输出。详见 [§20.5 打开-保存保真](#205-打开-保存保真)。
+> 在包含 Power Query 或数据模型的 .xlsb 文件中，**删除工作表、插入/删除行列、修改工作表可见性或标签颜色、增删超级表**等操作之后另存，生成的文件可能无法被 Excel 打开。
+> - 修改单元格内容、重命名工作表、在末尾追加普通工作表**不受此限制**，可正常使用；
+> - 上述受限操作默认会**正常产出文件**，并在 `wb.SaveDegradations` 中记录提示（不静默）；设 `wb.AllowFeatureLossOnSave = false` 可改为抛 `LiteExcelException` 阻止保存；
+> - 如需在此类文件上执行受限操作，建议改用 Excel 直接操作，或操作后用 Excel 验证输出。详见 [§20.5 打开-保存保真](#205-打开-保存保真)。
 
 ## 7.7 工作表可见性与标签颜色
 
@@ -1361,7 +1359,7 @@ wb.SaveAs("out.xlsx");
 - `Visible`：`Visible`（默认）/ `Hidden` / `VeryHidden`。**xlsx / xlsm / xlsb / xls 四格式读写**。
 - `TabColor`：xlsx / xlsm 读写；**xlsb / xls 不支持标签颜色**，写出时经 `DegradationCapability.SheetVisibility` 上报后丢弃。
 - 守卫：把工作簿**最后一张可见表**设为隐藏会抛 `LiteExcelException`（Excel 要求至少保留一张可见表）。
-- 修改可见性/标签颜色会标记工作表为已修改，从而正确禁用 xlsb 的原样（verbatim）保存路径，确保变更真正落盘。
+- 修改可见性/标签颜色会标记工作表为已修改，确保变更真正写入文件。
 
 ---
 
@@ -2832,6 +2830,8 @@ True structure=True hasPwd=False
 | 自动列宽（AutoFitColumns / AutoColumnWidths） | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 图例：☑️ 支持 · ❌ 不支持 · 单元格内文字表示部分支持
 
+> **跨格式转换**：打开 .xlsb 后另存为 .xlsx / .xlsm 时，透视表、切片器、数据查询（Power Query）、数据模型、图形等高级内容也会一并保留（见 [§20.5](#205-打开-保存保真)）。
+
 写出到 csv 时接通降级回调，观察被丢弃的能力：
 
 ```csharp
@@ -2858,7 +2858,7 @@ Excel.Write("matrix.csv", wb, new ExcelWriteOptions
 xls / xlsb 写出时按格式与路径区分：
 
 - **xlsb 重建写出**（新建 / 编辑单元格后保存）：样式降级为仅保留 `NumberFormat`；批注 / 数据验证 / 超级表 / 浮动图片已支持写出；条件格式支持全部 18 种 OOXML 规则类型（cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / 文本类 / 空值类 / 错误类 / uniqueValues / duplicateValues / timePeriod / textLength）；命名区域仅读回、不写出；**InCell 图片**被丢弃；公式文本不保留，按缓存值写出。丢弃项经 `OnDegradation` 显式上报（见第 22 章）。
-- **xlsb 打开-保存 / 删表**（verbatim / 手术式）：单元格与全部保留部件原样透传，条件格式 / 图片 / 透视表 / 图表 / 切片器等**完整保留**，无降级上报。
+- **xlsb 打开-保存 / 删表**：未改动的内容原样保留，条件格式 / 图片 / 透视表 / 图表 / 切片器等**完整保留**，无降级上报。
 - **xls 写出**：样式降级为仅保留 `NumberFormat`；批注支持写出；数据验证 / 超级表 / 条件格式 / 图片 / 命名区域被丢弃；公式文本不保留，按缓存值写出。这些降级经 `OnDegradation` 显式上报（见第 22 章）。
 
 > **xls 工作表尺寸上限**：`xls`（BIFF8）最多 256 列 / 65536 行。超出上限的数据（含远超数据范围的列宽声明）在写出时被裁剪，经 `DegradationCapability.SheetSize` 上报。
@@ -2964,28 +2964,17 @@ catch (LiteExcelException ex)
 
 ## 20.5 打开-保存保真
 
-打开已有文件再保存时，未改动的内容会被**原样保留**，不会因为库不认识它而丢失。这包括宏、图表、透视表、透视缓存、超级表、切片器、外部连接、数据模型、自定义 XML、工作表标签颜色、样式等高级部件。改表名不再丢图表关联；追加数据不再丢宏。
+打开已有文件再保存时，未改动的内容会被**原样保留**，不会因为库不认识它而丢失。这包括宏、图表、透视表、透视缓存、超级表、切片器、外部连接、数据模型、自定义 XML、工作表标签颜色、样式等高级内容。改表名不再丢图表关联；追加数据不再丢宏。
 
 删除工作表后保存也走同一套保真逻辑：被删表及其引用被摘除，其余内容完整保留，结果与 Excel 自身「删除工作表后另存」等价（xlsb 同样完整保留透视表 / 连接 / 数据模型 / VBA / 标签颜色）。
 
-> ⚠️ **例外（含 Power Query / 数据模型的 xlsb）**：源 xlsb 含 `_xlcn.LinkedTable_*` 连接名时，**任何回退到「整本重建」路径**的操作（删除工作表、插入/删除行列、改可见性/标签色、增删超级表等）后的输出**可能被 Excel 拒开**（`0x800A03EC`）——Excel 对此会做整套「另存为」规范化，库无法完全复刻且无法静态预判；手术式路径（改单元格内容/改表名/末尾追加普通表）已修复可用。详见 [§7.6 删除整张工作表](#76-删除整张工作表-worksheetdelete) 的已知限制说明。
+**跨格式转换**：打开 .xlsb 文件后另存为 .xlsx 或 .xlsm 时，除了普通数据和样式，透视表、透视缓存、切片器、数据查询（Power Query）、数据模型、图形（含 ActiveX 形状）、条件格式等也会尽量保留，在 Excel 中可正常打开。若需要回到旧行为（丢弃这些内容并记录提示），可设置环境变量 `LITEXCEL_DISABLE_PIVOT_WIRING=1`。
 
-保真不只是留下部件字节，引用它们的元素同样要保留，否则部件成孤儿、Excel 视同不存在。以下引用均随保存原样回写，关系编号被重排时同步改写：
+> ⚠️ **例外（含 Power Query / 数据模型的 xlsb）**：在包含 Power Query 或数据模型的 .xlsb 文件中，**删除工作表、插入/删除行列、修改工作表可见性或标签颜色、增删超级表**等操作之后另存，生成的文件可能无法被 Excel 打开。修改单元格内容、重命名工作表、在末尾追加普通工作表不受影响。详见 [§7.6 删除整张工作表](#76-删除整张工作表-worksheetdelete) 的已知限制说明。
 
-| 引用元素 | 所在部件 | 指向 |
-| :--- | :--- | :--- |
-| `<drawing>` | `sheet{N}.xml` | 绘图部件（图表 / 形状 / 图片） |
-| `<pivotCaches>` | `workbook.xml` | 透视表缓存定义 |
-| `<externalReferences>` | `workbook.xml` | 跨工作簿外部链接 |
-| `<bookViews>` / `<definedNames>` | `workbook.xml` | 窗口视图 / 命名区域 |
-| `<extLst>`（`x14:slicerCaches`） | `workbook.xml` | 切片器 / 日程表缓存 |
-| `<extLst>`（`x14:slicerList`） | `sheet{N}.xml` | 工作表级切片器 |
-| `<sheet>` 的 `sheetId` / `state` | `workbook.xml` | 工作表标识 / 可见性（切片器缓存以 `tabId` 引用，重排会导致孤儿） |
-| `styles.xml` 原样透传 | `xl/styles.xml` | 切片器样式 / 时间线样式 / 透视表按钮 XF（含 `extLst` 扩展样式时原样保留，否则重建） |
-| `sheet{N}.xml` / `sharedStrings.xml` 原样透传 | `xl/worksheets/sheet{N}.xml` | 稀疏单元格布局与绝对引用（与 `styles.xml` 一致判定，未修改时原样保留） |
-| `workbook.bin` / `styles.bin` / `sheet{N}.bin` 原样透传 | XLSB 包内二进制部件 | BIFF12 透视表 / 切片器宿主记录（未修改 + 结构未变时原样保留，否则重建） |
+保真不只是留下内容本身，这些内容之间的关联也会一并保留，Excel 打开时不会出现丢失或错乱。
 
-> **XLS 透视表降级**：源 .xls 文件包含透视表（检测到 `SXVIEW` 记录）时，当前模型无法保真写回或转换 BIFF8 透视表，透视表会被丢弃并记录到 `wb.SaveDegradations`（默认放行）；设 `wb.AllowFeatureLossOnSave = false` 可改为抛 `LiteExcelException` 阻止。
+> **XLS 透视表降级**：源 .xls 文件包含透视表时，当前无法保真写回或转换，透视表会被丢弃并记录到 `wb.SaveDegradations`（默认放行）；设 `wb.AllowFeatureLossOnSave = false` 可改为抛 `LiteExcelException` 阻止。
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // 打开包含宏的 xlsm
@@ -3245,7 +3234,7 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 - **内存模型**：`Excel.Open` / `Excel.Create` 返回的 `Workbook` 是内存模型，整簿加载到内存。超大文件请用流式 API 而非 `Excel.Open`。
 - **流式写入范围**：`Excel.CreateWriter` / `Excel.Append` 仅支持 xlsx / xlsm。
 - **统一读取门面**：`Excel.Read<T>`、`Excel.ReadSheet`、`Excel.ReadAsDataTable`、`Excel.StreamRows` 和 `Excel.EnumerateRows` 支持按路径自动路由 xlsx/xlsm/xlsb/xls；从流读取时须显式传入 `ExcelFormat`。
-- **四格式流式读取**：xlsx/xlsm 使用 XML reader 逐行 yield；xlsb 使用 BIFF12 记录级逐行 yield；xls 使用 BIFF8 记录级逐行 yield。三种格式均支持 `Take(n)` / `First()` / `break` 提前终止，不驻留完整行数据。SST 和样式表仍预加载（工作簿级共享）。
+- **四格式流式读取**：xlsx/xlsm、xlsb、xls 均支持逐行读取并提前终止（`Take(n)` / `First()` / `break`），不驻留完整行数据。共享字符串与样式表仍预加载（工作簿级共享）。
 - **超链接数量**：流式写入器在超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
 - **追加**：`Excel.Append` 会读取整个既有文件再写出，适合中小文件增量追加。
 

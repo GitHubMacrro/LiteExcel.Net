@@ -44,6 +44,7 @@ Below are files written by LiteExcel, opened in Excel:
 - One object model across five formats; the same code with a different format argument writes xls or csv.
 - Covers common office needs: styles, number formats, merge, filter, row/column sizing, comments, data validation, hyperlinks, freeze panes, images, conditional formatting, tables, named ranges, formulas, file passwords, large-file streaming.
 - Open-then-save preserves untouched parts; macros, charts, pivot tables, the data model, and external connections pass through for xlsx / xlsm / xlsb.
+- Cross-format conversion keeps advanced content: opening an .xlsb and saving as .xlsx / .xlsm preserves pivot tables, slicers, Power Query queries, the data model, and shapes.
 - File-level security: open and modify passwords, sheet and workbook protection with optional password.
 - Streaming read and write keep memory flat for large files.
 - When writing to xls / xlsb / csv, capabilities the target format lacks are reported item by item, never silently dropped.
@@ -108,6 +109,7 @@ Legend: ☑️ supported · ❌ not supported · text in a cell means partial su
 | Large-file streaming read | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Large-file streaming write | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 
+> When you open an .xlsb and save it as .xlsx / .xlsm, pivot tables, slicers, Power Query queries, the data model, shapes, and other advanced content are preserved too.
 > The full breakdown is in the [usage guide §20.1](docs/USAGE.en.md#201-format-capability-matrix).
 
 ## Compatibility
@@ -120,7 +122,7 @@ Legend: ☑️ supported · ❌ not supported · text in a cell means partial su
 1. **Read entry**: `Excel.Read<T>` supports xlsx / xlsm only; for xls / xlsb / csv use `Excel.Open` which routes by extension.
 2. **CSV**: single sheet, plain text, no styles, all values read back as text.
 3. **Passwords & macros**: xls has no password support; workbooks with macros can only be saved as xlsm or xlsb.
-4. **Charts & pivot tables**: preserved but not edited; xlsx / xlsm / xlsb keep them on open-then-save, xls / csv drop them.
+4. **Charts & pivot tables**: preserved but not edited; they are kept as-is on open-then-save. When you open an .xlsb and save it as .xlsx / .xlsm, pivot tables, slicers, Power Query queries, and the data model are preserved too; xls / csv drop them.
 5. **Streaming & append**: xlsx / xlsm only.
 
 ## Run the Demo

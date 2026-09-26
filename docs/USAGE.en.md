@@ -1251,15 +1251,13 @@ Saving after deleting a worksheet is equivalent to Excel's own "delete sheet the
 
 - **xlsx / xlsm**: all remaining advanced parts (pivot tables, charts, slicers, ActiveX, macros) are fully preserved.
 - **xlsb**: deleting an XLSB worksheet and saving as xlsb preserves pivot tables, pivot caches, tables, connections, the data model, and VBA macros.
-- **xlsb → xlsm**: binary advanced parts such as pivot tables are preserved (tables are rebuilt).
+- **xlsb → xlsm**: pivot tables, slicers, connections, the data model, and other advanced parts are preserved too.
 
 > ⚠️ **Known limitation (xlsb with Power Query / data model)**
-> If the source xlsb contains Power Query / data-model connection names (`_xlcn.LinkedTable_*`), **any operation that falls back to the full-rebuild path** may produce a file Excel refuses to open (`hr=0x800A03EC`): deleting a worksheet, inserting/deleting rows or columns, changing sheet visibility / tab color, adding or removing a super table on a data-model-referenced sheet, etc. Excel performs a full "Save As" normalization of `workbook.bin` for such operations (rebuilding the defined-name table / XTI / cache references / part renumbering), which the library cannot fully replicate and **cannot statically predict** at save time.
-> - The **surgical path is fixed and usable** (edit cell values, rename a sheet, append a plain worksheet) — these have been verified to open cleanly in Excel even on data-model xlsb files;
-> - Every rebuild-fallback operation is explicitly reported via `wb.SaveDegradations` (never silent):
->   - Lenient mode (`AllowFeatureLossOnSave=true`, default): reports `DegradationCapability.PivotTables` and **still produces the file** (never throws);
->   - Strict mode (`AllowFeatureLossOnSave=false`): throws `LiteExcelException` to block the save;
-> - To perform such operations on these files, prefer Excel COM, or verify the output in Excel. See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for details.
+> In an .xlsb file that contains Power Query or a data model, operations such as **deleting a worksheet, inserting/deleting rows or columns, changing sheet visibility or tab color, or adding/removing a super table** followed by a save may produce a file Excel cannot open.
+> - Editing cell values, renaming a sheet, and appending a plain worksheet **are not affected** and work normally;
+> - The restricted operations above **still produce the file** by default and record a note in `wb.SaveDegradations` (never silent); set `wb.AllowFeatureLossOnSave = false` to throw `LiteExcelException` and block the save instead;
+> - To perform restricted operations on such files, prefer doing it in Excel, or verify the output in Excel. See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for details.
 
 ## 7.7 Sheet Visibility and Tab Color
 
@@ -1274,7 +1272,7 @@ wb.SaveAs("out.xlsx");
 - `Visible`: `Visible` (default) / `Hidden` / `VeryHidden`. **Read/write for xlsx / xlsm / xlsb / xls**.
 - `TabColor`: read/write for xlsx / xlsm; **xlsb / xls do not support tab color** — reported via `DegradationCapability.SheetVisibility` and dropped on write.
 - Guard: setting the **last visible sheet** to hidden throws `LiteExcelException` (Excel requires at least one visible sheet).
-- Changing visibility/tab color marks the worksheet as modified, which correctly disables the xlsb verbatim save path so the change is actually persisted.
+- Changing visibility/tab color marks the worksheet as modified, so the change is actually written to the file.
 
 ---
 
@@ -2769,6 +2767,8 @@ The table below lists the support status of each capability across formats. Capa
 | Degradation reporting (OnDegradation) | n/a | n/a | ☑️ | ☑️ | ☑️ |
 | Auto column width (AutoFitColumns / AutoColumnWidths) | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 
+> **Cross-format conversion**: when you open an .xlsb and save it as .xlsx / .xlsm, pivot tables, slicers, Power Query queries, the data model, shapes, and other advanced content are preserved too (see [§20.5](#205-open-save-fidelity)).
+
 Write to csv with the degradation callback connected to observe discarded capabilities:
 
 ```csharp
@@ -2795,7 +2795,7 @@ Output:
 Writing to xls / xlsb depends on the format and the code path:
 
 - **xlsb rebuild write** (new workbook / edited cells): styles degrade to `NumberFormat` only; comments / data validation / tables / floating images are written; conditional formatting supports all 18 OOXML rule types (cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / text / blanks / errors / uniqueValues / duplicateValues / timePeriod / textLength); named ranges are read-back only (not written); **InCell images** are dropped; formula text is not kept and is written as the cached value. Dropped items are reported via `OnDegradation` (see Chapter 22).
-- **xlsb open-save / sheet delete** (verbatim / surgical): cells and all preserved parts pass through untouched — conditional formatting / images / pivot tables / charts / slicers are **fully preserved**, with no degradation reported.
+- **xlsb open-save / sheet delete**: unchanged content is preserved as-is — conditional formatting / images / pivot tables / charts / slicers are **fully preserved**, with no degradation reported.
 - **xls write**: styles degrade to `NumberFormat` only; comments are written; data validation / tables / conditional formatting / images / named ranges are dropped; formula text is not kept and is written as the cached value. These degradations are reported via `OnDegradation` (see Chapter 22).
 
 > **xls sheet size limit**: `xls` (BIFF8) supports at most 256 columns / 65536 rows. Data beyond the limit (including column-width declarations that extend far past the data range) is truncated on write and reported via `DegradationCapability.SheetSize`.
@@ -2902,28 +2902,17 @@ Cannot write Csv: Csv format does not support file-level passwords (open passwor
 
 ## 20.5 Open-Save Fidelity
 
-When you open an existing file and save it, everything you did not change is **preserved as-is** — nothing is lost just because the library does not understand it. This covers macros, charts, pivot tables, pivot caches, tables, slicers, external connections, the data model, custom XML, sheet tab colors, styles, and other advanced parts. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros.
+When you open an existing file and save it, everything you did not change is **preserved as-is** — nothing is lost just because the library does not understand it. This covers macros, charts, pivot tables, pivot caches, tables, slicers, external connections, the data model, custom XML, sheet tab colors, styles, and other advanced content. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros.
 
 Deleting a worksheet and saving goes through the same fidelity logic: the deleted sheet and its references are removed, everything else is preserved, and the result is equivalent to Excel's own "delete sheet then save" (xlsb likewise keeps pivot tables / connections / data model / VBA / tab colors in full).
 
-> ⚠️ **Exception (xlsb with Power Query / data model)**: when the source xlsb contains `_xlcn.LinkedTable_*` connection names, the output after **any operation that falls back to the full-rebuild path** (deleting a worksheet, inserting/deleting rows or columns, changing visibility / tab color, adding or removing a super table, etc.) may be refused by Excel (`0x800A03EC`) — Excel performs a full "Save As" normalization that the library cannot fully replicate and cannot statically predict; the surgical path (cell edits / rename / append plain sheet) is fixed and usable. See the known-limitation note in [§7.6 Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete).
+**Cross-format conversion**: when you open an .xlsb file and save it as .xlsx or .xlsm, in addition to ordinary data and styles, pivot tables, pivot caches, slicers, Power Query queries, the data model, shapes (including ActiveX), and conditional formatting are preserved as much as possible, and the result opens cleanly in Excel. To restore the previous behavior (drop these and report), set the environment variable `LITEXCEL_DISABLE_PIVOT_WIRING=1`.
 
-Fidelity is more than keeping part bytes: the elements that reference them must survive too, otherwise a part is orphaned and Excel treats it as absent. The references below are written back verbatim on save, with relationship ids remapped whenever they get renumbered:
+> ⚠️ **Exception (xlsb with Power Query / data model)**: in an .xlsb file that contains Power Query or a data model, operations such as **deleting a worksheet, inserting/deleting rows or columns, changing sheet visibility or tab color, or adding/removing a super table**, followed by a save, may produce a file Excel cannot open. Editing cell values, renaming a sheet, and appending a plain worksheet are unaffected. See the known-limitation note in [§7.6 Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete).
 
-| Reference element | Host part | Points to |
-| :--- | :--- | :--- |
-| `<drawing>` | `sheet{N}.xml` | drawing part (charts / shapes / pictures) |
-| `<pivotCaches>` | `workbook.xml` | pivot cache definitions |
-| `<externalReferences>` | `workbook.xml` | cross-workbook external links |
-| `<bookViews>` / `<definedNames>` | `workbook.xml` | window views / named ranges |
-| `<extLst>` (`x14:slicerCaches`) | `workbook.xml` | slicer / timeline caches |
-| `<extLst>` (`x14:slicerList`) | `sheet{N}.xml` | worksheet-level slicers |
-| `<sheet>` `sheetId` / `state` | `workbook.xml` | sheet identity / visibility (slicer caches reference by `tabId`; renumbering orphans them) |
-| `styles.xml` verbatim passthrough | `xl/styles.xml` | slicer styles / timeline styles / pivot button XF (preserved verbatim when `extLst` present, otherwise rebuilt) |
-| `sheet{N}.xml` / `sharedStrings.xml` verbatim passthrough | `xl/worksheets/sheet{N}.xml` | sparse cell layout and absolute references (same condition as `styles.xml`; preserved when unmodified) |
-| `workbook.bin` / `styles.bin` / `sheet{N}.bin` verbatim passthrough | XLSB binary parts | BIFF12 pivot table / slicer host records (preserved verbatim when unmodified + structure unchanged, otherwise rebuilt) |
+Fidelity is more than keeping the content itself: the associations between these items are preserved too, so nothing is lost or mismatched when Excel opens the file.
 
-> **XLS pivot table degradation**: when a source .xls file contains pivot tables (detected via `SXVIEW` record), the current model cannot faithfully write back or convert BIFF8 pivot tables; pivot tables are dropped and recorded in `wb.SaveDegradations` (allowed by default). Set `wb.AllowFeatureLossOnSave = false` to throw a `LiteExcelException` instead.
+> **XLS pivot table degradation**: when a source .xls file contains pivot tables, they cannot currently be written back or converted faithfully; they are dropped and recorded in `wb.SaveDegradations` (allowed by default). Set `wb.AllowFeatureLossOnSave = false` to throw a `LiteExcelException` instead.
 
 ```csharp
 var wb = Excel.Open("macro.xlsm");   // open an xlsm containing macros
@@ -3182,7 +3171,7 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 - **In-memory model**: the `Workbook` returned by `Excel.Open` / `Excel.Create` is an in-memory model; the entire workbook is loaded into memory. For very large files use the streaming APIs instead of `Excel.Open`.
 - **Streaming write scope**: `Excel.CreateWriter` / `Excel.Append` support xlsx / xlsm only.
 - **Unified read facade**: `Excel.Read<T>`, `Excel.ReadSheet`, `Excel.ReadAsDataTable`, `Excel.StreamRows`, and `Excel.EnumerateRows` route xlsx/xlsm/xlsb/xls automatically for path inputs; stream inputs require an explicit `ExcelFormat`.
-- **Four-format streaming read**: xlsx/xlsm use XML reader per-row yield; xlsb uses BIFF12 record-level per-row yield; xls uses BIFF8 record-level per-row yield. All three support `Take(n)` / `First()` / `break` early termination without holding full row data in memory. SST and style tables are still pre-loaded (workbook-level shared).
+- **Four-format streaming read**: xlsx/xlsm, xlsb, and xls all support per-row streaming with early termination (`Take(n)` / `First()` / `break`), without holding full row data in memory. Shared strings and style tables are still pre-loaded (workbook-level shared).
 - **Hyperlink count**: when the number of hyperlinks is extremely large, the streaming writer's memory is no longer constant (all hyperlink references are buffered internally).
 - **Append**: `Excel.Append` reads the entire existing file before writing; suited to incremental appends of small/medium files.
 
