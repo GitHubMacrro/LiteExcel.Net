@@ -1,5 +1,24 @@
 ﻿# Changelog
 
+## [2.4.79] - 未发布
+
+### Fixed
+
+- **对象模型稀疏行绝对行号对齐（C1）**：`Worksheet` 单元格网格与 `SheetData` 统一为**绝对 Excel 行号**语义（新增 `SheetData.RowNumbers` 记录每行原始 1-based 行号）。修复打开含**前导空行 / 内部空行**的工作表后单元格错位（此前紧凑行模型会把稀疏行压缩）；`RowHeights`、`Filter.HiddenRows` 现按绝对行号精确映射，`MergedRanges` 同步对齐。
+- **打开文件不再覆盖文档属性 Modified（C2）**：`Workbook.FromSheetData` 不再调用 `OnWorksheetAdded`，打开已有文件后读回的 `WorkbookProperties.Modified` 保持文件原值，不再被打开时刻重置。
+- **sheet 级样式恢复边界明确（C3）**：`DefaultStyle` 改为按「数据区单元格样式一致」的**启发式**推断恢复（非严格往返保证）；新增 `HeaderStyle` 低层 `SheetData.Headers` 路径往返，对象模型 Save→Open 不保证恢复（设计限制）。
+- **XLSB 高级部件保护缺口（Complex XLSB）**：源含**工作簿级**高级部件（`xl/connections.bin` / `xl/model/item.data` 等）且操作无法走 verbatim / surgical delete / surgical edit 保真路径时，现**一律**经 `SaveDegradations` 上报（宽松模式）或抛 `LiteExcelException` 阻止（严格模式），不再因「无法保真的修改落在非高级工作表」而静默回退整本重建、产出 Excel 无法打开的文件。
+- **XLSB verbatim 伪降级（R-1）**：`XlsbWriter` 仅在**重建 / 转换**路径上报降级；无修改的 verbatim 保存不再误报 `NamedRanges` / `DocumentProperties` / `Styles` 降级（这些部件在 verbatim 路径逐字节保留）。
+
+### Changed
+
+- **`Worksheet.FirstRowNumber`**：setter 标注 `[Obsolete(error: false)]`；对象模型 Save 不使用该属性做行位移（对象模型按绝对行号写入，getter 仍反映打开文件的原始首行号）。
+- **`Worksheet.RowStyles`**：写出侧正确（按绝对行索引应用）；对象模型 Open **不恢复** `Worksheet.RowStyles`（行级样式效果经 `Cell.Style` 保留）。
+
+### Tests
+
+- 新增 C1–C3 / FirstRowNumber / RowStyles / Complex XLSB guard / R-1 回归测试；全量 **770** 测试通过（net8.0），net48 构建通过。
+
 ## [2.4.78] - 2026-09-26
 
 ### Added
@@ -29,7 +48,7 @@
 ### Notes
 
 - **`xl/drawings/drawing*.xml` 暂不直通**：该部件是 xlsb 专有的 ActiveX 图形表达（`xdr:graphicFrame` + `com14:compatSp`），混入 xlsx 会被 Excel 拒绝打开（`0x800A03EC`）；阶段 B3 已做 drawing 转码。`vmlDrawing*` 保留。
-- **透视表/切片器接线默认启用**：`raw_repro.xlsb` → xlsx/xlsm 经 Excel 打开验证为 9 表 + 4 透视表、无修复。剩余保真差异（不影响打开）：pivotFields 翻倍怪癖、pivotTable `<formats>`/`<extLst>`、definedNames 中的结构化表引用（`ptgElfLel`）暂未解码。
+- **透视表/切片器接线默认启用**：某真实数据模型 xlsb 样本 → xlsx/xlsm 经 Excel 打开验证为 9 表 + 4 透视表、无修复。剩余保真差异（不影响打开）：pivotFields 翻倍怪癖、pivotTable `<formats>`/`<extLst>`、definedNames 中的结构化表引用（`ptgElfLel`）暂未解码。
 - **⚠️ 已知限制：删除含 Power Query 连接的 xlsb 工作表，输出会被 Excel 拒开**。删除某工作表时，Excel 会对 `workbook.bin` 做**整套「另存为」规范化**：重建定义名表（`_xlcn.LinkedTable_*` 去尾缀、为被删表新建全局占位名、把失效名的 rgce 改写成 `PtgName` 重指向、重排/重编号），并同步重建 `BrtExternSheet`(XTI) 表、重映射 3D 引用的 `ixti`、重编号 pivot/sheet/chart/slicer 部件、清理孤儿部件与缓存引用（`0x0182`/`0x046D`/`0x0430`）、重编码 `styles`/`sharedStrings`/`connections` 等。库当前仅做**手术式**改动（标记失效化、局部重编号、局部孤儿清理），**无法完全复刻**该规范化。
   - **实测（真实数据模型样本，11 个删除场景）**：库输出仅 2 个能被 Excel 正常打开，其余 9 个被 Excel 拒开（`hr=0x800A03EC`）；而 Excel 自身删除这 11 个场景**全部**正常打开。**危险与否无法在保存时静态预判**——删除看似与连接无关的表同样导致拒开。因此库**无法保证**此类删除的输出可打开。
   - **安全网（保守）**：源 xlsb 含 `_xlcn.LinkedTable_*` 连接名时，删除**任意**工作表：
@@ -87,7 +106,7 @@
 - **XLSB 手术式删除的依赖部件路径**：修正被删表 rels 依赖（如 `../tables/tableN.bin`）的路径规范化，避免残留孤儿部件（如 `table11.bin`）。
 - **XLSB 手术式删除的记录保真**：修正 `ModifyWorkbookBin` 对 `0x0817`（BrtFileVersion）等记录的解析，确保未修改的记录逐字节保留（此前旧实现会吞并后续记录）。
 - **XLSB 超级表降级误报**：`XlsbWriter.ReportDegradations` 此前对含超级表的工作表**无条件**上报 `DegradationCapability.Tables`（"超级表已丢弃"），但三条写出路径（重建 / verbatim / 手术式）实际都保留超级表——重建经 `BuildTableBin` 写出，verbatim/手术式原样透传 `xl/tables/*.bin`。该上报恒为假，已移除（xlsb 不存在丢表路径）。
-- **数据模型部件 `xl/model/item.data` 按 STORED 写出**：与 Excel 自身产出约定一致（该部件是内存映射数据库，Excel 存为不压缩）。此前用 `CompressionLevel.Optimal` 使输出体积显著小于 Excel；改为 STORED 后输出大小与 Excel 接近（如 `raw_repro` 删表：1.33MB → 2.31MB）。不影响内容与打开。
+- **数据模型部件 `xl/model/item.data` 按 STORED 写出**：与 Excel 自身产出约定一致（该部件是内存映射数据库，Excel 存为不压缩）。此前用 `CompressionLevel.Optimal` 使输出体积显著小于 Excel；改为 STORED 后输出大小与 Excel 接近（如某真实数据模型样本删表：1.33MB → 2.31MB）。不影响内容与打开。
 
 ### Changed
 
@@ -112,7 +131,7 @@
 - 新增 `DeleteSheetTests.Delete_XlsbSurgical_PreservesLinkedTableNames`（`_xlcn.LinkedTable_*` 名删表前后原样不变的回归）。
 - 新增 fixture `excel-authored-namedranges.xlsb`（Excel 生成，含全局 + sheet-local 命名区域）、`excel-authored-table.xlsb`（Excel 生成，含超级表，用于验证降级误报修复）。
 - 全量 **710** 测试通过（net8.0）；net48 构建通过。
-- Excel COM 验证：四格式可见性、xlsx/xlsm tabColor、xlsb 命名区域/超级表/数据验证均与 Excel 视角一致；数据模型工作簿（`raw_repro.xlsb` 9 表）删 `DayList` → 输出 8 表打开正常，透视表 8/连接 12/VBA/数据模型/标签颜色 4 个全部保留，`workbook.bin` 与 Excel 基准仅差 2 条无语义记录（连接 GUID / activeTab）。
+- Excel COM 验证：四格式可见性、xlsx/xlsm tabColor、xlsb 命名区域/超级表/数据验证均与 Excel 视角一致；数据模型工作簿（某真实样本 9 表）删某工作表 → 输出 8 表打开正常，透视表 8/连接 12/VBA/数据模型/标签颜色 4 个全部保留，`workbook.bin` 与 Excel 基准仅差 2 条无语义记录（连接 GUID / activeTab）。
 
 ## [2.4.76] - 2026-09-11
 

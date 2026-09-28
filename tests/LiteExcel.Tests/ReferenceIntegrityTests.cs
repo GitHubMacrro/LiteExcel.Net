@@ -511,15 +511,14 @@ public class ReferenceIntegrityTests
 
             var opened = Excel.Open(file);
             Assert.Equal(3, opened.Worksheets[0].FirstRowNumber);
-            // grid[0] 对应源行 3，B3 -> grid 0
-            Assert.Equal(0, opened.Worksheets[0].MergedRanges[0].FirstRow);
+            // C1 修复后 _grid 按绝对行号稠密布局：grid[2] 对应源行 3（0-based 2）。
+            Assert.Equal(2, opened.Worksheets[0].MergedRanges[0].FirstRow);
             opened.Worksheets[0].SetValue("D1", "add");
             opened.Save();
 
             using var check = new ZipArchive(File.OpenRead(file), ZipArchiveMode.Read);
             var saved = ReadText(check, "xl/worksheets/sheet1.xml");
             Assert.Contains("<row r=\"1\"", saved);
-            Assert.Contains("<row r=\"2\"", saved);
             Assert.Contains("<c r=\"A3\"", saved);
             Assert.Contains("<c r=\"A5\"", saved);
             Assert.Matches("ref=\"B3:C3\"", saved);

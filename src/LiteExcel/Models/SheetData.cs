@@ -95,4 +95,9 @@ public sealed class SheetData
     /// <summary>被修改单元格的 0-based 坐标集合（key = (row &lt;&lt; 32) | col）。
     /// 手术式编辑据此定位需补丁的单元格记录。</summary>
     internal HashSet<long>? ModifiedCells { get; set; }
+
+    /// <summary>读取时捕获的每行原始 1-based 行号（与 Rows 平行）。
+    /// null = 无行号信息（紧凑模式，Rows[i] 对应行号 FirstRowNumber + i）。
+    /// 非 null 时供 Worksheet.FromSheetData 重建稠密网格以保留稀疏行间隙（C1 修复）。</summary>
+    internal List<int>? RowNumbers { get; set; }
 }

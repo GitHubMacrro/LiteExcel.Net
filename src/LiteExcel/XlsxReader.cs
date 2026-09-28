@@ -672,6 +672,7 @@ public static partial class XlsxReader
         sheet.SheetId = sheetId;
         sheet.SheetState = sheetState;
         var hiddenRowNumbers = new HashSet<int>(); // 1-based XML row numbers that are hidden
+        IReadOnlyList<Cell>? headerRowCells = null; // 表头行单元格（供 sheet 级样式推断）
 
         using var reader = XmlReader.Create(entry.Open(), XmlSettings);
         while (reader.Read())
@@ -768,6 +769,8 @@ public static partial class XlsxReader
 
                 if (firstRowIsHeader && sheet.Headers.Count == 0 && sheet.Rows.Count == 0)
                 {
+                    // 保留表头行单元格样式，供 RecoverSheetLevelStyles 推断 HeaderStyle。
+                    headerRowCells = row;
                     foreach (var cell in row)
                     {
                         sheet.Headers.Add(cell.Type == CellType.Text ? (cell.Text ?? "") : cell.Text ?? "");
@@ -776,6 +779,16 @@ public static partial class XlsxReader
                 else
                 {
                     sheet.Rows.Add(row);
+                    // 记录该行的原始 1-based 行号（C1：供 Worksheet.FromSheetData 重建稠密网格保留稀疏行间隙）。
+                    int absRow;
+                    if (xmlRowNum > 0)
+                        absRow = xmlRowNum;
+                    else if (sheet.RowNumbers is { Count: > 0 })
+                        absRow = sheet.RowNumbers![sheet.RowNumbers.Count - 1] + 1;
+                    else
+                        absRow = (sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber : 1) + sheet.Rows.Count - 1;
+                    (sheet.RowNumbers ??= new List<int>()).Add(absRow);
+
                     // 行高：key = 0-based 数据行索引
                     if (htAttr is not null && double.TryParse(htAttr, NumberStyles.Float, CultureInfo.InvariantCulture, out var ht))
                     {
@@ -875,7 +888,71 @@ public static partial class XlsxReader
         // 读取超级表（sheet tableParts → rels → table{N}.xml）
         ReadTablesForSheet(zip, sheetPath, sheet, styles);
 
+        // 恢复 sheet 级样式（HeaderStyle / DefaultStyle）。
+        // OOXML 没有直接保存这两个抽象属性——写出时被展开到每个单元格的 xf。
+        // 此处按写出语义做"唯一一致样式"推断：若表头行的所有单元格共享同一非空样式且与数据区默认不同，恢复为 HeaderStyle；
+        // 若数据区所有单元格共享同一非空样式，恢复为 DefaultStyle。无法唯一判定时返回 null（不伪造）。
+        RecoverSheetLevelStyles(sheet, firstRowIsHeader, headerRowCells);
+
         return sheet;
+    }
+
+    /// <summary>
+    /// 从已解析的单元格样式推断 sheet 级 HeaderStyle / DefaultStyle。
+    /// OOXML 没有直接保存这两个抽象属性（写出时被展开到每个单元格的 xf），因此只能做
+    /// "唯一一致样式"推断：表头行所有单元格共享同一非空样式 → HeaderStyle（当与 DefaultStyle 不同时）；
+    /// 数据区所有单元格共享同一非空样式 → DefaultStyle。无法唯一判定时为 null。
+    /// </summary>
+    private static void RecoverSheetLevelStyles(SheetData sheet, bool firstRowIsHeader, IReadOnlyList<Cell>? headerRowCells)
+    {
+        // DefaultStyle：数据区（Rows）所有单元格共享同一非空样式。
+        CellStyle? defaultStyle = null;
+        bool defaultUniform = sheet.Rows.Count > 0;
+        foreach (var row in sheet.Rows)
+        {
+            foreach (var cell in row)
+            {
+                if (cell.Style is null) { defaultUniform = false; break; }
+                if (defaultStyle is null) defaultStyle = cell.Style;
+                else if (!StyleEquals(defaultStyle, cell.Style)) { defaultUniform = false; break; }
+            }
+            if (!defaultUniform) break;
+        }
+        sheet.DefaultStyle = defaultUniform ? defaultStyle : null;
+
+        // HeaderStyle：表头行所有单元格共享同一非空样式，且与 DefaultStyle 不同（否则无法区分）。
+        if (firstRowIsHeader && headerRowCells is { Count: > 0 })
+        {
+            CellStyle? headerStyle = null;
+            bool headerUniform = true;
+            foreach (var cell in headerRowCells)
+            {
+                if (cell.Style is null) { headerUniform = false; break; }
+                if (headerStyle is null) headerStyle = cell.Style;
+                else if (!StyleEquals(headerStyle, cell.Style)) { headerUniform = false; break; }
+            }
+            if (headerUniform && headerStyle is not null &&
+                (sheet.DefaultStyle is null || !StyleEquals(headerStyle, sheet.DefaultStyle)))
+            {
+                sheet.HeaderStyle = headerStyle;
+            }
+        }
+    }
+
+    private static bool StyleEquals(CellStyle a, CellStyle b)
+    {
+        // 比较可观察样式属性（不比较引用）。
+        return a.Bold == b.Bold
+            && a.Italic == b.Italic
+            && a.Underline == b.Underline
+            && a.Strikeout == b.Strikeout
+            && string.Equals(a.FontName, b.FontName, StringComparison.Ordinal)
+            && a.FontSize == b.FontSize
+            && string.Equals(a.FontColor, b.FontColor, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.FillColor, b.FillColor, StringComparison.OrdinalIgnoreCase)
+            && a.HorizontalAlignment == b.HorizontalAlignment
+            && a.VerticalAlignment == b.VerticalAlignment
+            && a.WrapText == b.WrapText;
     }
 
     /// <summary>

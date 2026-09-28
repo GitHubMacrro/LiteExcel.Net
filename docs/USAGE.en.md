@@ -93,7 +93,7 @@ using LiteExcel;
 
 **Target Frameworks**:
 
-The library targets **net48** and **net8.0** simultaneously. The net8.0 target additionally declares `IsAotCompatible=true`, and all public APIs are compatible with Native AOT / trimming (see Chapter 23).
+The library targets **net48** and **net8.0** simultaneously. The net8.0 target additionally declares `IsAotCompatible=true`, and representative public APIs have passed native AOT smoke verification (see Chapter 23).
 
 ---
 
@@ -208,7 +208,7 @@ var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
 | Parameter | Type | Description |
 |---|---|---|
 | `OpenPassword` | `string?` | Open password (file encryption); decrypts password-protected xlsx/xlsm/xlsb |
-| `ModifyPassword` | `string?` | Modify password (write protection); provides edit/save permission once supplied |
+| `ModifyPassword` | `string?` | Write-protection authorization condition: supplying any **non-empty** value grants edit / save permission (the hash is not verified; see §18.5) |
 | `FillMergedCells` | `bool` | Expand the top-left value of a merged range to the whole merged range; default `false` |
 | `Separator` | `char?` | Only applies to CSV; auto-detected when `null` |
 | `ReadStyles` | `bool` | Whether to read styles; default `true` |
@@ -300,7 +300,7 @@ written to out.xlsx / out.xlsm / s.xlsx
 > Opening xlsx / xlsm / xlsb and saving again preserves these elements as-is (passthrough); xls / csv have no preservation mechanism, so they are lost on open-then-save. Make a backup copy before overwriting the source file.
 
 - `SaveAs(path, format)` requires the path extension to match the format, otherwise it throws `LiteExcelException` (to avoid writing content that does not match the extension, producing a file Excel cannot open).
-- A workbook containing VBA macros cannot be saved to a format that does not support macros (xlsx / xls); it errors out early.
+- A workbook containing VBA macros saved to a format that does not support macros (xlsx / xls) is allowed by default: the macros are stripped and reported as a `Macros` degradation via `OnDegradation` / `wb.SaveDegradations`. Only strict mode (`wb.AllowFeatureLossOnSave = false`) throws a `LiteExcelException` and blocks the save.
 - File-level passwords (open / modify) are only supported for xlsx / xlsm / xlsb; saving to csv / xls with a password set will error.
 
 ## 3.7 Format Enum `ExcelFormat`
@@ -367,7 +367,7 @@ T
 
 ## 3.10 Document Properties `WorkbookProperties`
 
-> ⚠️ Document properties are supported only for **xlsx / xlsm / xlsb** (OLE property sets are not implemented for xls). When writing to xls they are **silently dropped**, reported via `OnDegradation`.
+> ⚠️ Document properties are supported only for **xlsx / xlsm / xlsb** (OLE property sets are not implemented for xls). When writing to xls they are dropped and reported via `OnDegradation` (not silent).
 
 `Workbook.Properties` corresponds to `docProps/core.xml` and `docProps/app.xml` inside the xlsx package:
 
@@ -707,7 +707,7 @@ if (cell.Type == CellType.Date)
     Console.WriteLine(cell.GetDateTime().ToString("yyyy-MM-dd"));
 ```
 
-The 1904 date system flag (`Date1904`) captured on open is written back to the corresponding format flag on save, keeping the date serial-value base consistent.
+The 1904 date system flag captured on open is written back to the corresponding format flag on save, keeping the date serial-value base consistent.
 
 Output:
 
@@ -835,6 +835,8 @@ Output: (directly writes out a people.xlsx file)
 DataTable carries its own column structure, **no reflection required** (does not trigger reflection-based mapping), AOT safe. The first row is automatically written as column names:
 
 ```csharp
+using System.Data;
+
 var dt = new DataTable("订单");
 dt.Columns.Add("OrderID", typeof(int));
 dt.Columns.Add("Customer", typeof(string));
@@ -1043,6 +1045,8 @@ Output:
 True
 ```
 
+> ⚠️ **Round-trip limitation (Design Limitation)**: `HeaderStyle` round-trips only on the low-level `SheetData.Headers` path (List\<T\> / DataTable / low-level writes). The object-model `ws.HeaderStyle` does not produce any reversible cell-style reference on write, so an object-model Save → Open **cannot restore** `HeaderStyle`.
+
 ## 6.6 Whole-Sheet Default Style `DefaultStyle`
 
 Has the lowest priority:
@@ -1057,6 +1061,8 @@ Output:
 ```
 Consolas
 ```
+
+> ⚠️ **Read-back is heuristic (Heuristic)**: on write, `DefaultStyle` is expanded onto the data cells; on reopen the library infers whether to restore `DefaultStyle` from "all data cells share the same non-empty style", so it can misjudge (it may be inferred even when never set, or fail to recover after being set). Strict round-trip is not guaranteed.
 
 ## 6.7 Row-Level Styles `RowStyles`
 
@@ -1075,6 +1081,8 @@ Output:
 ```
 #FCE4D6
 ```
+
+> ⚠️ **Read-back limitation**: on write, `RowStyles` keys are applied as absolute row indices (row number - 1) and land correctly on disk; but opening a file through the object model does **not** restore `Worksheet.RowStyles` (row-level styles are expanded onto cells on read), so the property may be `null` after Open. Do not rely on Save → Open to fully restore `RowStyles`.
 
 ## 6.8 Column-Level Styles `ColumnStyles`
 
@@ -1247,11 +1255,11 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("Temp")).ToList())
 
 #### Fidelity
 
-Saving after deleting a worksheet is equivalent to Excel's own "delete sheet then save": the deleted sheet and its references are removed, while all other worksheets, pivot tables, pivot caches, tables, connections, the data model, VBA macros, and tab colors are **preserved in full** (xlsb likewise). See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for the mechanism.
+Saving after deleting a worksheet removes the deleted sheet and its references, while the rest of the content is preserved in full on **ordinary files (no Power Query / data model)** — equivalent to Excel's own "delete sheet then save". See [§20.5 Open-Save Fidelity](#205-open-save-fidelity) for the mechanism.
 
-- **xlsx / xlsm**: all remaining advanced parts (pivot tables, charts, slicers, ActiveX, macros) are fully preserved.
-- **xlsb**: deleting an XLSB worksheet and saving as xlsb preserves pivot tables, pivot caches, tables, connections, the data model, and VBA macros.
-- **xlsb → xlsm**: pivot tables, slicers, connections, the data model, and other advanced parts are preserved too.
+- **xlsx / xlsm**: the remaining advanced parts (pivot tables, charts, slicers, ActiveX, macros) are preserved.
+- **xlsb**: deleting an XLSB worksheet and saving as xlsb preserves pivot tables, pivot caches, tables, connections, the data model, and VBA macros on ordinary files.
+- **xlsb → xlsm**: pivot tables, slicers, connections, the data model, and other advanced parts are preserved as far as possible (subject to the known limitation below).
 
 > ⚠️ **Known limitation (xlsb with Power Query / data model)**
 > In an .xlsb file that contains Power Query or a data model, operations such as **deleting a worksheet, inserting/deleting rows or columns, changing sheet visibility or tab color, or adding/removing a super table** followed by a save may produce a file Excel cannot open.
@@ -1277,6 +1285,9 @@ wb.SaveAs("out.xlsx");
 ---
 
 # 8. AutoFilter
+
+> ⚠️ **Important limit**
+> AutoFilter: **xlsx / xlsm** support full read/write (filter range + column criteria); for **xlsb** the filter **range** can be read/written while **column criteria** are degraded and reported via `OnDegradation` / `wb.SaveDegradations` (see Chapter 22); **xls / csv** discard the filter entirely.
 
 ## 📑 Contents
 
@@ -1453,6 +1464,9 @@ A1:C542
 
 # 9. Row Height and Column Width
 
+> ⚠️ **Important limit**
+> Row heights and column widths are supported for xlsx / xlsm / xlsb / xls. Writing to csv drops them (csv keeps no worksheet-dimension information), reported via `OnDegradation` (see Chapter 22).
+
 ## 📑 Contents
 
 | # | Section |
@@ -1473,6 +1487,8 @@ var ws = Excel.Create().Worksheets["Sheet1"];
 ws.SetValue("A1", "Tall row");
 ws.RowHeights = new Dictionary<int, double> { { 0, 30.0 } };   // row 1 height 30 points
 ```
+
+> ℹ️ **Row-number semantics**: the internal grid uses **absolute Excel row numbers** (`_grid[i]` is row `i+1`). Reading a sparse-row file does not compress empty rows: leading and interior empty rows are mapped by their actual Excel row number, and `RowHeights` keys follow this. When an **existing file** is opened and saved, row heights are kept at their original row numbers.
 
 Output: (this example has no console output)
 
@@ -1792,7 +1808,7 @@ Important parameters of `AddImage` (row/column overload):
 
 Output: (this example has no console output)
 
-> ⚠️ Images are supported only in xlsx / xlsm (see the format support matrix in chapter 20).
+> ⚠️ Images are supported in xlsx / xlsm, plus **floating images written to xlsb**; InCell images are limited to xlsx / xlsm (see the format support matrix in chapter 20).
 
 ## 13.2 InCell images
 
@@ -1922,7 +1938,7 @@ Banner: A1 Floating 70 bytes
 Embed: A1 InCell 70 bytes
 ```
 
-> ⚠️ Images are supported only in xlsx / xlsm (see the format support matrix in chapter 20). InCell images may not be recognized by older versions of Excel.
+> ⚠️ Images are supported in xlsx / xlsm, plus **floating images written to xlsb**; InCell images are limited to xlsx / xlsm (see the format support matrix in chapter 20). InCell images may not be recognized by older versions of Excel.
 See the screenshot in [Chapter 12](#12-freeze-panes).
 ---
 
@@ -2030,7 +2046,7 @@ See the screenshot in [Chapter 10](#10-comments).
 
 ---
 
-Conditional formatting is read/written in xlsx / xlsm. `Worksheet.ConditionalFormats` is a `List<ConditionalFormat>`.
+Conditional formatting supports read/write in xlsx / xlsm, and rebuild write in xlsb (all documented rule types; see the format support note below). `Worksheet.ConditionalFormats` is a `List<ConditionalFormat>`.
 
 > ⚠️ **Format support**
 > - **xlsx / xlsm**: all types read/written.
@@ -2324,7 +2340,7 @@ var table = ws.AddTable("A1:B3", "Products", "TableStyleMedium9");
 
 Output: (this example has no console output)
 
-> ⚠️ When the style name is not among the 60 built-in names, Excel silently degrades it to no style on open, reported via the `OnDegradation` callback (see Chapter 22).
+> ⚠️ When the style name is not among the 60 built-in names, Excel degrades it to no style on open; the library reports this via the `OnDegradation` callback on write (see Chapter 22).
 
 ## 16.4 Table Properties
 
@@ -2413,7 +2429,7 @@ Products A1:B3 样式=TableStyleMedium2
 
 ---
 
-> ⚠️ Named-range support: **xlsx / xlsm** full read-back (from `definedNames` in `workbook.xml`); **xlsb** read-back is supported (`BrtDefinedName` + `BrtExternSheet`, simple cell/range references only, complex expressions skipped); **xls** supports simple cell/range references (PtgRef3d / PtgArea3d), names with complex formulas are skipped. xlsb / xls do not write named ranges. When writing to a format that does not support this capability, named ranges are **silently dropped**, reported via `OnDegradation`.
+> ⚠️ Named-range support: **xlsx / xlsm** full read-back (from `definedNames` in `workbook.xml`); **xlsb** read-back is supported (`BrtDefinedName` + `BrtExternSheet`, simple cell/range references only, complex expressions skipped); **xls** supports simple cell/range references (PtgRef3d / PtgArea3d), names with complex formulas are skipped. xlsb / xls do not write named ranges. When writing to a format that does not support this capability, named ranges are dropped and reported via `OnDegradation` / `wb.SaveDegradations` (not silent).
 
 ## 17.1 Reading Named Ranges
 
@@ -2479,7 +2495,7 @@ var wb = Excel.Open("secured.xlsx", new ExcelReadOptions { OpenPassword = "secre
 
 Output: (this example has no console output)
 
-> ⚠️ Open / modify passwords are supported only for xlsx / xlsm / xlsb; when opening an encrypted file, reading throws an exception if the password is not provided (or is wrong).
+> ⚠️ Open / modify passwords are supported only for xlsx / xlsm / xlsb. When opening an encrypted file, reading throws an exception if the **open password** is not provided (or is wrong). The modify password is only an authorization condition: supplying any non-empty value is accepted without hash verification (see §18.5).
 
 ## 18.2 Reading the Security State
 
@@ -2504,7 +2520,7 @@ Console.WriteLine(sec.CanSave);              // true
 |---|---|---|
 | `HasOpenPassword` | `bool` | whether the file has an open password (file encryption) |
 | `HasModifyPassword` | `bool` | whether the file has a modify password (write protection) |
-| `HasModifyAccess` | `bool` | whether modify access has been granted (the correct modify password was provided) |
+| `HasModifyAccess` | `bool` | whether modify access has been granted (supplying any **non-empty** modify password is treated as authorization; the hash is not verified) |
 | `IsReadOnly` | `bool` | read-only when the file has a modify password but access has not been granted |
 | `CanSave` | `bool` | whether saving is allowed (`!IsReadOnly`) |
 
@@ -2545,7 +2561,7 @@ Output: written to secured.xlsx
 
 ## 18.4 Removing Passwords
 
-After opening a password-protected file (providing the correct password to gain authorization), call the removal methods and save to strip the passwords:
+After opening a password-protected file (supplying a non-empty password to gain authorization), call the removal methods and save to strip the passwords:
 
 ```csharp
 var wb = Excel.Open("secured.xlsx", new ExcelReadOptions { OpenPassword = "secret", ModifyPassword = "write" });
@@ -2576,8 +2592,8 @@ True
 False
 ```
 
-- When the file has a modify password but it is not provided (or is wrong), the workbook opens in **read-only** mode with `IsReadOnly = true`, `CanSave = false`; saving throws a `LiteExcelException`.
-- Providing the correct `ModifyPassword` grants editing authorization (`HasModifyAccess = true`).
+- When the file has a modify password but it is **not provided**, the workbook opens in **read-only** mode with `IsReadOnly = true`, `CanSave = false`; saving throws a `LiteExcelException`.
+- Providing any **non-empty** `ModifyPassword` grants editing authorization (`HasModifyAccess = true`) — the current implementation uses a conservative "provided means authorized" policy and **does not verify the password hash**, so a wrong but non-empty password also grants modify access. Do not treat this as a full password-authentication mechanism.
 - `SetModifyPassword` / `RemoveModifyPassword` / `ClearAll` require modify access to have been granted, otherwise an exception is thrown (prevents unauthorized stripping / replacement of write protection).
 - The original `fileSharing` captured at open time is passed through on save; it is regenerated when the user explicitly sets a new modify password.
 
@@ -2596,7 +2612,7 @@ wb.SaveAs("secured_copy.xlsx");   // inherits the open password by default
 
 Output: written to secured_copy.xlsx
 
-> ⚠️ When `ModifyPasswordTouched` (the user explicitly changed the modify password) is set, the original fileSharing is not passed through; it is regenerated according to the newly set modify password. Saving a workbook that contains VBA macros as xlsx / xls throws an error (the format does not support macros).
+> ⚠️ When `ModifyPasswordTouched` (the user explicitly changed the modify password) is set, the original fileSharing is not passed through; it is regenerated according to the newly set modify password. Saving a workbook that contains VBA macros as xlsx / xls is allowed by default: the macros are stripped and reported as a `Macros` degradation via `OnDegradation` / `wb.SaveDegradations`; only strict mode (`AllowFeatureLossOnSave = false`) throws and blocks the save.
 
 ---
 
@@ -2610,6 +2626,9 @@ Output: written to secured_copy.xlsx
 | 19.2 | [Workbook Protection `WorkbookProtection`](#192-workbook-protection-workbookprotection) |
 
 ---
+
+> ⚠️ **Important limit**
+> Worksheet / workbook protection currently supports **xlsx / xlsm only** for writing and read-back. xlsb / xls / csv do not write protection; the `DegradationCapability` enum has no Protection member, so protection dropped for those formats is **not** reported via `OnDegradation`.
 
 ## 19.1 Worksheet Protection `SheetProtection`
 
@@ -2733,7 +2752,7 @@ Chapters 20–23: multi-format behavior and degradation, streaming and append, A
 
 ## 20.1 Format Capability Matrix
 
-The table below lists the support status of each capability across formats. Capabilities not supported by xls / xlsb / csv are reported via `ExcelWriteOptions.OnDegradation` when writing (see Chapter 22).
+The table below lists the support status of each capability across formats. Capabilities not supported by xls / xlsb / csv are reported via `ExcelWriteOptions.OnDegradation` when writing (see Chapter 22). **Exception**: worksheet / workbook protection has no corresponding degradation capability and is not reported when dropped (see Chapter 19).
 
 | Capability | xlsx | xlsm | xlsb | xls | csv |
 |---|---|---|---|---|---|
@@ -2755,6 +2774,7 @@ The table below lists the support status of each capability across formats. Capa
 | Sheet tab color | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Document properties | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | Open / Modify password | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| Worksheet / workbook protection | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | Insert / Delete rows & columns | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | Formulas (write) | ☑️ | ☑️ | basic writeback | basic writeback | ❌ |
 | Formulas (read) | ☑️ | ☑️ | restored when parseable | restored when parseable | ❌ |
@@ -2767,7 +2787,7 @@ The table below lists the support status of each capability across formats. Capa
 | Degradation reporting (OnDegradation) | n/a | n/a | ☑️ | ☑️ | ☑️ |
 | Auto column width (AutoFitColumns / AutoColumnWidths) | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 
-> **Cross-format conversion**: when you open an .xlsb and save it as .xlsx / .xlsm, pivot tables, slicers, Power Query queries, the data model, shapes, and other advanced content are preserved too (see [§20.5](#205-open-save-fidelity)).
+> **Cross-format conversion**: when you open an .xlsb and save it as .xlsx / .xlsm, pivot tables, slicers, Power Query queries, the data model, shapes, and other advanced content are preserved **as far as possible** (files without Power Query / data model usually open cleanly; see [§20.5](#205-open-save-fidelity) for the known limitations).
 
 Write to csv with the degradation callback connected to observe discarded capabilities:
 
@@ -2794,8 +2814,8 @@ Output:
 
 Writing to xls / xlsb depends on the format and the code path:
 
-- **xlsb rebuild write** (new workbook / edited cells): styles degrade to `NumberFormat` only; comments / data validation / tables / floating images are written; conditional formatting supports all 18 OOXML rule types (cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / text / blanks / errors / uniqueValues / duplicateValues / timePeriod / textLength); named ranges are read-back only (not written); **InCell images** are dropped; formula text is not kept and is written as the cached value. Dropped items are reported via `OnDegradation` (see Chapter 22).
-- **xlsb open-save / sheet delete**: unchanged content is preserved as-is — conditional formatting / images / pivot tables / charts / slicers are **fully preserved**, with no degradation reported.
+- **xlsb rebuild write** (new workbook / edited cells): styles degrade to `NumberFormat` only; comments / data validation / tables / floating images are written; conditional formatting supports all 18 OOXML rule types (cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / text / blanks / errors / uniqueValues / duplicateValues / timePeriod / textLength); named ranges are read-back only (not written); **InCell images** are dropped; formula text is not kept and is written as the cached value; AutoFilter writes the filter **range** only, while **column criteria** are degraded and reported via `OnDegradation` / `wb.SaveDegradations`. Dropped items are reported via `OnDegradation` (see Chapter 22).
+- **xlsb open-save / sheet delete**: unchanged content is preserved as-is — conditional formatting / images / pivot tables / charts / slicers are preserved on ordinary files, with no degradation reported. For **xlsb with Power Query / data model**, restricted operations that fall back to a full rebuild may still produce a file Excel cannot open (see the known limitation in [§7.6](#76-deleting-a-worksheet-worksheetdelete) / [§20.5](#205-open-save-fidelity)).
 - **xls write**: styles degrade to `NumberFormat` only; comments are written; data validation / tables / conditional formatting / images / named ranges are dropped; formula text is not kept and is written as the cached value. These degradations are reported via `OnDegradation` (see Chapter 22).
 
 > **xls sheet size limit**: `xls` (BIFF8) supports at most 256 columns / 65536 rows. Data beyond the limit (including column-width declarations that extend far past the data range) is truncated on write and reported via `DegradationCapability.SheetSize`.
@@ -2831,6 +2851,8 @@ Sheet1: hello
 **Encoding options**: the encoding instance is supplied by the caller; this library references no encoding package.
 
 ```csharp
+using System.Text;
+
 // Default: writes UTF-8 with BOM (so Excel shows non-ASCII text correctly), reads by BOM detection
 Excel.Write("out.csv", wb);
 var back = Excel.Open("out.csv");
@@ -2904,9 +2926,9 @@ Cannot write Csv: Csv format does not support file-level passwords (open passwor
 
 When you open an existing file and save it, everything you did not change is **preserved as-is** — nothing is lost just because the library does not understand it. This covers macros, charts, pivot tables, pivot caches, tables, slicers, external connections, the data model, custom XML, sheet tab colors, styles, and other advanced content. Renaming a sheet no longer loses drawing associations; appending data no longer loses macros.
 
-Deleting a worksheet and saving goes through the same fidelity logic: the deleted sheet and its references are removed, everything else is preserved, and the result is equivalent to Excel's own "delete sheet then save" (xlsb likewise keeps pivot tables / connections / data model / VBA / tab colors in full).
+Deleting a worksheet and saving goes through the same fidelity logic: the deleted sheet and its references are removed, and everything else is preserved in full on **ordinary files**, matching Excel's own "delete sheet then save" (xlsb likewise; **xlsb with Power Query / data model** is subject to the exception below).
 
-**Cross-format conversion**: when you open an .xlsb file and save it as .xlsx or .xlsm, in addition to ordinary data and styles, pivot tables, pivot caches, slicers, Power Query queries, the data model, shapes (including ActiveX), and conditional formatting are preserved as much as possible, and the result opens cleanly in Excel. To restore the previous behavior (drop these and report), set the environment variable `LITEXCEL_DISABLE_PIVOT_WIRING=1`.
+**Cross-format conversion**: when you open an .xlsb file and save it as .xlsx or .xlsm, in addition to ordinary data and styles, pivot tables, pivot caches, slicers, Power Query queries, the data model, shapes (including ActiveX), and conditional formatting are preserved **as far as possible**; files without Power Query / data model usually open cleanly, while xlsb containing those advanced parts may still produce a file Excel cannot open when the full-rebuild path is used (see the exception below). To restore the previous behavior (drop these and report), set the environment variable `LITEXCEL_DISABLE_PIVOT_WIRING=1`.
 
 > ⚠️ **Exception (xlsb with Power Query / data model)**: in an .xlsb file that contains Power Query or a data model, operations such as **deleting a worksheet, inserting/deleting rows or columns, changing sheet visibility or tab color, or adding/removing a super table**, followed by a save, may produce a file Excel cannot open. Editing cell values, renaming a sheet, and appending a plain worksheet are unaffected. See the known-limitation note in [§7.6 Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete).
 
@@ -2943,9 +2965,12 @@ written to macro_copy.xlsm
 
 ---
 
+> ⚠️ **Important limit**
+> Streaming **read** (`StreamRows` / `EnumerateRows`) supports xlsx / xlsm / xlsb / xls (csv excluded); streaming **write / append** (`CreateWriter` / `Append`) supports xlsx / xlsm only.
+
 ## 21.1 Streaming Read `StreamRows`
 
-Row-by-row callback without holding all data in memory, suitable for large files. **xlsx / xlsm only**:
+Row-by-row callback without holding all data in memory, suitable for large files. Supports xlsx / xlsm / xlsb / xls (csv excluded):
 
 ```csharp
 var sheet = new SheetData
@@ -3170,7 +3195,7 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 
 - **In-memory model**: the `Workbook` returned by `Excel.Open` / `Excel.Create` is an in-memory model; the entire workbook is loaded into memory. For very large files use the streaming APIs instead of `Excel.Open`.
 - **Streaming write scope**: `Excel.CreateWriter` / `Excel.Append` support xlsx / xlsm only.
-- **Unified read facade**: `Excel.Read<T>`, `Excel.ReadSheet`, `Excel.ReadAsDataTable`, `Excel.StreamRows`, and `Excel.EnumerateRows` route xlsx/xlsm/xlsb/xls automatically for path inputs; stream inputs require an explicit `ExcelFormat`.
+- **Unified read facade**: `Excel.Read<T>`, `Excel.ReadSheet`, `Excel.ReadAsDataTable`, `Excel.StreamRows`, and `Excel.EnumerateRows` route xlsx/xlsm/xlsb/xls automatically for path inputs; stream inputs require an explicit `ExcelFormat`. Note: the Stream overload that does not take an `ExcelFormat` (e.g. `EnumerateRows(Stream, sheetName)`) parses via the xlsx/xlsm path; to read other formats such as xlsb / xls, use the overload that accepts an `ExcelFormat`.
 - **Four-format streaming read**: xlsx/xlsm, xlsb, and xls all support per-row streaming with early termination (`Take(n)` / `First()` / `break`), without holding full row data in memory. Shared strings and style tables are still pre-loaded (workbook-level shared).
 - **Hyperlink count**: when the number of hyperlinks is extremely large, the streaming writer's memory is no longer constant (all hyperlink references are buffered internally).
 - **Append**: `Excel.Append` reads the entire existing file before writing; suited to incremental appends of small/medium files.
@@ -3205,7 +3230,7 @@ foreach (var row in Excel.EnumerateRows("big.xlsx"))
     Process(row);
 ```
 
-`sheetName` null defaults to the first sheet. Only xlsx / xlsm are supported. The iterator releases the file handle on dispose; `break` also releases it.
+`sheetName` null defaults to the first sheet. Supports xlsx / xlsm / xlsb / xls (csv excluded). The iterator releases the file handle on dispose; `break` also releases it.
 
 ```csharp
 // WinForms async call to avoid UI thread blocking
@@ -3394,7 +3419,7 @@ Output:
 
 ## 23.2 IsAotCompatible
 
-The net8.0 target declares `IsAotCompatible=true` in the csproj, all public APIs are compatible with Native AOT / trimming:
+The net8.0 target declares `IsAotCompatible=true` in the csproj; representative public APIs have passed native AOT smoke verification:
 
 ```csharp
 var wb = Excel.Create("Sheet1");
@@ -3413,7 +3438,7 @@ Output:
 
 ## 23.3 Verification and Results Summary
 
-- Verified via native AOT executable, all public APIs pass.
+- Verified via a native AOT executable: the public APIs covered by the AOT smoke cases pass.
 - AOT zero IL warnings + runtime assertions pass.
 - Note: `Excel.Read<T>` / `XlsxReader.Read` (see Appendix B.2) only support xlsx / xlsm; **xls / xlsb / csv must use `Excel.Open(path)`** (routes by extension to the backend). Use `Excel.Open` for non-zip formats when reading sheet names on demand.
 
@@ -3510,8 +3535,8 @@ Output:
 | Saving a new workbook without a target path | `LiteExcelException` |
 | Saving a read-only workbook (modify password not authorized) | `LiteExcelException` |
 | Saving with a password as csv / xls | `LiteExcelException` |
-| Saving a workbook containing macros as xlsx / xls | `LiteExcelException` |
-| Streaming read / append of a non-xlsx/xlsm file | `LiteExcelException` |
+| Saving a workbook containing macros as xlsx / xls (strict mode `AllowFeatureLossOnSave=false`) | `LiteExcelException` |
+| Streaming read of csv, or streaming write / append of a non-xlsx/xlsm file | `LiteExcelException` |
 | CSV multi-sheet write | `NotSupportedException` |
 | Cell type mismatch on strongly-typed read | `InvalidCastException` |
 

@@ -133,8 +133,9 @@ public sealed class Workbook
             // 记录打开时的 0-based 序号：删除/移动表后用于从 preserved 复用该表原始 rels
             sheet.OrigIndex = i;
             var ws = Worksheet.FromSheetData(sheet);
+            // 内部挂载：不触发 OnWorksheetAdded（后者会把 Properties.Modified 覆盖为当前时间，
+            // 导致打开已有文件后读回的 Modified 失真，见 C2 回归）。
             wb.Worksheets.AddInternal(ws);
-            wb.OnWorksheetAdded(ws);
         }
         return wb;
     }
@@ -436,15 +437,17 @@ public sealed class Workbook
                 }
                 return;
             }
-            bool anyAdvancedModified = AdvancedXlsbSheetIndexes.Count > 0
-                && AdvancedXlsbSheetIndexes.Any(i => i >= 0 && i < Worksheets.Count && Worksheets[i].IsModified);
-            bool structureChanged = _openedSheetNames is not null
-                && (Worksheets.Count != _openedSheetNames.Count
-                    || !Worksheets.Select((w, i) => w.Name).SequenceEqual(_openedSheetNames));
-            if (!anyAdvancedModified && !structureChanged)
+            // 手术式编辑通道：表结构不变、仅改单元格内容/表名、末尾追加普通表时，其余二进制部件逐字节保留。
+            if (CanSurgicalEditXlsb(sheets))
                 return;
+            // 安全缺口修复：走到这里说明无法使用任何逐字节保真通道（verbatim / surgical delete / surgical edit），
+            // 保存必然回退整本 rebuild，而 rebuild 会丢弃全部高级部件（见 XlsbWriter.WriteRebuilt 注释）。
+            // 因此只要源含高级部件就必须上报/阻止，不能再用「AdvancedXlsbSheetIndexes 中是否有表被修改」作为是否上报的
+            // 条件——该条件漏掉了「workbook 级高级部件（connections.bin / model/item.data 等）+ 修改发生在非高级表」
+            // 的情形（真实 Excel COM 验证：此路径产物无法打开，HRESULT 0x800A03EC）。
             ReportOrBlockAdvancedXlsb(format,
-                $"源 XLSB 文件包含当前模型无法安全合并的高级部件，保存到 {format} 时这些部件可能丢失。");
+                $"源 XLSB 文件包含当前模型无法安全合并的高级部件（透视表/切片器/连接/Power Query/数据模型等），" +
+                $"保存到 {format} 时这些部件可能丢失。");
             return;
         }
 

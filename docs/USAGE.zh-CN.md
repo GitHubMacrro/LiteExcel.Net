@@ -86,7 +86,7 @@ dotnet add package LiteExcel
 using LiteExcel;
 ```
 
-**目标框架**：库同时面向 net48 与 net8.0。net8.0 目标额外声明 `IsAotCompatible=true`，全部公开 API 兼容 Native AOT 与裁剪（见第 23 章）。
+**目标框架**：库同时面向 net48 与 net8.0。net8.0 目标额外声明 `IsAotCompatible=true`，代表性公开 API 已通过原生 AOT smoke 验证（见第 23 章）。
 
 ---
 
@@ -209,7 +209,7 @@ var wb = Excel.Open("secured.xlsx", new ExcelReadOptions
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | `OpenPassword` | `string?` | 打开密码，解密带密码的 xlsx / xlsm / xlsb |
-| `ModifyPassword` | `string?` | 修改密码（写保护），提供后获得编辑 / 保存权限 |
+| `ModifyPassword` | `string?` | 写保护授权条件：提供任意**非空**值即获得编辑 / 保存权限（当前不校验密码哈希，见 §18.5） |
 | `FillMergedCells` | `bool` | 把合并区左上角的值展开到整个合并区域，默认 `false` |
 | `Separator` | `char?` | 仅 CSV 生效，`null` 时自动探测 |
 | `ReadStyles` | `bool` | 是否读取样式，默认 `true` |
@@ -353,12 +353,12 @@ Excel.Write("out.xlsx", wb, new ExcelWriteOptions
 文件级密码（打开 / 修改）仅支持 xlsx / xlsm / xlsb，存为 csv / xls 时若带密码会报错。这类「目标格式不支持某能力」的情况都会经 `OnDegradation` 逐项上报，挂个回调就能拿到清单。
 
 > ⚠️ **重要限制**
-> 含 VBA 宏的工作簿不允许存为 xlsx / xls（不支持宏的格式），会提前报错。覆盖源文件前请先另存副本。
+> 含 VBA 宏的工作簿存为 xlsx / xls（不支持宏的格式）时，默认放行保存并剥离宏，同时经 `OnDegradation` / `wb.SaveDegradations` 上报 `Macros`；仅当 `wb.AllowFeatureLossOnSave = false`（严格模式）时才抛 `LiteExcelException` 阻止保存。覆盖源文件前请先另存副本。
 
 ## 3.6 文档属性 WorkbookProperties
 
 > ⚠️ **重要限制**
-> 仅支持 xlsx / xlsm / xlsb。写出 xls 时属性静默丢失，经 `OnDegradation` 上报。
+> 仅支持 xlsx / xlsm / xlsb。写出 xls 时属性会被丢弃，并经 `OnDegradation` 上报（非静默）。
 
 `Workbook.Properties` 对应 xlsx 包内的 `docProps/core.xml` 与 `docProps/app.xml`：
 
@@ -897,6 +897,8 @@ Excel.Write("out.xlsx", people, configure: opt => opt
 DataTable 自带列结构，无需反射（不触发反射映射），AOT 安全。首行自动写为列名：
 
 ```csharp
+using System.Data;
+
 var dt = new DataTable("订单");
 dt.Columns.Add("OrderID", typeof(int));
 dt.Columns.Add("Customer", typeof(string));
@@ -1111,6 +1113,8 @@ Console.WriteLine(ws.RowStyles[0].Bold);   // True
 True
 ```
 
+> ⚠️ **往返限制（Design Limitation）**：`HeaderStyle` 仅在低层 `SheetData.Headers` 路径（List\<T\> / DataTable / 低层写入）能写→读往返恢复。对象模型的 `ws.HeaderStyle` 写出时不会落到任何可逆的单元格样式引用，因此对象模型 Save → Open 后**无法恢复** `HeaderStyle`。
+
 ## 6.6 全表默认样式 DefaultStyle
 
 优先级最低：
@@ -1127,6 +1131,8 @@ Console.WriteLine(ws.DefaultStyle.FontName);   // Consolas
 ```
 Consolas
 ```
+
+> ⚠️ **读回为启发式（Heuristic）**：写出时 `DefaultStyle` 会展开到各数据单元格；重新打开时库按「数据区所有单元格共享同一非空样式」推断是否恢复 `DefaultStyle`，因此可能误判（未设置也可能被推断出，或设置后无法还原），不保证严格往返。
 
 ## 6.7 行级样式 RowStyles
 
@@ -1147,6 +1153,8 @@ Console.WriteLine(ws.RowStyles[1].FillColor);   // #FCE4D6
 ```
 #FCE4D6
 ```
+
+> ⚠️ **读回限制**：写出侧 `RowStyles` 的 key 以绝对行索引（行号 - 1）应用并正确落盘；但对象模型打开文件后**不会**恢复 `Worksheet.RowStyles`（行级样式在读取时展开到单元格），Open 后该属性可能为 `null`。不要依赖 Save → Open 完整还原 `RowStyles`。
 
 ## 6.8 列级样式 ColumnStyles
 
@@ -1334,11 +1342,11 @@ foreach (var ws in wb.Worksheets.Where(w => w.Name.StartsWith("临时")).ToList(
 
 #### 保真性
 
-删除工作表后保存，与 Excel 自身「删除工作表后另存」的结果等价：被删表及其引用被摘除，其余工作表、透视表、透视缓存、超级表、连接、数据模型、VBA 宏、标签颜色等**全部完整保留**（xlsb 亦同）。机制说明见 [§20.5 打开-保存保真](#205-打开-保存保真)。
+删除工作表后保存：被删表及其引用被摘除，其余内容在**不含 Power Query / 数据模型**的常规文件上完整保留，结果与 Excel 自身「删除工作表后另存」等价。机制说明见 [§20.5 打开-保存保真](#205-打开-保存保真)。
 
-- **xlsx / xlsm**：完整保留其余高级部件（透视表 / 图表 / 切片器 / ActiveX / 宏）。
-- **xlsb**：删除 XLSB 工作表后保存为 xlsb，同样完整保留透视表、透视缓存、超级表、连接、数据模型和 VBA 宏。
-- **xlsb → xlsm**：透视表、切片器、连接、数据模型等高级部件也会保留。
+- **xlsx / xlsm**：保留其余高级部件（透视表 / 图表 / 切片器 / ActiveX / 宏）。
+- **xlsb**：删除 XLSB 工作表后保存为 xlsb，常规文件可保留透视表、透视缓存、超级表、连接、数据模型和 VBA 宏。
+- **xlsb → xlsm**：透视表、切片器、连接、数据模型等高级部件会尽量保留（受下方已知限制约束）。
 
 > ⚠️ **已知限制（含 Power Query / 数据模型的 xlsb）**
 > 在包含 Power Query 或数据模型的 .xlsb 文件中，**删除工作表、插入/删除行列、修改工作表可见性或标签颜色、增删超级表**等操作之后另存，生成的文件可能无法被 Excel 打开。
@@ -1368,7 +1376,7 @@ wb.SaveAs("out.xlsx");
 本章介绍自动筛选：写出筛选区域与列条件、条件类型与比较操作符、手动隐藏行，以及读回筛选。
 
 > ⚠️ **重要限制**
-> 自动筛选仅支持 xlsx / xlsm。写出到 xls / xlsb / csv 时筛选被丢弃，经 `OnDegradation` 上报（见第 22 章）。
+> 自动筛选：**xlsx / xlsm** 完整读写（筛选范围 + 列条件）；**xlsb** 筛选**范围**可读写，但**列条件**会发生降级，并经 `OnDegradation` / `wb.SaveDegradations` 上报（见第 22 章）；**xls / csv** 完全丢弃筛选。
 
 ## 📑 目录
 
@@ -1552,6 +1560,8 @@ ws.RowHeights = new Dictionary<int, double> { { 0, 30.0 } };   // 第 1 行高 3
 | --- | --- | --- |
 | key | `int` | 0-based 行索引 |
 | value | `double` | 行高，单位磅（point） |
+
+> ℹ️ **行号语义**：库内部网格使用**绝对 Excel 行号**（`_grid[i]` 对应第 `i+1` 行）。读取稀疏行文件时不会把空行压缩：前导空行、内部空行均按实际 Excel 行号映射，`RowHeights` 的 key 也按此理解。打开**已有文件**再保存时，行高按原始行号保留。
 
 ## 9.2 设置列宽
 
@@ -2392,7 +2402,7 @@ var table = ws.AddTable("A1:B3", "Products", "TableStyleMedium9");
 // 不在 60 个内置名内时 Excel 打开退化为无样式（经 OnDegradation 上报）
 ```
 
-> ⚠️ 样式名不在 60 个内置名内时，Excel 打开会静默退化为无样式，经 `OnDegradation` 回调上报（见第 22 章）。
+> ⚠️ 样式名不在 60 个内置名内时，Excel 打开会退化为无样式；库写出时经 `OnDegradation` 回调上报（见第 22 章）。
 
 ## 16.4 表属性
 
@@ -2471,7 +2481,7 @@ Products A1:B3 样式=TableStyleMedium2
 本章介绍命名区域（definedNames）的读回与写出保留。
 
 > ⚠️ **重要限制**
-> 命名区域支持范围：**xlsx / xlsm** 完整读回（`workbook.xml` 的 `definedNames`）；**xlsb** 支持读回（`BrtDefinedName` + `BrtExternSheet`，简单单元格/区域引用，复杂表达式跳过）；**xls** 支持简单单元格/区域引用（PtgRef3d / PtgArea3d），复杂公式类命名区域会跳过。xlsb / xls 写出均不支持命名区域。写出到不支持该能力的格式时命名区域会**静默丢失**，经 `OnDegradation` 上报。
+> 命名区域支持范围：**xlsx / xlsm** 完整读回（`workbook.xml` 的 `definedNames`）；**xlsb** 支持读回（`BrtDefinedName` + `BrtExternSheet`，简单单元格/区域引用，复杂表达式跳过）；**xls** 支持简单单元格/区域引用（PtgRef3d / PtgArea3d），复杂公式类命名区域会跳过。xlsb / xls 写出均不支持命名区域。写出到不支持该能力的格式时命名区域会被丢弃，并经 `OnDegradation` / `wb.SaveDegradations` 上报（非静默）。
 
 ## 📑 目录
 
@@ -2568,7 +2578,7 @@ Console.WriteLine(sec.CanSave);              // true
 | --- | --- | --- |
 | `HasOpenPassword` | `bool` | 文件是否有打开密码（文件加密） |
 | `HasModifyPassword` | `bool` | 文件是否有修改密码（写保护） |
-| `HasModifyAccess` | `bool` | 是否已获得修改权限（提供了正确修改密码） |
+| `HasModifyAccess` | `bool` | 是否已获得修改权限（提供**非空**修改密码即视为授权；当前不校验哈希） |
 | `IsReadOnly` | `bool` | 有修改密码但未获修改权限时为只读 |
 | `CanSave` | `bool` | 是否允许保存（`!IsReadOnly`） |
 
@@ -2609,7 +2619,7 @@ wb.SaveAs("secured.xlsx");
 
 ## 18.4 移除密码
 
-打开含密码文件（提供正确密码获得授权）后，调用移除方法再保存即可去密码：
+打开含密码文件（提供非空密码获得授权）后，调用移除方法再保存即可去密码：
 
 ```csharp
 var wb = Excel.Open("secured.xlsx", new ExcelReadOptions { OpenPassword = "secret", ModifyPassword = "write" });
@@ -2640,7 +2650,7 @@ True
 False
 ```
 
-文件设置了修改密码但未提供（或提供错误）时，工作簿以**只读**方式打开，`IsReadOnly = true`、`CanSave = false`，保存会抛 `LiteExcelException`。提供正确的 `ModifyPassword` 即获得编辑授权（`HasModifyAccess = true`）。
+文件设置了修改密码但**未提供**时，工作簿以**只读**方式打开，`IsReadOnly = true`、`CanSave = false`，保存会抛 `LiteExcelException`。提供任意**非空** `ModifyPassword` 即获得编辑授权（`HasModifyAccess = true`）——当前实现采用「提供即授权」的保守策略，**不校验密码哈希**，因此提供错误但非空的密码同样会获得修改权限，请勿将其视为完整的密码认证机制。
 
 ## 18.6 保真回写
 
@@ -2657,14 +2667,14 @@ wb.SaveAs("secured_copy.xlsx");   // 默认继承打开密码
 
 输出：已写入 secured_copy.xlsx
 
-> ⚠️ `ModifyPasswordTouched`（用户显式改动过修改密码）时不透传原 fileSharing，按新设置的修改密码重新生成。含 VBA 宏的工作簿保存为 xlsx / xls 会报错（格式不支持宏）。
+> ⚠️ `ModifyPasswordTouched`（用户显式改动过修改密码）时不透传原 fileSharing，按新设置的修改密码重新生成。含 VBA 宏的工作簿保存为 xlsx / xls 时默认放行并剥离宏、经 `OnDegradation` / `wb.SaveDegradations` 上报 `Macros`；仅 `AllowFeatureLossOnSave = false`（严格模式）才抛异常阻止。
 
 # 19. 工作表 / 工作簿保护
 
 本章介绍工作表保护与工作簿保护，含可选密码（SHA-512 + salt 哈希）。
 
 > ⚠️ **重要限制**
-> 工作表 / 工作簿保护支持 xlsx / xlsm / xlsb 写出与读回。xls / csv 不支持，写出时经 `OnDegradation` 上报。
+> 工作表 / 工作簿保护当前**仅支持 xlsx / xlsm** 写出与读回。xlsb / xls / csv 不写出保护；当前 `DegradationCapability` 未定义 Protection 能力，因此这些格式丢弃保护时**不会**经 `OnDegradation` 上报。
 
 ## 📑 目录
 
@@ -2795,7 +2805,7 @@ True structure=True hasPwd=False
 
 ## 20.1 格式能力矩阵
 
-下表列出每个能力在各格式下的支持情况；其中 xls / xlsb / csv 不支持的能力在写出时经 `ExcelWriteOptions.OnDegradation` 上报（见第 22 章）。
+下表列出每个能力在各格式下的支持情况；其中 xls / xlsb / csv 不支持的能力在写出时经 `ExcelWriteOptions.OnDegradation` 上报（见第 22 章）。**例外**：工作表 / 工作簿保护没有对应的 degradation 能力，丢弃时不上报（见第 19 章）。
 
 | 能力 | xlsx | xlsm | xlsb | xls | csv |
 |---|---|---|---|---|---|
@@ -2817,6 +2827,7 @@ True structure=True hasPwd=False
 | 工作表标签颜色 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 文档属性 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
 | 打开 / 修改密码 | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
+| 工作表 / 工作簿保护 | ☑️ | ☑️ | ❌ | ❌ | ❌ |
 | 插入 / 删除行列 | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 | 公式（写） | ☑️ | ☑️ | 基础写回 | 基础写回 | ❌ |
 | 公式（读） | ☑️ | ☑️ | 可解析时还原 | 可解析时还原 | ❌ |
@@ -2830,7 +2841,7 @@ True structure=True hasPwd=False
 | 自动列宽（AutoFitColumns / AutoColumnWidths） | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
 图例：☑️ 支持 · ❌ 不支持 · 单元格内文字表示部分支持
 
-> **跨格式转换**：打开 .xlsb 后另存为 .xlsx / .xlsm 时，透视表、切片器、数据查询（Power Query）、数据模型、图形等高级内容也会一并保留（见 [§20.5](#205-打开-保存保真)）。
+> **跨格式转换**：打开 .xlsb 后另存为 .xlsx / .xlsm 时，透视表、切片器、数据查询（Power Query）、数据模型、图形等高级内容会**尽量保留**（不含 Power Query / 数据模型时通常可正常打开；相关已知限制见 [§20.5](#205-打开-保存保真)）。
 
 写出到 csv 时接通降级回调，观察被丢弃的能力：
 
@@ -2857,8 +2868,8 @@ Excel.Write("matrix.csv", wb, new ExcelWriteOptions
 
 xls / xlsb 写出时按格式与路径区分：
 
-- **xlsb 重建写出**（新建 / 编辑单元格后保存）：样式降级为仅保留 `NumberFormat`；批注 / 数据验证 / 超级表 / 浮动图片已支持写出；条件格式支持全部 18 种 OOXML 规则类型（cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / 文本类 / 空值类 / 错误类 / uniqueValues / duplicateValues / timePeriod / textLength）；命名区域仅读回、不写出；**InCell 图片**被丢弃；公式文本不保留，按缓存值写出。丢弃项经 `OnDegradation` 显式上报（见第 22 章）。
-- **xlsb 打开-保存 / 删表**：未改动的内容原样保留，条件格式 / 图片 / 透视表 / 图表 / 切片器等**完整保留**，无降级上报。
+- **xlsb 重建写出**（新建 / 编辑单元格后保存）：样式降级为仅保留 `NumberFormat`；批注 / 数据验证 / 超级表 / 浮动图片已支持写出；条件格式支持全部 18 种 OOXML 规则类型（cellIs / expression / colorScale / dataBar / iconSet / top10 / aboveAverage / belowAverage / 文本类 / 空值类 / 错误类 / uniqueValues / duplicateValues / timePeriod / textLength）；命名区域仅读回、不写出；**InCell 图片**被丢弃；公式文本不保留，按缓存值写出；AutoFilter 仅写入筛选**范围**，**列条件**发生降级并经 `OnDegradation` / `wb.SaveDegradations` 上报。丢弃项经 `OnDegradation` 显式上报（见第 22 章）。
+- **xlsb 打开-保存 / 删表**：未改动的内容原样保留，条件格式 / 图片 / 透视表 / 图表 / 切片器等保留（常规文件），无降级上报。**含 Power Query / 数据模型的 xlsb** 走整本重建路径的受限操作仍可能产出 Excel 拒开的文件（见 [§7.6](#76-删除整张工作表-worksheetdelete) / [§20.5](#205-打开-保存保真) 的已知限制）。
 - **xls 写出**：样式降级为仅保留 `NumberFormat`；批注支持写出；数据验证 / 超级表 / 条件格式 / 图片 / 命名区域被丢弃；公式文本不保留，按缓存值写出。这些降级经 `OnDegradation` 显式上报（见第 22 章）。
 
 > **xls 工作表尺寸上限**：`xls`（BIFF8）最多 256 列 / 65536 行。超出上限的数据（含远超数据范围的列宽声明）在写出时被裁剪，经 `DegradationCapability.SheetSize` 上报。
@@ -2894,6 +2905,8 @@ Sheet1: hello
 **编码选项**：编码实例由调用方提供，本库不引用任何编码包。
 
 ```csharp
+using System.Text;
+
 // 默认：写出 UTF-8 带 BOM（Excel 打开中文不乱码），读取按 BOM 探测
 Excel.Write("out.csv", wb);
 var back = Excel.Open("out.csv");
@@ -2966,9 +2979,9 @@ catch (LiteExcelException ex)
 
 打开已有文件再保存时，未改动的内容会被**原样保留**，不会因为库不认识它而丢失。这包括宏、图表、透视表、透视缓存、超级表、切片器、外部连接、数据模型、自定义 XML、工作表标签颜色、样式等高级内容。改表名不再丢图表关联；追加数据不再丢宏。
 
-删除工作表后保存也走同一套保真逻辑：被删表及其引用被摘除，其余内容完整保留，结果与 Excel 自身「删除工作表后另存」等价（xlsb 同样完整保留透视表 / 连接 / 数据模型 / VBA / 标签颜色）。
+删除工作表后保存也走同一套保真逻辑：被删表及其引用被摘除，其余内容在**常规文件**上完整保留，结果与 Excel 自身「删除工作表后另存」等价（xlsb 亦同；**含 Power Query / 数据模型**的 xlsb 受下方例外约束）。
 
-**跨格式转换**：打开 .xlsb 文件后另存为 .xlsx 或 .xlsm 时，除了普通数据和样式，透视表、透视缓存、切片器、数据查询（Power Query）、数据模型、图形（含 ActiveX 形状）、条件格式等也会尽量保留，在 Excel 中可正常打开。若需要回到旧行为（丢弃这些内容并记录提示），可设置环境变量 `LITEXCEL_DISABLE_PIVOT_WIRING=1`。
+**跨格式转换**：打开 .xlsb 文件后另存为 .xlsx 或 .xlsm 时，除了普通数据和样式，透视表、透视缓存、切片器、数据查询（Power Query）、数据模型、图形（含 ActiveX 形状）、条件格式等会**尽量保留**；不含 Power Query / 数据模型的文件通常可在 Excel 中正常打开，含这些高级部件的 xlsb 走整本重建路径时仍可能产出 Excel 拒开的文件（见下方例外）。若需要回到旧行为（丢弃这些内容并记录提示），可设置环境变量 `LITEXCEL_DISABLE_PIVOT_WIRING=1`。
 
 > ⚠️ **例外（含 Power Query / 数据模型的 xlsb）**：在包含 Power Query 或数据模型的 .xlsb 文件中，**删除工作表、插入/删除行列、修改工作表可见性或标签颜色、增删超级表**等操作之后另存，生成的文件可能无法被 Excel 打开。修改单元格内容、重命名工作表、在末尾追加普通工作表不受影响。详见 [§7.6 删除整张工作表](#76-删除整张工作表-worksheetdelete) 的已知限制说明。
 
@@ -2993,7 +3006,7 @@ wb.SaveAs("macro_copy.xlsm");
 本章介绍大文件场景的流式读取、带进度读取、追加数据与流式写入。
 
 > ⚠️ **重要限制**
-> 流式读取 / 追加 / 流式写入仅支持 xlsx / xlsm。
+> 流式**读取**（`StreamRows` / `EnumerateRows`）支持 xlsx / xlsm / xlsb / xls（csv 除外）；**流式写入 / 追加**（`CreateWriter` / `Append`）仅支持 xlsx / xlsm。
 
 ## 📑 目录
 
@@ -3010,7 +3023,7 @@ wb.SaveAs("macro_copy.xlsm");
 
 ## 21.1 流式读取 StreamRows
 
-逐行回调，不驻留内存，适合大文件。仅支持 xlsx / xlsm：
+逐行回调，不驻留内存，适合大文件。支持 xlsx / xlsm / xlsb / xls（csv 除外）：
 
 ```csharp
 var sheet = new SheetData
@@ -3233,7 +3246,7 @@ Excel.ReadWithProgress("big.xlsx", 0, (current, total) =>
 
 - **内存模型**：`Excel.Open` / `Excel.Create` 返回的 `Workbook` 是内存模型，整簿加载到内存。超大文件请用流式 API 而非 `Excel.Open`。
 - **流式写入范围**：`Excel.CreateWriter` / `Excel.Append` 仅支持 xlsx / xlsm。
-- **统一读取门面**：`Excel.Read<T>`、`Excel.ReadSheet`、`Excel.ReadAsDataTable`、`Excel.StreamRows` 和 `Excel.EnumerateRows` 支持按路径自动路由 xlsx/xlsm/xlsb/xls；从流读取时须显式传入 `ExcelFormat`。
+- **统一读取门面**：`Excel.Read<T>`、`Excel.ReadSheet`、`Excel.ReadAsDataTable`、`Excel.StreamRows` 和 `Excel.EnumerateRows` 支持按路径自动路由 xlsx/xlsm/xlsb/xls；从流读取时须显式传入 `ExcelFormat`。注意：不指定 `ExcelFormat` 的 Stream 重载（如 `EnumerateRows(Stream, sheetName)`）按 xlsx/xlsm 路径解析；读取 xlsb / xls 等其他格式时请使用带 `ExcelFormat` 的重载。
 - **四格式流式读取**：xlsx/xlsm、xlsb、xls 均支持逐行读取并提前终止（`Take(n)` / `First()` / `break`），不驻留完整行数据。共享字符串与样式表仍预加载（工作簿级共享）。
 - **超链接数量**：流式写入器在超链接数量极大时内存不再恒定（内部缓冲全部超链接引用）。
 - **追加**：`Excel.Append` 会读取整个既有文件再写出，适合中小文件增量追加。
@@ -3268,7 +3281,7 @@ foreach (var row in Excel.EnumerateRows("big.xlsx"))
     Process(row);
 ```
 
-`sheetName` 为 null 时取第一张表。仅支持 xlsx / xlsm。迭代器释放时关闭文件句柄，`break` 提前退出也会释放。
+`sheetName` 为 null 时取第一张表。支持 xlsx / xlsm / xlsb / xls（csv 除外）。迭代器释放时关闭文件句柄，`break` 提前退出也会释放。
 
 ```csharp
 // WinForms 异步调用，避免 UI 线程卡死
@@ -3458,7 +3471,7 @@ Console.WriteLine(read.Count);
 
 ## 23.2 IsAotCompatible
 
-net8.0 目标在 csproj 声明 `IsAotCompatible=true`，全部公开 API 兼容 Native AOT / 裁剪：
+net8.0 目标在 csproj 声明 `IsAotCompatible=true`；代表性公开 API 已通过原生 AOT smoke 验证：
 
 ```csharp
 var wb = Excel.Create("Sheet1");
@@ -3477,7 +3490,7 @@ Console.WriteLine(reopened.Worksheets.Count);
 
 ## 23.3 验证方式与成果摘要
 
-- 经原生 AOT 可执行文件实测，全部公开 API 通过。
+- 经原生 AOT 可执行文件实测，AOT smoke 用例覆盖的公开 API 通过。
 - AOT 零 IL 警告 + 运行期断言通过。
 - 注意：`Excel.Read<T>` / `XlsxReader.Read`（见附录 B.2）仅支持 xlsx / xlsm；**xls / xlsb / csv 必须走 `Excel.Open(path)`**（按扩展名路由后端）。按需读表名时用 `Excel.Open` 处理非 zip 格式。
 
@@ -3573,7 +3586,7 @@ catch (InvalidSheetNameException ex)
 | 新建簿未指定路径就 Save | `LiteExcelException` |
 | 只读工作簿（有修改密码未授权）保存 | `LiteExcelException` |
 | 带密码保存为 csv / xls | `LiteExcelException` |
-| 含宏保存为 xlsx / xls | `LiteExcelException` |
+| 含宏保存为 xlsx / xls（严格模式 `AllowFeatureLossOnSave=false`） | `LiteExcelException` |
 | 流式读取 / 追加非 xlsx/xlsm | `LiteExcelException` |
 | CSV 多表写出 | `NotSupportedException` |
 | 单元格类型不匹配强类型读取 | `InvalidCastException` |
@@ -3662,7 +3675,6 @@ catch (Exception ex)
 | `Security` | `WorkbookSecurity` 文件级安全状态 |
 | `Protection` | `WorkbookProtection` 工作簿保护 |
 | `Format` | 当前工作簿格式 |
-| `Date1904` | 1904 日期系统标志 |
 | `Save()` / `SaveAs(path[, format])` | 保存 / 另存 |
 | `Save(stream, format)` | 存到流 |
 
@@ -3674,7 +3686,7 @@ catch (Exception ex)
 | `Cells` / `Cell(address)` / `Cell(row, col)` | 单元格访问 |
 | `Range(address)` | 区域访问 |
 | `SetValue(...)` | 写入值 |
-| `RowHeight` / `ColumnWidth` / `ColumnWidths` | 行高 / 列宽 |
+| `RowHeights` / `ColumnWidths` | 行高 / 列宽（0-based 字典） |
 | `AutoColumnWidths()` | 列宽自适应 |
 | `Merge(...)` / `Unmerge(...)` | 合并 / 取消合并 |
 | `MergedRanges` | 合并区域列表 |
@@ -3687,7 +3699,7 @@ catch (Exception ex)
 | `AddImage(...)` | 添加图片 |
 | `FreezeRows` / `FreezeColumns` / `FreezeHeader` | 冻结窗格 |
 | `Protection` | 工作表保护 |
-| `Style` / `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | 样式 |
+| `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | 样式 |
 | `ImportData(...)` | 导入数据 |
 
 ## A.4 模型类

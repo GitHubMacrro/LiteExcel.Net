@@ -48,11 +48,16 @@ public sealed class Worksheet
     public Dictionary<int, double>? RowHeights { get; set; }
 
     /// <summary>
-    /// 数据区起始的原始 1-based 行号（0 = 紧凑模式，从第 1 行写）。
-    /// 打开文件时由 <see cref="SheetData.FirstRowNumber"/> 回填；写出时经 <see cref="ToSheetData"/> 透传。
-    /// 高层坐标仍 1-based 紧凑，本字段只在写出层体现前置空行补齐。
+    /// 数据区起始的原始 1-based 行号（0 = 未知 / 紧凑）。
+    /// 打开文件时由 <see cref="SheetData.FirstRowNumber"/> 回填，<b>getter</b> 反映源文件原始首行号，可用于读取。
+    /// <para>
+    /// <b>写出（object-model Save）不使用本属性进行行位移</b>：自 C1 起对象模型网格使用
+    /// <b>绝对 Excel 行号</b>语义（<c>_grid[i]</c> = 第 i+1 行），数据落点由写入的绝对行决定，
+    /// 保存时 <see cref="ToSheetData"/> 统一以第 1 行起导出，因此 <b>setter 不产生任何位移效果</b>。
+    /// 若要让数据从第 N 行开始，请直接写入第 N 行（如 <c>ws.SetValue(N, col, value)</c> 或 <c>ws.SetValue("A5", value)</c>）。
+    /// </para>
     /// </summary>
-    public int FirstRowNumber { get; set; }
+    public int FirstRowNumber { get; [Obsolete("对象模型保存路径不再使用 FirstRowNumber 进行行位移；如需从第 N 行开始，请直接将数据写入第 N 行。getter 仍可用于读取打开文件的原始首行号。", error: false)] set; }
 
     /// <summary>读取时捕获的 worksheet extLst 原始 XML（内部使用，写出时透传保留） </summary>
     internal string? SheetExtLstXml { get; set; }
@@ -933,6 +938,7 @@ public sealed class Worksheet
     /// <summary>转换回低层 SheetData（写回用） </summary>
     public SheetData ToSheetData()
     {
+#pragma warning disable CS0618 // FirstRowNumber setter 已废弃；此处为内部导出，写入绝对行语义下的固定值。
         var sheet = new SheetData
         {
             SheetName = Name,
@@ -944,7 +950,7 @@ public sealed class Worksheet
             RowStyles = RowStyles,
             ColumnStyles = ColumnStyles,
             RowHeights = RowHeights,
-            FirstRowNumber = FirstRowNumber,
+            FirstRowNumber = _grid.Count > 0 ? 1 : 0, // C1: _grid 已按绝对行号稠密布局，写出从第 1 行起。
             SheetExtLstXml = SheetExtLstXml,
             SheetId = SheetId,
             SheetState = SheetVisibilityMap.ToOoxml(_visible),
@@ -961,6 +967,7 @@ public sealed class Worksheet
             Protection = Protection,
             Tables = _tables.Select(t => CloneTable(t)).ToList(),
         };
+#pragma warning restore CS0618
 
         if (Images.Count > 0)
             sheet.Images = Images;
@@ -1000,6 +1007,7 @@ public sealed class Worksheet
     /// <summary>从低层 SheetData 构建 Worksheet（读取时复用） </summary>
     internal static Worksheet FromSheetData(SheetData sheet)
     {
+#pragma warning disable CS0618 // FirstRowNumber setter 已废弃；此处为内部读取回填源文件首行号，属合法内部用途。
         var ws = new Worksheet(sheet.SheetName)
         {
             FreezeHeader = sheet.FreezeHeader,
@@ -1020,6 +1028,7 @@ public sealed class Worksheet
             Protection = sheet.Protection,
             OrigIndex = sheet.OrigIndex,
         };
+#pragma warning restore CS0618
         // 可见性/标签颜色：直接写私有字段，避免触发 IsModified（读取不应视为修改）。
         ws._visible = SheetVisibilityMap.FromOoxml(sheet.SheetState);
         ws._tabColor = sheet.TabColor;
@@ -1045,24 +1054,79 @@ public sealed class Worksheet
         if (sheet.ColumnWidths is not null)
             ws.ColumnWidths = sheet.ColumnWidths.Select((w, i) => (i, w)).ToDictionary(x => x.i, x => x.w);
 
-        // 低层 Headers + Rows 重组为原始网格（首行合并回数据区）
+        // 低层 Headers + Rows 重组为绝对网格（index = absolute row - 1）。
+        // C1 修复：用 RowNumbers 保留稀疏行间隙，使 TryGetCell(row1,col1)=_grid[row1-1] 正确。
+        int mergeOffset = (sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber - 1 : 0)
+                          + (sheet.Headers is { Count: > 0 } ? 1 : 0);
+        bool haveRowNumbers = sheet.RowNumbers is { Count: var n } && n == sheet.Rows.Count && n > 0;
+        int baseRow = sheet.FirstRowNumber > 0 ? sheet.FirstRowNumber : 1;
+
         if (sheet.Headers is { Count: > 0 })
         {
             var headerRow = new List<Cell>(sheet.Headers.Count);
             foreach (var h in sheet.Headers)
                 headerRow.Add(LiteExcel.Cell.FromText(h));
-            ws.SetRowCells(0, headerRow);
+            // 表头行位于原始 FirstRowNumber（1-based），即 _grid[baseRow - 1]。
+            while (ws._grid.Count < baseRow)
+                ws._grid.Add(new List<Cell>());
+            ws._grid[baseRow - 1] = headerRow;
         }
 
-        foreach (var row in sheet.Rows)
+        for (int i = 0; i < sheet.Rows.Count; i++)
         {
-            var list = new List<Cell>(row.Count);
-            list.AddRange(row);
-            ws.Grid.Add(list);
+            var list = new List<Cell>(sheet.Rows[i].Count);
+            list.AddRange(sheet.Rows[i]);
+            int absRow = haveRowNumbers && sheet.RowNumbers![i] > 0 ? sheet.RowNumbers![i] : baseRow + (sheet.Headers is { Count: > 0 } ? 1 : 0) + i;
+            int idx = absRow - 1;
+            while (ws._grid.Count <= idx)
+                ws._grid.Add(new List<Cell>());
+            ws._grid[idx] = list;
         }
 
+        // 合并区域：数据区 0-based 偏移到绝对网格 0-based（合并区以连续数据行存储，用统一前导偏移即可）。
         foreach (var range in sheet.MergedRanges)
-            ws._mergedRanges.Add(range);
+            ws._mergedRanges.Add(new CellRange(range.FirstRow + mergeOffset, range.LastRow + mergeOffset, range.FirstCol, range.LastCol));
+
+        // C1 后续修复：RowHeights / RowStyles / Filter.HiddenRows 的低层 key 均为「数据区 0-based 索引」
+        // （即 sheet.Rows 的下标），而 Worksheet 已改用绝对网格索引（= 绝对行号 - 1）。
+        // 仅加前导 mergeOffset 无法处理内部空行；有 RowNumbers 时用 RowNumbers[dataIdx] - 1 精确映射，
+        // 无 RowNumbers（xls/xlsb 或紧凑路径）时退回旧的 key + mergeOffset 兼容行为。
+        int MapDataIndexToGrid(int dataIdx)
+        {
+            if (haveRowNumbers && dataIdx >= 0 && dataIdx < sheet.RowNumbers!.Count && sheet.RowNumbers![dataIdx] > 0)
+                return sheet.RowNumbers![dataIdx] - 1;
+            return dataIdx + mergeOffset;
+        }
+
+        if (sheet.RowHeights is { Count: > 0 } && (haveRowNumbers || mergeOffset > 0))
+        {
+            var rh = new Dictionary<int, double>();
+            foreach (var kv in sheet.RowHeights)
+                rh[MapDataIndexToGrid(kv.Key)] = kv.Value;
+            ws.RowHeights = rh;
+        }
+        if (sheet.RowStyles is { Count: > 0 } && (haveRowNumbers || mergeOffset > 0))
+        {
+            var rs = new Dictionary<int, CellStyle>();
+            foreach (var kv in sheet.RowStyles)
+                rs[MapDataIndexToGrid(kv.Key)] = kv.Value;
+            ws.RowStyles = rs;
+        }
+
+        // Filter.HiddenRows 与 _grid 统一为绝对索引：可映射的数据行用 RowNumbers 精确换算；
+        // 超出数据区范围（内部空行处的隐藏标记，reader 无对应数据行）保持原值以维持既有受限行为。
+        if (sheet.Filter is { HiddenRows.Count: > 0 } filter)
+        {
+            var hidden = new HashSet<int>();
+            foreach (var dataIdx in filter.HiddenRows)
+            {
+                if (haveRowNumbers && dataIdx >= 0 && dataIdx < sheet.RowNumbers!.Count && sheet.RowNumbers![dataIdx] > 0)
+                    hidden.Add(sheet.RowNumbers![dataIdx] - 1);
+                else
+                    hidden.Add(dataIdx);
+            }
+            filter.HiddenRows = hidden;
+        }
 
         ws.RebindOwners();
         return ws;

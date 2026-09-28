@@ -193,11 +193,12 @@ internal static partial class XlsbWriter
             return;
         }
 
-        // 手术式通道全部保真透传，不产生降级；重建/转换路径才上报降级。
-        ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
-
         if (!verbatim)
         {
+            // 手术式通道（verbatim / surgical delete / surgical edit）全部保真透传，已在上方 return，不产生降级；
+            // 仅重建/转换路径才上报降级 —— 避免 verbatim 无损保存时误报 NamedRanges/DocumentProperties/Styles 等伪降级。
+            ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
+
             var sst = new List<string>();
             var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
             var cellXfs = new List<(int Ifmt, string? FmtCode)>();

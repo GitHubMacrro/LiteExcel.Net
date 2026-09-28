@@ -1,28 +1,75 @@
-# LiteExcel
+# LiteExcel.Net
 
 [![NuGet](https://img.shields.io/nuget/v/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/LiteExcel)](https://www.nuget.org/packages/LiteExcel)
 [![CI](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml/badge.svg)](https://github.com/GitHubMacrro/LiteExcel.Net/actions/workflows/ci.yml)
 ![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%204.8-512BD4)
-![Native AOT](https://img.shields.io/badge/Native%20AOT-compatible-success)
+![Native AOT](https://img.shields.io/badge/Native%20AOT-tested-success)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A lightweight .NET library to read and write xlsx / xlsm / xlsb / xls / csv without installing Excel. Zero third-party dependencies, targets net48 and net8.0, AOT friendly.
+A zero-dependency .NET library to read and write xlsx / xlsm / xlsb / xls / csv with one object model. Targets net48 and net8.0, needs no Office installation, and has passed a Native AOT smoke test.
 
 > [中文 README](README.md)
 
+## Features
+
+- **Zero third-party dependencies**: built only on the .NET base class library, ready to use on reference, with no extra native components in the deploy package.
+- **Targets net48 and net8.0**: one API for both legacy and modern projects.
+- **Native AOT smoke test passed**: net8.0 sets `IsAotCompatible`; reflection is used only for `List<T>` mapping and is annotated with `[DynamicallyAccessedMembers]`. The repo ships a Native AOT publish smoke (`tests/LiteExcel.AotSmoke`) covering 10 cases such as `List<T>` mapping, DataTable, and conditional formatting, verified locally.
+- **One object model across five formats**: the same code with a different format argument writes xls or csv.
+- **Common spreadsheet operations**: styles and number formats, merge, row height / column width, auto filter, comments, data validation, hyperlinks, freeze panes, images, conditional formatting, tables, named ranges, formulas, file-level passwords, `List<T>` / DataTable mapping, and streaming read/write.
+- **Advanced content is primarily preserved**: charts, pivot tables, slicers, VBA macros, Power Query, the data model, external connections, and ActiveX shapes are preserved along the established save paths on open-then-save, rather than created or modified as part of the object model.
+
+### Five Formats at a Glance
+
+| Format | Read | Create / Edit | Advanced content preservation | Streaming read | Streaming write |
+|---|---|---|---|---|---|
+| xlsx / xlsm | yes | yes | yes | yes | yes |
+| xlsb | yes | partial (number format styles only) | yes (including save-as xlsx / xlsm) | yes | no |
+| xls | yes | partial (number format styles only) | no (reported as degraded) | yes | no |
+| csv | text values only | text only | — | no | no |
+
+> `Excel.Open` / `Read<T>` / `ReadSheet` / `ReadAsDataTable` / `GetSheetNames` route by extension, and all five formats can be read; per-row streaming read supports xlsx / xlsm / xlsb / xls (not csv). For the item-by-item breakdown, see the [usage guide §20.1](docs/USAGE.en.md#201-format-capability-matrix).
+
+### Capability Boundaries: Editable / Preserved / Degraded
+
+LiteExcel.Net capabilities fall into three categories. These three are enough to judge how a given feature behaves in a given format:
+
+- **Editable**: it can be read, modified, and written back.
+- **Preserved**: it cannot be edited directly as part of the object model, but on open-then-save it is preserved as-is when the relevant save path applies.
+- **Degraded**: when the target format cannot express it, the loss is **reported item by item** on save (query it via `Workbook.SaveDegradations`, or receive it through the `ExcelWriteOptions.OnDegradation` callback). Nothing is silently dropped.
+
+Note these three distinctions in particular:
+
+- **Editable ≠ Preserved**: content you can modify is not necessarily handled via preservation, and vice versa.
+- **Preserved ≠ Editable**: advanced content can be preserved as-is without offering create / edit APIs.
+- **Unsupported ≠ silently dropped**: unsupported capabilities are explicitly reported on write, not quietly discarded.
+
+### Advanced Content and Cross-Format
+
+Charts, pivot tables, slicers, VBA macros, Power Query, the data model, external connections, and ActiveX shapes are handled mainly through **preservation** — they cross the read/write process along the established save paths, rather than being created or modified as part of the object model.
+
+- **Open-then-save preservation**: on xlsx / xlsm / xlsb the advanced content above is preserved along the established save paths; xls does no fidelity passthrough (reported as degraded).
+- **Cross-format preservation (xlsb → xlsx / xlsm)**: when you open an `.xlsb` and save as `.xlsx` / `.xlsm`, pivot tables, slicers, Power Query, the data model, shapes, and other advanced content can be preserved through transcoding (enabled by default).
+
+> Advanced content preservation depends on the established transcode / fidelity paths. On an `.xlsb` containing Power Query / the data model, some operations that trigger a full rebuild have known limits; see the [usage guide](docs/USAGE.en.md).
+
+## Why LiteExcel.Net
+
+- **Lightweight**: zero third-party dependencies, a single package, and no Excel / Office installation required.
+- **Focused API**: one unified object model for common spreadsheet operations, shared across all five formats.
+- **Explicit behavior**: capability boundaries are stated clearly — what is editable, what is only preserved, and what is degraded; unsupported content is never silently dropped.
+
 ## Preview
 
-Below are files written by LiteExcel, opened in Excel:
+<details>
+<summary>Preview (files written by LiteExcel.Net, opened in Excel)</summary>
 
 [![Conditional formatting](docs/screenshots/conditional.png)](docs/screenshots/conditional.png)
 
 [![Excel tables and filters](docs/screenshots/table_filter.png)](docs/screenshots/table_filter.png)
 
 [![Images and freeze panes](docs/screenshots/image_freeze.png)](docs/screenshots/image_freeze.png)
-
-<details>
-<summary>More: styles and number formats · comments and validation · merged cells and hyperlinks</summary>
 
 [![Styles and number formats](docs/screenshots/style_number.png)](docs/screenshots/style_number.png)
 
@@ -32,25 +79,9 @@ Below are files written by LiteExcel, opened in Excel:
 
 </details>
 
-## Docs
+## Installation
 
-- [Usage Guide](docs/USAGE.en.md): full API reference and examples
-- [Changelog](docs/CHANGELOG.md): version history
-- [中文 README](README.md)
-
-## Features
-
-- Zero dependencies, built only on the .NET base class library, ready to use on reference with no extra native components in the deploy package.
-- Targets net48 and net8.0, all public APIs are Native AOT / trim compatible, verified by a native executable.
-- One object model across five formats; the same code with a different format argument writes xls or csv.
-- Covers common office needs: styles, number formats, merge, filter, row/column sizing, comments, data validation, hyperlinks, freeze panes, images, conditional formatting, tables, named ranges, formulas, file passwords, large-file streaming.
-- Open-then-save preserves untouched parts; macros, charts, pivot tables, the data model, and external connections pass through for xlsx / xlsm / xlsb.
-- Cross-format conversion keeps advanced content: opening an .xlsb and saving as .xlsx / .xlsm preserves pivot tables, slicers, Power Query queries, the data model, and shapes.
-- File-level security: open and modify passwords, sheet and workbook protection with optional password.
-- Streaming read and write keep memory flat for large files.
-- When writing to xls / xlsb / csv, capabilities the target format lacks are reported item by item, never silently dropped.
-
-## Install
+The project / repository is named **LiteExcel.Net**; the NuGet package is named **LiteExcel**:
 
 ```powershell
 dotnet add package LiteExcel
@@ -63,6 +94,8 @@ dotnet add package LiteExcel --source .\packages
 ```
 
 ## Quick Start
+
+The examples below target net48 and net8.0.
 
 **Object model**: create a workbook, write by natural hierarchy, then open and read.
 
@@ -83,50 +116,14 @@ var name = opened.Worksheets[0].Cell("A2").GetString();
 var age = opened.Worksheets[0].Cells[2, 2].GetDouble();
 ```
 
-For `List<T>` mapping, DataTable, and low-level `SheetData`, see the [usage guide](docs/USAGE.en.md).
+For `List<T>` mapping, DataTable, and low-level `SheetData`, see [usage guide chapter 2](docs/USAGE.en.md) and [Appendix B](docs/USAGE.en.md).
 
-## Capability Matrix
+## Documentation
 
-Legend: ☑️ supported · ❌ not supported · text in a cell means partial support
-
-| Capability | xlsx | xlsm | xlsb | xls | csv |
-|---|---|---|---|---|---|
-| Cell read/write | ☑️ | ☑️ | ☑️ | ☑️ | text only |
-| Styles & number formats | ☑️ | ☑️ | number format only | number format only | ❌ |
-| Layout (merge / row height / column width) | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Auto filter | ☑️ | ☑️ | range read/write | ❌ | ❌ |
-| Comments | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Data validation | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
-| Tables | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
-| Named ranges | ☑️ | ☑️ | read only | read only | ❌ |
-| Hyperlinks | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Freeze panes | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Images | ☑️ | ☑️ | floating write | ❌ | ❌ |
-| Conditional formatting | ☑️ | ☑️ | all types written | ❌ | ❌ |
-| Sheet visibility / tab color | ☑️ | ☑️ | visibility yes | visibility yes | ❌ |
-| Formulas | ☑️ | ☑️ | basic read/write | basic read/write | ❌ |
-| File passwords | ☑️ | ☑️ | ☑️ | ❌ | ❌ |
-| Charts / pivot tables | passthrough | passthrough | passthrough | ❌ | ❌ |
-| Large-file streaming read | ☑️ | ☑️ | ☑️ | ☑️ | ❌ |
-| Large-file streaming write | ☑️ | ☑️ | ❌ | ❌ | ❌ |
-
-> When you open an .xlsb and save it as .xlsx / .xlsm, pivot tables, slicers, Power Query queries, the data model, shapes, and other advanced content are preserved too.
-> The full breakdown is in the [usage guide §20.1](docs/USAGE.en.md#201-format-capability-matrix).
-
-## Compatibility
-
-- Target frameworks: net48, net8.0
-- AOT: all public APIs are Native AOT / trim compatible; `List<T>` reflection mapping is annotated
-
-## Known Limits
-
-1. **Read entry**: `Excel.Read<T>` supports xlsx / xlsm only; for xls / xlsb / csv use `Excel.Open` which routes by extension.
-2. **CSV**: single sheet, plain text, no styles, all values read back as text.
-3. **Passwords & macros**: xls has no password support; workbooks with macros can only be saved as xlsm or xlsb.
-4. **Charts & pivot tables**: preserved but not edited; they are kept as-is on open-then-save. When you open an .xlsb and save it as .xlsx / .xlsm, pivot tables, slicers, Power Query queries, and the data model are preserved too; xls / csv drop them.
-5. **Streaming & append**: xlsx / xlsm only.
-
-## Run the Demo
+- [Usage Guide](docs/USAGE.en.md): full guide and examples
+- [使用手册（中文）](docs/USAGE.zh-CN.md): Chinese usage guide
+- [Changelog](docs/CHANGELOG.md): version history
+- [中文 README](README.md)
 
 The repo ships a console sample with 33 demos covering read/write, styles, filters, comments, encryption, images, conditional formatting, row/column insert-delete, formula write-back, and more. From the repo root:
 
@@ -135,6 +132,29 @@ dotnet run --project demo/LiteExcel.Demo
 ```
 
 Output goes to an `Output` folder under the program directory; the console prints the full path.
+
+## Project Status
+
+LiteExcel.Net is an actively maintained open-source project. The core API is becoming stable, while some advanced capabilities may continue to evolve.
+
+Current known limits:
+
+1. **CSV**: single sheet, plain text, no styles, all values read back as text.
+2. **Passwords & macros**: xls has no password support; workbooks with macros can only be saved as xlsm or xlsb.
+3. **Advanced content**: charts, pivot tables, etc. are preserved but not edited; xls / csv do not support them. On an `.xlsb` containing Power Query / the data model, some operations that trigger a full rebuild have known limits (they are explicitly reported).
+4. **Streaming write & append**: `Excel.CreateWriter` / `Excel.Append` support xlsx / xlsm only (for the streaming read range, see "Five Formats at a Glance").
+5. **Styles**: xls / xlsb support number formats only; other styles are reported as degraded on write.
+
+## Roadmap
+
+The following are directions, not commitments to a timeline or version:
+
+- **Next**: improve reliability when deleting worksheets from `.xlsb` workbooks that contain Power Query / the data model (under research).
+- **Candidate**: XLSB named-range write; XLSB InCell images; enhanced formula write-back (array formulas / 3D references / named ranges); streaming write for xlsb / xls.
+
+## Contributing
+
+Issues, discussions, and pull requests are welcome.
 
 ## License
 

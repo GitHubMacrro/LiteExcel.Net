@@ -182,6 +182,32 @@ public class FidelityWriteVerbatimTests
         }
     }
 
+    /// <summary>
+    /// [R-1 回归] 无修改的 XLSB open→SaveAs 走 verbatim 逐字节透传，不得产生 rebuild 路径的伪降级
+    /// （NamedRanges / DocumentProperties / Styles）。修复前 ReportDegradations 在 verbatim 分支之前无条件执行。
+    /// </summary>
+    [Fact]
+    public void Xlsb_Verbatim_NoFalseDegradations()
+    {
+        var src = TakeFixture("excel-authored.xlsb", ".xlsb");
+        var dst = GetTempFile(".xlsb");
+        try
+        {
+            var wb = Excel.Open(src);
+            wb.SaveAs(dst);   // 无修改 → verbatim
+
+            Assert.True(File.Exists(dst));
+            Assert.DoesNotContain(wb.SaveDegradations, d => d.Capability == DegradationCapability.NamedRanges);
+            Assert.DoesNotContain(wb.SaveDegradations, d => d.Capability == DegradationCapability.DocumentProperties);
+            Assert.DoesNotContain(wb.SaveDegradations, d => d.Capability == DegradationCapability.Styles);
+        }
+        finally
+        {
+            if (File.Exists(src)) File.Delete(src);
+            if (File.Exists(dst)) File.Delete(dst);
+        }
+    }
+
     [Fact]
     public void Xlsb_AdvancedParts_BlockOnlyModifiedHostSheet()
     {
@@ -210,6 +236,95 @@ public class FidelityWriteVerbatimTests
         {
             if (File.Exists(safePath)) File.Delete(safePath);
             if (File.Exists(blockedPath)) File.Delete(blockedPath);
+        }
+    }
+
+    // ── 安全缺口回归：workbook 级高级部件 + 无法保真的 rebuild + 非高级表修改 ──
+
+    /// <summary>构造一个可由 LiteExcel 打开（含 VerbatimBinaries / _openedSheetNames）的普通 xlsb。</summary>
+    private static string CreateOpenableXlsb(out Workbook wb)
+    {
+        var src = GetTempFile(".xlsb");
+        var seed = Excel.Create(ExcelFormat.Xlsb);
+        seed.Worksheets.Add("Second");
+        seed.Worksheets[0].SetValue("A1", "x");
+        seed.SaveAs(src);
+        wb = Excel.Open(src);
+        return src;
+    }
+
+    /// <summary>
+    /// [安全缺口回归] 源含 workbook 级高级部件（connections.bin / model/item.data 等；AdvancedXlsbSheetIndexes 为空），
+    /// 修改发生在非高级表且无法走任何保真通道 → 回退整本 rebuild → 必须上报 Advanced XLSB 降级（宽松模式）。
+    /// 修复前：anyAdvancedModified==false &amp;&amp; structureChanged==false → 静默 rebuild（真实 Excel COM 验证产物无法打开，0x800A03EC）。
+    /// </summary>
+    [Fact]
+    public void Xlsb_WorkbookLevelAdvanced_NonAdvancedSheetModify_ReportsDegradation()
+    {
+        var src = CreateOpenableXlsb(out var wb);
+        var dst = GetTempFile(".xlsb");
+        try
+        {
+            wb.SourceHasAdvancedXlsbParts = true;   // 模拟 workbook 级高级部件；AdvancedXlsbSheetIndexes 保持为空
+            wb.Worksheets[1].Visible = SheetVisibility.Hidden;   // 非单元格类修改 → 无法保真 → rebuild
+
+            wb.SaveAs(dst);
+
+            Assert.True(File.Exists(dst));
+            Assert.Contains(wb.SaveDegradations, d => d.Capability == DegradationCapability.PivotTables);
+        }
+        finally
+        {
+            if (File.Exists(src)) File.Delete(src);
+            if (File.Exists(dst)) File.Delete(dst);
+        }
+    }
+
+    /// <summary>[安全缺口回归] 同一路径 + 严格模式 → 写出损坏文件前必须抛异常且不生成输出文件。</summary>
+    [Fact]
+    public void Xlsb_WorkbookLevelAdvanced_NonAdvancedSheetModify_StrictThrows()
+    {
+        var src = CreateOpenableXlsb(out var wb);
+        var dst = GetTempFile(".xlsb");
+        try
+        {
+            wb.SourceHasAdvancedXlsbParts = true;
+            wb.AllowFeatureLossOnSave = false;
+            wb.Worksheets[1].Visible = SheetVisibility.Hidden;
+
+            Assert.Throws<LiteExcelException>(() => wb.SaveAs(dst));
+            Assert.False(File.Exists(dst));
+        }
+        finally
+        {
+            if (File.Exists(src)) File.Delete(src);
+            if (File.Exists(dst)) File.Delete(dst);
+        }
+    }
+
+    /// <summary>
+    /// [安全路径不回归] 源含高级部件但为「单元格手术式编辑」（可逐字节保真）时，不进入 protection、不产生 PivotTables 降级。
+    /// 确认修复没有把合法的 surgical-edit 路径误判为危险。
+    /// </summary>
+    [Fact]
+    public void Xlsb_WorkbookLevelAdvanced_CellEdit_SurgicalEdit_NoDegradation()
+    {
+        var src = CreateOpenableXlsb(out var wb);
+        var dst = GetTempFile(".xlsb");
+        try
+        {
+            wb.SourceHasAdvancedXlsbParts = true;
+            wb.Worksheets[0].SetValue("B2", "edit");   // 单元格编辑 → surgical edit 逐字节保留
+
+            wb.SaveAs(dst);
+
+            Assert.True(File.Exists(dst));
+            Assert.DoesNotContain(wb.SaveDegradations, d => d.Capability == DegradationCapability.PivotTables);
+        }
+        finally
+        {
+            if (File.Exists(src)) File.Delete(src);
+            if (File.Exists(dst)) File.Delete(dst);
         }
     }
 
