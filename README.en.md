@@ -149,7 +149,7 @@ Current known limits:
 
 The following are directions, not commitments to a timeline or version:
 
-- **Next**: improve reliability when deleting worksheets from `.xlsb` workbooks that contain Power Query / the data model (under research).
+- **Next**: improve reliability when deleting worksheets from `.xlsb` workbooks that contain Power Query / the data model (under research). A conservative safety net is already in place for saves that cannot preserve byte-for-byte and fall back to a full rebuild (lenient mode produces the file and reports; strict mode blocks); the underlying rebuild compatibility is still to be improved.
 - **Candidate**: XLSB named-range write; XLSB InCell images; enhanced formula write-back (array formulas / 3D references / named ranges); streaming write for xlsb / xls.
 
 ## Contributing
