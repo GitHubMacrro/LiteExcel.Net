@@ -728,7 +728,12 @@ public static partial class XlsxWriter
             sb.Append("<cols>");
             for (int i = 0; i < sheet.ColumnWidths.Count; i++)
             {
-                sb.Append($"<col min=\"{i + 1}\" max=\"{i + 1}\" width=\"{FormatDouble(sheet.ColumnWidths[i])}\" customWidth=\"1\"/>");
+                // 0 为「无自定义列宽」哨兵（稀疏字典按索引展开时缺列补 0）。
+                // 跳过 width<=0，否则 Excel 语义 width="0"=隐藏列，会把未设置的前置列写隐藏。
+                // 与 xls/xlsb 写出器（XlsWriter / XlsbWriter 均跳过 <=0）保持一致。
+                double w = sheet.ColumnWidths[i];
+                if (w <= 0) continue;
+                sb.Append($"<col min=\"{i + 1}\" max=\"{i + 1}\" width=\"{FormatDouble(w)}\" customWidth=\"1\"/>");
             }
             sb.Append("</cols>");
         }
@@ -770,7 +775,14 @@ public static partial class XlsxWriter
         {
             int currentRow = rowIndex++;
             int maxCol = row.Count - 1;
-            if (maxCol < 0) { dataRowIdx++; continue; }
+            if (maxCol < 0)
+            {
+                // 无数据行：仅当设置了行高时才输出 <row>（否则保持稀疏省略）。
+                if (sheet.RowHeights is not null && sheet.RowHeights.TryGetValue(dataRowIdx, out var emptyHt))
+                    sb.Append($"<row r=\"{currentRow}\" ht=\"{FormatDouble(emptyHt)}\" customHeight=\"1\"/>");
+                dataRowIdx++;
+                continue;
+            }
 
             CellStyle? rowStyle = null;
             if (sheet.RowStyles is not null && sheet.RowStyles.TryGetValue(dataRowIdx, out var rs))
@@ -817,34 +829,61 @@ public static partial class XlsxWriter
             dataRowIdx++;
         }
 
-        // InCell 图片单元格可能不在数据网格内，按行号补齐。
-        if (inCellVm is { Count: > 0 })
+        // 数据网格之外的行：InCell 图片单元格 + RowHeights 指向的行（含仅含行高的空行）。
+        // 二者都可能越过数据网格，必须合并为一次按绝对行号升序的补写，保证 <row> 单调递增。
         {
             int lastRow = rowIndex - 1;
-            var rowGroups = new SortedDictionary<int, List<(int Col, int Vm)>>();
-            foreach (var kv in inCellVm)
+            // dataRowIdx 0-based → 绝对行号 = startsAt + (表头占 1 行?) + dataRowIdx。
+            int dataRowBase = startsAt + (sheet.Headers is { Count: > 0 } ? 1 : 0);
+            var tail = new SortedDictionary<int, (List<(int Col, int Vm)> Cells, double? Height)>();
+
+            if (inCellVm is { Count: > 0 })
             {
-                var (r, c) = CellRef.Parse(kv.Key);
-                int row1 = r + 1, col1 = c + 1;
-                if (row1 > lastRow)
+                foreach (var kv in inCellVm)
                 {
-                    if (!rowGroups.TryGetValue(row1, out var list))
-                    {
-                        list = new List<(int, int)>();
-                        rowGroups[row1] = list;
-                    }
-                    list.Add((col1, kv.Value));
+                    var (r, c) = CellRef.Parse(kv.Key);
+                    int row1 = r + 1, col1 = c + 1;
+                    if (row1 <= lastRow) continue;
+                    if (!tail.TryGetValue(row1, out var entry))
+                        entry = (new List<(int, int)>(), null);
+                    entry.Cells.Add((col1, kv.Value));
+                    tail[row1] = entry;
                 }
             }
-            foreach (var grp in rowGroups)
+
+            if (sheet.RowHeights is { Count: > 0 } beyondHeights)
             {
-                for (int r = lastRow + 1; r < grp.Key; r++)
+                foreach (var kv in beyondHeights)
+                {
+                    if (kv.Key < sheet.Rows.Count) continue;   // 网格内行高已在主循环/空行分支写出
+                    int absRow = dataRowBase + kv.Key;
+                    if (absRow <= lastRow) continue;
+                    if (!tail.TryGetValue(absRow, out var entry))
+                        entry = (new List<(int, int)>(), null);
+                    entry.Height = kv.Value;
+                    tail[absRow] = entry;
+                }
+            }
+
+            foreach (var grp in tail)
+            {
+                int absRow = grp.Key;
+                for (int r = lastRow + 1; r < absRow; r++)
                     sb.Append($"<row r=\"{r}\"/>");
-                sb.Append($"<row r=\"{grp.Key}\">");
-                foreach (var (col1, vm) in grp.Value)
-                    sb.Append($"<c r=\"{CellRef.ToString(grp.Key - 1, col1 - 1)}\" t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
-                sb.Append("</row>");
-                lastRow = grp.Key;
+                var (cells, height) = grp.Value;
+                string hAttr = height is { } h ? $" ht=\"{FormatDouble(h)}\" customHeight=\"1\"" : "";
+                if (cells.Count == 0)
+                {
+                    sb.Append($"<row r=\"{absRow}\"{hAttr}/>");
+                }
+                else
+                {
+                    sb.Append($"<row r=\"{absRow}\"{hAttr}>");
+                    foreach (var (col1, vm) in cells)
+                        sb.Append($"<c r=\"{CellRef.ToString(absRow - 1, col1 - 1)}\" t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
+                    sb.Append("</row>");
+                }
+                lastRow = absRow;
             }
         }
 

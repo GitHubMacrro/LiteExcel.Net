@@ -1,5 +1,19 @@
 ﻿# Changelog
 
+## [2.4.80] - 2026-10-07
+
+### Fixed
+
+- **稀疏列宽隐藏未设置的前置列**：`Worksheet.ColumnWidths` 只设部分列时，xlsx 写出把缺列（内部 0 哨兵）写成 `width="0"`，Excel 语义即隐藏列。现跳过 `width<=0`，与 xls/xlsb 一致。
+- **越界地址静默接受产出损坏文件**：`Cell(row,col)` / `SetCell` 仅校验下限，行 >1,048,576 或列 >16,384 时静默接受，产物真实 Excel 拒开。现增加上限校验并抛 `ArgumentOutOfRangeException`。
+- **冻结窗格漏读 `state="frozenSplit"`**：Excel 经 Split+FreezePanes 生成 OOXML 合法值 `frozenSplit`，此前仅识别 `frozen`，外部冻结文件读回 `FreezeRows=0` 且修改保存后冻结丢失。现同时识别二者。
+- **公式/值属性直接赋值不落盘**：`Cell.Formula`/`IsFormula`（及 `Text`/`Number`/`Date`/`Boolean`/`Type`）为裸 auto 属性，对 `ws.Cell(...)` 返回的游离单元格赋值不触发 `OnCellChanged`，保存时丢失。现全部触发写回，与 `Style`/`NumberFormat`/`Hyperlink` 一致。
+- **空行行高静默丢弃**：无数据行的行高在保存时被丢弃（xlsx/xlsb/xls）。现写出覆盖数据网格之外的行高，读取不再丢弃仅含 `ht` 的空行。
+
+### Tests
+
+- 新增 4 个回归测试类（`BugfixBatchA/B/C`，共 20 例）；全量 791 通过（net8.0），net48 构建通过；关键项经真实 Excel 16.0 COM 验证。
+
 ## [2.4.79] - 2026-09-28
 
 ### Fixed

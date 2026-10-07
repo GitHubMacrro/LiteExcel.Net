@@ -737,6 +737,8 @@ SUM(A1:B1)
 A1*2
 ```
 
+> Note: assigning `Formula` / `IsFormula` (and `Text` / `Number` / `Date` / `Boolean`) immediately writes into the owning worksheet. This also works on a cell obtained from `ws.Cell(...)` that has not yet been materialized — no need to write a cached value first.
+
 In List\<T\> mapping, `[LiteColumn(IsFormula = true)]` treats a string property as a formula column (see section 5.9).
 
 **Formula writeback (xls/xlsb)**: Since 2.4.74, xls and xlsb support basic formula writeback. `Cell.FromFormula("SUM(A1:B1)")` is encoded to BIFF8/BIFF12 RPN by the built-in `FormulaEncoder` on write. Constants (numbers/strings/booleans), cell references (including absolute `$A$1`), area references, basic operators (`+ - * / ^ & = < > <= >=`), and built-in functions are supported. Unsupported formulas (arrays, cross-sheet references, names) fall back to writing the cached value.

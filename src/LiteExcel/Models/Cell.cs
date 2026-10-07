@@ -19,11 +19,43 @@ public enum CellType
 /// </summary>
 public sealed class Cell
 {
-    public CellType Type { get; set; }
-    public string? Text { get; set; }
-    public double Number { get; set; }
-    public DateTime Date { get; set; }
-    public bool Boolean { get; set; }
+    // 值属性均挂 OnCellChanged：游离单元格（ws.Cell("A3") 返回、尚未入网格）被赋值时，
+    // 需借此落入网格，否则 writer 判定该行为空并跳过（Bug 3：只设 Formula/IsFormula 时公式丢失）。
+    public CellType Type
+    {
+        get => _type;
+        set { _type = value; Owner?.OnCellChanged(this); }
+    }
+    private CellType _type;
+
+    public string? Text
+    {
+        get => _text;
+        set { _text = value; Owner?.OnCellChanged(this); }
+    }
+    private string? _text;
+
+    public double Number
+    {
+        get => _number;
+        set { _number = value; Owner?.OnCellChanged(this); }
+    }
+    private double _number;
+
+    public DateTime Date
+    {
+        get => _date;
+        set { _date = value; Owner?.OnCellChanged(this); }
+    }
+    private DateTime _date;
+
+    public bool Boolean
+    {
+        get => _boolean;
+        set { _boolean = value; Owner?.OnCellChanged(this); }
+    }
+    private bool _boolean;
+
     public CellStyle? Style
     {
         get => _style;
@@ -49,14 +81,24 @@ public sealed class Cell
     /// <summary>
     /// 是否为公式字符串（写出时按公式处理）
     /// </summary>
-    public bool IsFormula { get; set; }
+    public bool IsFormula
+    {
+        get => _isFormula;
+        set { _isFormula = value; Owner?.OnCellChanged(this); }
+    }
+    private bool _isFormula;
 
     /// <summary>
     /// 公式表达式（如 "SUM(A1:A3)"）。与缓存值字段（<see cref="Text"/>/<see cref="Number"/> 等）分离。
     /// 公式文本独立存储，避免覆盖文本公式的缓存结果值。
     /// 兼容：旧代码设 <see cref="IsFormula"/>=true 并把公式写入 <see cref="Text"/>，写入器兼容垫片仍能读出。
     /// </summary>
-    public string? Formula { get; set; }
+    public string? Formula
+    {
+        get => _formula;
+        set { _formula = value; Owner?.OnCellChanged(this); }
+    }
+    private string? _formula;
 
     /// <summary>单元格超链接（可选） </summary>
     public Hyperlink? Hyperlink
@@ -124,22 +166,22 @@ public sealed class Cell
         }
         else if (value is null || value == DBNull.Value)
         {
-            Type = CellType.Empty;
-            Text = null;
-            Number = 0;
-            Date = default;
-            Boolean = false;
-            IsFormula = false;
+            _type = CellType.Empty;
+            _text = null;
+            _number = 0;
+            _date = default;
+            _boolean = false;
+            _isFormula = false;
         }
         else
         {
             switch (value)
             {
                 case bool b:
-                    Type = CellType.Boolean; Boolean = b; Text = null; Number = 0; Date = default; IsFormula = false;
+                    _type = CellType.Boolean; _boolean = b; _text = null; _number = 0; _date = default; _isFormula = false;
                     break;
                 case DateTime dt:
-                    Type = CellType.Date; Date = dt; NumberFormat ??= "yyyy-MM-dd"; Text = null; Number = 0; Boolean = false; IsFormula = false;
+                    _type = CellType.Date; _date = dt; NumberFormat ??= "yyyy-MM-dd"; _text = null; _number = 0; _boolean = false; _isFormula = false;
                     break;
                 case sbyte n: SetNumber(n); break;
                 case byte n: SetNumber(n); break;
@@ -153,7 +195,7 @@ public sealed class Cell
                 case double n: SetNumber(n); break;
                 case decimal n: SetNumber((double)n); break;
                 default:
-                    Type = CellType.Text; Text = value.ToString(); Number = 0; Date = default; Boolean = false; IsFormula = false;
+                    _type = CellType.Text; _text = value.ToString(); _number = 0; _date = default; _boolean = false; _isFormula = false;
                     break;
             }
         }
@@ -163,25 +205,25 @@ public sealed class Cell
 
     private void SetNumber(double n)
     {
-        Type = CellType.Number;
-        Number = n;
-        Text = null;
-        Date = default;
-        Boolean = false;
-        IsFormula = false;
+        _type = CellType.Number;
+        _number = n;
+        _text = null;
+        _date = default;
+        _boolean = false;
+        _isFormula = false;
     }
 
     private void CopyFrom(Cell other)
     {
-        Type = other.Type;
-        Text = other.Text;
-        Number = other.Number;
-        Date = other.Date;
-        Boolean = other.Boolean;
+        _type = other._type;
+        _text = other._text;
+        _number = other._number;
+        _date = other._date;
+        _boolean = other._boolean;
         Style = other.Style;
         NumberFormat = other.NumberFormat;
-        IsFormula = other.IsFormula;
-        Formula = other.Formula;
+        _isFormula = other._isFormula;
+        _formula = other._formula;
         Hyperlink = other.Hyperlink?.Clone();
     }
     /// <summary>以字符串读取值。Empty 返回 null，Number/Date/Boolean 按惯例格式化 </summary>

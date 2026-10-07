@@ -23,6 +23,7 @@ public sealed class XlsxStreamWriter : IDisposable
     private const string OfficeRelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
     internal const int ExcelMaxRows = 1_048_576;
+    internal const int ExcelMaxColumns = 16_384;   // XFD
 
     private readonly ZipArchive _zip;
     private readonly Stream _underlying;

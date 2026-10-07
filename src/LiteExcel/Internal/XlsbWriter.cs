@@ -2863,6 +2863,9 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         }
         if (sheet.ColumnWidths is { } widths && widths.Count - 1 > maxCol)
             maxCol = widths.Count - 1;
+        // RowHeights 可指向数据之外的行：纳入范围，确保补写行头（含行高）。
+        if (sheet.RowHeights is { Count: > 0 } rhMax && rhMax.Keys.Max() > maxRow)
+            maxRow = rhMax.Keys.Max();
         int dimR = maxRow < 0 ? 0 : maxRow;
         int dimC = maxCol < 0 ? 0 : maxCol;
 
@@ -2917,7 +2920,13 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
                     cells.Add((c, row[c]));
                 }
             }
-            if (cells.Count == 0) continue;
+            if (cells.Count == 0)
+            {
+                // 无数据行：仅当设置了行高时才写行头（否则保持稀疏省略）。
+                if (sheet.RowHeights is not null && sheet.RowHeights.TryGetValue(r, out _))
+                    WriteRecord(ms, BrtRowHdr, RowHdr(r, 0, 0, sheet, r));
+                continue;
+            }
 
             int prevCol = -1;
             WriteRecord(ms, BrtRowHdr, RowHdr(r, cells[0].Col, cells[cells.Count - 1].Col, sheet, r));

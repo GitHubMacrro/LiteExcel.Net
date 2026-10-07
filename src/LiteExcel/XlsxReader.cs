@@ -757,7 +757,12 @@ public static partial class XlsxReader
 
                 using var sub = reader.ReadSubtree();
                 var row = ParseRow(sub, shared, styles);
-                if (row is null) continue;
+                double htValue = 0;
+                bool hasHeightAttr = htAttr is not null
+                    && double.TryParse(htAttr, NumberStyles.Float, CultureInfo.InvariantCulture, out htValue);
+                // 无数据但带行高的行（<row r="5" ht="40"/>）不得丢弃，否则行高在读写往返中丢失。
+                if (row is null && !hasHeightAttr) continue;
+                row ??= Array.Empty<Cell>();
 
                 // 记录数据区起始的原始 1-based 行号（首个有效行）。Excel 通常带 r 属性；
                 // 罕见缺失时回退为 1（紧凑首行）。
@@ -767,7 +772,7 @@ public static partial class XlsxReader
                 if (isHidden)
                     hiddenRowNumbers.Add(xmlRowNum);
 
-                if (firstRowIsHeader && sheet.Headers.Count == 0 && sheet.Rows.Count == 0)
+                if (firstRowIsHeader && sheet.Headers.Count == 0 && sheet.Rows.Count == 0 && row.Count > 0)
                 {
                     // 保留表头行单元格样式，供 RecoverSheetLevelStyles 推断 HeaderStyle。
                     headerRowCells = row;
@@ -790,10 +795,10 @@ public static partial class XlsxReader
                     (sheet.RowNumbers ??= new List<int>()).Add(absRow);
 
                     // 行高：key = 0-based 数据行索引
-                    if (htAttr is not null && double.TryParse(htAttr, NumberStyles.Float, CultureInfo.InvariantCulture, out var ht))
+                    if (hasHeightAttr)
                     {
                         sheet.RowHeights ??= new Dictionary<int, double>();
-                        sheet.RowHeights[sheet.Rows.Count - 1] = ht;
+                        sheet.RowHeights[sheet.Rows.Count - 1] = htValue;
                     }
                 }
             }
@@ -830,11 +835,12 @@ public static partial class XlsxReader
             }
             else if (reader.LocalName == "pane")
             {
-                // 冻结窗格：ySplit/xSplit 任意值 + state="frozen"
+                // 冻结窗格：ySplit/xSplit 任意值 + state="frozen"；Excel 经 Split+FreezePanes
+                // 生成的是 OOXML 合法值 state="frozenSplit"（§18.3.1.80），须一并识别。
                 var state = reader.GetAttribute("state");
                 var ySplit = reader.GetAttribute("ySplit");
                 var xSplit = reader.GetAttribute("xSplit");
-                if (state == "frozen")
+                if (state == "frozen" || state == "frozenSplit")
                 {
                     if (int.TryParse(ySplit, out int yRows) && yRows > 0)
                         sheet.FreezeRows = yRows;

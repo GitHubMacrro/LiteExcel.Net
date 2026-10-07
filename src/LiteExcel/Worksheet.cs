@@ -252,8 +252,9 @@ public sealed class Worksheet
     }
     public Cell Cell(int row, int column)
     {
-        if (row < 1 || column < 1)
-            throw new ArgumentOutOfRangeException(nameof(row), $"行列必须从 1 开始，收到 ({row}, {column})");
+        if (row < 1 || column < 1 || row > XlsxStreamWriter.ExcelMaxRows || column > XlsxStreamWriter.ExcelMaxColumns)
+            throw new ArgumentOutOfRangeException(nameof(row),
+                $"行列越界（行 1..{XlsxStreamWriter.ExcelMaxRows}，列 1..{XlsxStreamWriter.ExcelMaxColumns}），收到 ({row}, {column})");
 
         var stored = TryGetCell(row, column);
         if (stored is not null) return stored;
@@ -905,8 +906,9 @@ public sealed class Worksheet
 
     internal void SetCell(int row1, int col1, Cell cell)
     {
-        if (row1 < 1 || col1 < 1)
-            throw new ArgumentOutOfRangeException(nameof(row1), $"行列必须从 1 开始，收到 ({row1}, {col1})");
+        if (row1 < 1 || col1 < 1 || row1 > XlsxStreamWriter.ExcelMaxRows || col1 > XlsxStreamWriter.ExcelMaxColumns)
+            throw new ArgumentOutOfRangeException(nameof(row1),
+                $"行列越界（行 1..{XlsxStreamWriter.ExcelMaxRows}，列 1..{XlsxStreamWriter.ExcelMaxColumns}），收到 ({row1}, {col1})");
 
         while (_grid.Count < row1)
             _grid.Add(new List<Cell>());

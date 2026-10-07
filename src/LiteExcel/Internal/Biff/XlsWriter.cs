@@ -319,6 +319,9 @@ internal static class XlsWriter
         }
         if (sheet.ColumnWidths is { } widths && widths.Count - 1 > maxCol)
             maxCol = widths.Count - 1;
+        // RowHeights 可指向数据之外的行：纳入范围，确保补写行高（超出 BIFF8 上限时由下方裁剪）。
+        if (sheet.RowHeights is { Count: > 0 } rhMax && rhMax.Keys.Max() > maxRow)
+            maxRow = rhMax.Keys.Max();
 
         // BIFF8（xls）固有限制：最多 256 列（0-based 0..255）、65536 行（0-based 0..65535）。
         // 超出部分无法表示，必须裁剪，否则 DIMENSIONS/COLINFO 越界导致 Excel 报文件修复。
