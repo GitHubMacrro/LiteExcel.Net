@@ -1,4 +1,4 @@
-using LiteExcel;
+﻿using LiteExcel;
 using System.IO;
 
 namespace LiteExcel.Tests;
@@ -18,7 +18,7 @@ public class CopySheetTests
 
         Assert.Equal(2, wb.Worksheets.Count);
         Assert.Equal("Sheet1 (2)", copy.Name);
-        Assert.Same(copy, wb.Worksheets[1]); // 追加到末尾
+        Assert.Same(copy, wb.Worksheets[1]);
         Assert.Equal("值", copy.Cell("A1").GetString());
     }
 
@@ -159,7 +159,6 @@ public class CopySheetTests
 
         var copy = wb.Worksheets.Copy("Sheet1");
 
-        // 改副本的值、样式、超链接、公式
         copy.Cell("A1").SetValue("改过");
         copy.Cell("A1").Style!.Bold = false;
         copy.Cell("A1").Style!.FontColor = "#000000";
@@ -221,7 +220,6 @@ public class CopySheetTests
         Assert.Single(copy.Filter.Columns);
         Assert.Equal(FilterOperator.GreaterThan, copy.Filter.Columns[0].Operator);
 
-        // 深拷贝验证：改副本的集合元素不影响源
         copy.ColumnWidths![0] = 99;
         copy.RowStyles![0].Bold = false;
         copy.Validations![0].Formula1 = "999";
@@ -270,7 +268,6 @@ public class CopySheetTests
         Assert.Equal(new[] { 33.0, 67.0 }, copy.ConditionalFormats[1].IconSet!.Thresholds);
         Assert.Equal("333333", copy.ConditionalFormats[2].ColorScale!.MidColor);
 
-        // 深拷贝：改副本的 style / 阈值 / 颜色不影响源
         copy.ConditionalFormats[0].Style!.Bold = false;
         copy.ConditionalFormats[1].IconSet!.Thresholds![0] = 1;
         copy.ConditionalFormats[2].ColorScale!.MidColor = "FFFFFF";
@@ -296,7 +293,6 @@ public class CopySheetTests
         Assert.True(copy.Protection.FormatCells);
         Assert.True(copy.Protection.HasPassword);
 
-        // 深拷贝：改副本不影响源
         copy.Protection.Enabled = false;
         Assert.True(ws.Protection!.Enabled);
     }
@@ -315,7 +311,6 @@ public class CopySheetTests
         var copy = wb.Worksheets.Copy("Sheet1");
 
         Assert.Single(copy.Tables);
-        // 表名全簿唯一
         Assert.NotEqual("DataTable", copy.Tables[0].Name);
         var allNames = wb.Worksheets.SelectMany(s => s.Tables).Select(t => t.Name).ToList();
         Assert.Equal(allNames.Count, allNames.Distinct(StringComparer.OrdinalIgnoreCase).Count());
@@ -373,7 +368,6 @@ public class CopySheetTests
             Assert.Equal(2, opened.Worksheets.Count);
             Assert.Equal("多格式", opened.Worksheets[1].Cell("A1").GetString());
             Assert.Equal(9.5, opened.Worksheets[1].Cell("B2").GetDouble());
-            // 原件未受影响
             Assert.Equal("多格式", opened.Worksheets[0].Cell("A1").GetString());
         }
         finally { if (File.Exists(file)) File.Delete(file); }
@@ -425,7 +419,7 @@ public class CopySheetTests
 
         Assert.Single(copy.Images);
         Assert.NotSame(ws.Images[0], copy.Images[0]);
-        Assert.NotSame(ws.Images[0].Data, copy.Images[0].Data); // byte[] 深拷贝
+        Assert.NotSame(ws.Images[0].Data, copy.Images[0].Data);
         Assert.Equal(ws.Images[0].Data.Length, copy.Images[0].Data.Length);
         Assert.Equal(ws.Images[0].Row, copy.Images[0].Row);
         Assert.Equal(ws.Images[0].Column, copy.Images[0].Column);
@@ -447,7 +441,7 @@ public class CopySheetTests
 
             using var zip = System.IO.Compression.ZipFile.OpenRead(file);
             var media = zip.Entries.Count(e => e.FullName.StartsWith("xl/media/"));
-            Assert.Equal(2, media); // 两张表各一张图
+            Assert.Equal(2, media);
             var drawings = zip.Entries.Count(e => e.FullName.StartsWith("xl/drawings/drawing"));
             Assert.Equal(2, drawings);
         }

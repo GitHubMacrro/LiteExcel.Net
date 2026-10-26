@@ -180,10 +180,7 @@ public sealed class Worksheet
         return parent.Remove(Name);
     }
 
-    /// <summary>
-    /// 复制当前工作表，副本追加到工作簿末尾并返回。
-    /// <paramref name="newName"/> 为 null 时自动生成「原名 (2)」「原名 (3)」…。
-    /// </summary>
+    /// <summary>复制当前工作表到工作簿末尾并返回副本；<paramref name="newName"/> 为 null 时自动命名 </summary>
     public Worksheet Copy(string? newName = null)
     {
         var parent = ParentCollection;
@@ -196,7 +193,6 @@ public sealed class Worksheet
     {
         FreezeRows = source.FreezeRows;
         FreezeColumns = source.FreezeColumns;
-        FirstRowNumberNoShift(source.FirstRowNumber);
 
         if (source.ColumnWidths is { Count: > 0 })
             ColumnWidths = new Dictionary<int, double>(source.ColumnWidths);
@@ -262,7 +258,6 @@ public sealed class Worksheet
         VisibleNoValidate(source.Visible);
         TabColor = source.TabColor;
 
-        // SetValue(Cell) 会共享 Style，需单独 Clone
         for (int r = 0; r < source._grid.Count; r++)
         {
             var srcRow = source._grid[r];
@@ -284,13 +279,6 @@ public sealed class Worksheet
         CodeName = null;
         ModifiedCells.Clear();
         IsModified = true;
-    }
-
-    private void FirstRowNumberNoShift(int value)
-    {
-#pragma warning disable CS0618
-        FirstRowNumber = value;
-#pragma warning restore CS0618
     }
 
     private void VisibleNoValidate(SheetVisibility value) => _visible = value;
@@ -363,7 +351,6 @@ public sealed class Worksheet
             HeightPixels = img.Anchor.HeightPixels,
             MoveMode = img.Anchor.MoveMode,
         },
-        // 源图片若来自保留 drawing 部件，副本没有对应部件可透传，须作为普通图片重新写出
         FromPreservedDrawing = false,
     };
 
@@ -1354,10 +1341,10 @@ public sealed class Worksheet
         return clone;
     }
 
-    // 必须清空 OriginEntry/OriginXml，否则 TablePlan 会透传同一 xl/tables/tableN.xml
     private XlTable CloneTableForCopy(XlTable t)
     {
         var clone = CloneTable(t);
+        // 不清空 OriginEntry/OriginXml 会透传同一个 xl/tables/tableN.xml，产生重复 zip 条目
         clone.OriginEntry = null;
         clone.OriginXml = null;
         clone.Name = AllocateTableName(t.Name);

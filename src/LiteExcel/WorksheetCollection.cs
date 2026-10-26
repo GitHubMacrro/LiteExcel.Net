@@ -70,11 +70,7 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
         return sheet;
     }
 
-    /// <summary>
-    /// 复制指定工作表，副本追加到末尾并返回。
-    /// <paramref name="newName"/> 为 null 时自动生成「原名 (2)」「原名 (3)」…。
-    /// 内容为深拷贝，修改副本不影响原表；超级表会重新命名以保证全簿唯一。
-    /// </summary>
+    /// <summary>复制指定工作表到末尾并返回副本；<paramref name="newName"/> 为 null 时自动命名。内容为深拷贝，改副本不影响原表 </summary>
     public Worksheet Copy(string sourceName, string? newName = null)
     {
         if (string.IsNullOrWhiteSpace(sourceName))
