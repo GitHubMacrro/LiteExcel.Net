@@ -3020,6 +3020,7 @@ wb.SaveAs("macro_copy.xlsm");
 | 21.4 | [流式写入 `CreateWriter`](#214-流式写入-createwriter) | `XlsxStreamWriter` 逐行写 |
 | 21.5 | [大文件与内存模型](#215-大文件与内存模型) | 流式与内存模型 |
 | 21.6 | [拉取式枚举 `EnumerateRows`](#216-拉取式枚举-enumeraterows) | LINQ 可组合、提前中断、不跳首行 |
+| 21.7 | [异步 API `Async`](#217-异步-api-async) | Task 包装 + 取消令牌，UI 不卡死 |
 
 ---
 
@@ -3285,15 +3286,41 @@ foreach (var row in Excel.EnumerateRows("big.xlsx"))
 
 `sheetName` 为 null 时取第一张表。支持 xlsx / xlsm / xlsb / xls（csv 除外）。迭代器释放时关闭文件句柄，`break` 提前退出也会释放。
 
+`EnumerateRows` 本身保持同步（`IEnumerable`）；异步场景请改用 [§21.7 异步 API](#217-异步-api-async) 的 `StreamRowsAsync` 等官方异步方法，无需再自行 `Task.Run` 包装。
+
+## 21.7 异步 API Async
+
+公开门面（`Excel` 与 `Workbook`）提供与同步版一一对应的异步方法：命名加 `Async` 后缀、返回 `Task` / `Task&lt;T&gt;`、末位可选 `CancellationToken`。net48 与 net8.0 行为一致，无新增依赖。
+
 ```csharp
-// WinForms 异步调用，避免 UI 线程卡死
-var names = await Task.Run(() => Excel.GetSheetNames(sPath));
-await Task.Run(() =>
-{
-    foreach (var row in Excel.EnumerateRows(sPath, names[0]))
-        Handle(row);
-});
+// 打开 / 保存
+var wb = await Excel.OpenAsync("data.xlsx");
+await wb.SaveAsAsync("copy.xlsx");
+
+// List<T> / DataTable / 低层模型
+var list = await Excel.ReadAsync<Person>("data.xlsx");
+await Excel.WriteAsync("out.xlsx", list);
+
+// 流式逐行 + 进度 + 追加
+await Excel.StreamRowsAsync("big.xlsx", "Sheet1", row => Handle(row));
+await Excel.ReadWithProgressAsync("big.xlsx", 0, (current, total) => UpdateUI(current, total));
+await Excel.AppendAsync("log.xlsx", newData);
+
+// 取消（仅任务启动前生效；已取消的令牌立即抛 OperationCanceledException）
+using var cts = new CancellationTokenSource();
+cts.CancelAfter(TimeSpan.FromSeconds(30));
+var list2 = await Excel.ReadAsync<Person>("big.xlsx", cancellationToken: cts.Token);
 ```
+
+覆盖清单：`Excel.OpenAsync`（路径 / Stream）、`WriteAsync`（Workbook / SheetData / DataTable / `List<T>`）、`ReadAsync<T>`、`ReadSheetAsync`（按索引 / 按表名，路径 / Stream）、`ReadAsDataTableAsync`、`GetSheetNamesAsync`、`StreamRowsAsync`、`ReadWithProgressAsync`、`AppendAsync`；`Workbook.SaveAsync` / `SaveAsAsync` / `SaveAsync(Stream)`。
+
+行为边界：
+
+- **线程模型**：经 `Task.Run` 在后台线程执行对应的同步实现，语义、参数校验与降级行为与同步版完全一致。
+- **取消语义**：`cancellationToken` 仅在任务**启动前**生效（已取消则抛 `OperationCanceledException`）；任务开始后不可中断。
+- **回调线程**：`StreamRowsAsync` 的 `onRow`、`ReadWithProgressAsync` 的 `onProgress` 在后台线程触发，UI 场景请自行封送回 UI 线程。
+- **Stream 重载**：流的读写发生在后台线程，任务期间请勿并发操作该流。
+- **不提供 `IAsyncEnumerable`**：net48 无此类型且需第三方包（违背零依赖定位）；异步流式场景用 `StreamRowsAsync`（推送回调）覆盖，`EnumerateRows` 保持同步。
 
 # 22. 降级回调 OnDegradation
 
@@ -3666,6 +3693,7 @@ catch (Exception ex)
 | `Append(path, SheetData[, properties])` | 追加数据 |
 | `DetectFormat(path)` | 按扩展名返回格式 |
 | `ReadWithProgress(path, sheetIndex, onProgress)` | 带进度读取 |
+| `OpenAsync` / `WriteAsync` / `ReadAsync` / `ReadSheetAsync` / `ReadAsDataTableAsync` / `GetSheetNamesAsync` / `StreamRowsAsync` / `ReadWithProgressAsync` / `AppendAsync` | 异步版（Task + CancellationToken），参数与同步版一致，见 [21.7](#217-异步-api-async) |
 
 ## A.2 Workbook
 
@@ -3679,6 +3707,7 @@ catch (Exception ex)
 | `Format` | 当前工作簿格式 |
 | `Save()` / `SaveAs(path[, format])` | 保存 / 另存 |
 | `Save(stream, format)` | 存到流 |
+| `SaveAsync([ct])` / `SaveAsAsync(path[, format, ct])` / `SaveAsync(stream, format[, ct])` | 异步保存（Task + CancellationToken），见 [21.7](#217-异步-api-async) |
 
 ## A.3 Worksheet
 

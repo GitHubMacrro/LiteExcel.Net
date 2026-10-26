@@ -2964,6 +2964,7 @@ written to macro_copy.xlsm
 | 21.4 | [Streaming Writer `CreateWriter`](#214-streaming-writer-createwriter) |
 | 21.5 | [Large Files and Memory Model](#215-large-files-and-memory-model) |
 | 21.6 | [Pull-Based Enumeration `EnumerateRows`](#216-pull-based-enumeration-enumeraterows) | LINQ composable, early termination, no header skip |
+| 21.7 | [Async API](#217-async-api) | Task wrappers + cancellation token |
 
 ---
 
@@ -3234,15 +3235,42 @@ foreach (var row in Excel.EnumerateRows("big.xlsx"))
 
 `sheetName` null defaults to the first sheet. Supports xlsx / xlsm / xlsb / xls (csv excluded). The iterator releases the file handle on dispose; `break` also releases it.
 
+`EnumerateRows` itself stays synchronous (`IEnumerable`); for async scenarios use the official async methods from [§21.7 Async API](#217-async-api) such as `StreamRowsAsync` — no need to wrap with `Task.Run` yourself.
+
+## 21.7 Async API
+
+The public facade (`Excel` and `Workbook`) provides async counterparts for every IO-bound sync method: names gain an `Async` suffix, they return `Task` / `Task<T>`, and an optional `CancellationToken` goes last. Identical behavior on net48 and net8.0, zero new dependencies.
+
 ```csharp
-// WinForms async call to avoid UI thread blocking
-var names = await Task.Run(() => Excel.GetSheetNames(sPath));
-await Task.Run(() =>
-{
-    foreach (var row in Excel.EnumerateRows(sPath, names[0]))
-        Handle(row);
-});
+// Open / save
+var wb = await Excel.OpenAsync("data.xlsx");
+await wb.SaveAsAsync("copy.xlsx");
+
+// List<T> / DataTable / low-level model
+var list = await Excel.ReadAsync<Person>("data.xlsx");
+await Excel.WriteAsync("out.xlsx", list);
+
+// Streaming rows + progress + append
+await Excel.StreamRowsAsync("big.xlsx", "Sheet1", row => Handle(row));
+await Excel.ReadWithProgressAsync("big.xlsx", 0, (current, total) => UpdateUI(current, total));
+await Excel.AppendAsync("log.xlsx", newData);
+
+// Cancellation (effective before the task starts; an already-cancelled
+// token throws OperationCanceledException immediately)
+using var cts = new CancellationTokenSource();
+cts.CancelAfter(TimeSpan.FromSeconds(30));
+var list2 = await Excel.ReadAsync<Person>("big.xlsx", cancellationToken: cts.Token);
 ```
+
+Covered methods: `Excel.OpenAsync` (path / Stream), `WriteAsync` (Workbook / SheetData / DataTable / `List<T>`), `ReadAsync<T>`, `ReadSheetAsync` (by index / by name, path / Stream), `ReadAsDataTableAsync`, `GetSheetNamesAsync`, `StreamRowsAsync`, `ReadWithProgressAsync`, `AppendAsync`; `Workbook.SaveAsync` / `SaveAsAsync` / `SaveAsync(Stream)`.
+
+Behavior notes:
+
+- **Threading**: each method runs its sync implementation on a background thread via `Task.Run`; validation and degradation behavior are identical to the sync version.
+- **Cancellation**: the token only takes effect **before** the task starts (throws `OperationCanceledException`); once running, the task cannot be interrupted.
+- **Callbacks**: `onRow` of `StreamRowsAsync` and `onProgress` of `ReadWithProgressAsync` fire on a background thread — marshal back to the UI thread in UI scenarios.
+- **Stream overloads**: the stream is read/written on a background thread; do not touch it concurrently while the task is running.
+- **No `IAsyncEnumerable`**: unavailable on net48 without third-party packages (conflicts with the zero-dependency goal); use `StreamRowsAsync` (push callback) for async streaming — `EnumerateRows` stays synchronous.
 
 # 22. Degradation Callback OnDegradation
 
@@ -3625,6 +3653,7 @@ written to out.xlsx
 | `Append(path, SheetData[, properties])` | Appends data |
 | `ReadWithProgress(path, sheetIndex, onProgress)` | Reads with progress reporting |
 | `DetectFormat(path)` | Detects the format by extension |
+| `OpenAsync` / `WriteAsync` / `ReadAsync` / `ReadSheetAsync` / `ReadAsDataTableAsync` / `GetSheetNamesAsync` / `StreamRowsAsync` / `ReadWithProgressAsync` / `AppendAsync` | Async counterparts (Task + CancellationToken), same parameters as sync, see [21.7](#217-async-api) |
 
 ## A.2 `Workbook`
 
@@ -3638,6 +3667,7 @@ written to out.xlsx
 | `Names` | Named ranges (`List<NamedRange>`) |
 | `CurrentPath` | Current target path |
 | `Save()` / `SaveAs(path[, format])` / `Save(stream, format)` | Saves |
+| `SaveAsync([ct])` / `SaveAsAsync(path[, format, ct])` / `SaveAsync(stream, format[, ct])` | Async saves (Task + CancellationToken), see [21.7](#217-async-api) |
 
 ## A.3 `Worksheet`
 
