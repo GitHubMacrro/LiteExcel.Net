@@ -10,7 +10,7 @@ namespace LiteExcel;
 /// <summary>
 /// API 统一入库
 /// </summary>
-public static class Excel
+public static partial class Excel
 {
 
     /// <summary>打开工作簿，按扩展名自动识别格式,支持 xlsx/xlsm/xls/xlsb/csv </summary>
