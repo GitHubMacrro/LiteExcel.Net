@@ -17,7 +17,7 @@ A zero-dependency .NET library to read and write xlsx / xlsm / xlsb / xls / csv 
 - **Targets net48 and net8.0**: one API for both legacy and modern projects.
 - **Native AOT smoke test passed**: net8.0 sets `IsAotCompatible`; reflection is used only for `List<T>` mapping and is annotated with `[DynamicallyAccessedMembers]`. The repo ships a Native AOT publish smoke (`tests/LiteExcel.AotSmoke`) covering 10 cases such as `List<T>` mapping, DataTable, and conditional formatting, verified locally.
 - **One object model across five formats**: the same code with a different format argument writes xls or csv.
-- **Common spreadsheet operations**: styles and number formats, merge, row height / column width, auto filter, comments, data validation, hyperlinks, freeze panes, images, conditional formatting, tables, named ranges, formulas, file-level passwords, `List<T>` / DataTable mapping, streaming read/write, and async APIs (Task + CancellationToken).
+- **Common spreadsheet operations**: styles and number formats, rich text, merge, row height / column width, auto filter, comments, data validation, hyperlinks, freeze panes, images, conditional formatting, tables, named ranges, formulas, file-level passwords, `List<T>` / DataTable mapping, streaming read/write, and async APIs (Task + CancellationToken).
 - **Advanced content is primarily preserved**: charts, pivot tables, slicers, VBA macros, Power Query, the data model, external connections, and ActiveX shapes are preserved along the established save paths on open-then-save, rather than created or modified as part of the object model.
 
 ### Five Formats at a Glance
@@ -125,7 +125,7 @@ For `List<T>` mapping, DataTable, and low-level `SheetData`, see [usage guide ch
 - [Changelog](docs/CHANGELOG.md): version history
 - [中文 README](README.md)
 
-The repo ships a console sample with 33 demos covering read/write, styles, filters, comments, encryption, images, conditional formatting, row/column insert-delete, formula write-back, and more. From the repo root:
+The repo ships a console sample with 34 demos covering read/write, styles, rich text, filters, comments, encryption, images, conditional formatting, row/column insert-delete, formula write-back, and more. From the repo root:
 
 ```powershell
 dotnet run --project demo/LiteExcel.Demo
