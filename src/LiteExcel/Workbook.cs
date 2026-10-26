@@ -8,7 +8,7 @@ namespace LiteExcel;
 /// <summary>
 /// 统一工作簿API,负责工作表集合、文档属性、保存/另存为,打开时加载到内存，不长期持有文件流，因此无需 IDisposable。
 /// </summary>
-public sealed class Workbook
+public sealed partial class Workbook
 {
     private string? _currentPath;
     private List<string>? _openedSheetNames;
