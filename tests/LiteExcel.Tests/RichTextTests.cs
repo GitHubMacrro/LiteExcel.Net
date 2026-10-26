@@ -230,6 +230,88 @@ public class RichTextTests
         finally { if (File.Exists(file)) File.Delete(file); }
     }
 
+    [Fact]
+    public void SettingText_ClearsStaleRichText()
+    {
+        var file = GetTempFile(".xlsx");
+        try
+        {
+            var wb = Excel.Create();
+            var cell = wb.Worksheets["Sheet1"].Cell("A1");
+            cell.SetValue(TwoRuns());
+            cell.Text = "新文本";
+
+            Assert.Null(cell.RichText);
+
+            wb.SaveAs(file);
+            var back = Excel.Open(file).Worksheets[0].Cell("A1");
+            Assert.Equal("新文本", back.Text);
+            Assert.Null(back.RichText);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
+    public void SettingSameText_KeepsRichText()
+    {
+        var cell = new Cell();
+        cell.SetValue(TwoRuns());
+        cell.Text = "粗体普通";
+        Assert.NotNull(cell.RichText);
+        Assert.Equal(2, cell.RichText!.Runs.Count);
+    }
+
+    [Theory]
+    [InlineData(ExcelFormat.Xlsx, ".xlsx")]
+    [InlineData(ExcelFormat.Xlsb, ".xlsb")]
+    [InlineData(ExcelFormat.Xls, ".xls")]
+    public void OpenModifySave_KeepsRichText(ExcelFormat format, string ext)
+    {
+        var file = GetTempFile(ext);
+        var file2 = GetTempFile(ext);
+        try
+        {
+            var wb = Excel.Create(format: format);
+            wb.Worksheets["Sheet1"].Cell("A1").SetValue(TwoRuns());
+            wb.SaveAs(file, format);
+
+            var reopened = Excel.Open(file, format);
+            reopened.Worksheets[0].SetValue("Z9", "modified");
+            reopened.SaveAs(file2, format);
+
+            var cell = Excel.Open(file2, format).Worksheets[0].Cell("A1");
+            Assert.Equal("粗体普通", cell.Text);
+            Assert.Equal(2, cell.RichText!.Runs.Count);
+            Assert.True(cell.RichText.Runs[0].Style?.Bold);
+        }
+        finally
+        {
+            foreach (var f in new[] { file, file2 }) if (File.Exists(f)) File.Delete(f);
+        }
+    }
+
+    [Fact]
+    public void LongTextWithManyRuns_RoundTrips()
+    {
+        var file = GetTempFile(".xls");
+        try
+        {
+            var rich = new RichText();
+            rich.Add(new string('A', 2000), new CellStyle { Bold = true });
+            rich.Add(new string('B', 2000));
+
+            var wb = Excel.Create(format: ExcelFormat.Xls);
+            wb.Worksheets["Sheet1"].Cell("A1").SetValue(rich);
+            wb.SaveAs(file, ExcelFormat.Xls);
+
+            var cell = Excel.Open(file, ExcelFormat.Xls).Worksheets[0].Cell("A1");
+            Assert.Equal(4000, cell.Text!.Length);
+            Assert.Equal(2, cell.RichText!.Runs.Count);
+            Assert.Equal(2000, cell.RichText.Runs[0].Text.Length);
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
     private static string ReadSheetXml(string path)
     {
         using var zip = ZipFile.OpenRead(path);

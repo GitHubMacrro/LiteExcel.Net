@@ -31,7 +31,12 @@ public sealed class Cell
     public string? Text
     {
         get => _text;
-        set { _text = value; Owner?.OnCellChanged(this); }
+        set
+        {
+            _text = value;
+            if (value != RichText?.Text) _richText = null;
+            Owner?.OnCellChanged(this);
+        }
     }
     private string? _text;
 
