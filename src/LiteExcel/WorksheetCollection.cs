@@ -72,13 +72,9 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
 
     /// <summary>
     /// 复制指定工作表，副本追加到末尾并返回。
-    /// <paramref name="newName"/> 为 null 时自动生成「原名 (2)」「原名 (3)」…（超出 31 字符时截断原名再接序号）。
-    /// 值、样式、公式、超链接、批注、合并、行高列宽、筛选、数据验证、条件格式、图片、超级表、保护均深拷贝；
-    /// 修改副本不影响原表。超级表会重新命名以保证全簿唯一。
-    /// <para>副本不继承源工作表名、VBA codeName、原始 sheetId，以及与源文件高级部件（保留 drawing / 切片器）的引用。</para>
+    /// <paramref name="newName"/> 为 null 时自动生成「原名 (2)」「原名 (3)」…。
+    /// 内容为深拷贝，修改副本不影响原表；超级表会重新命名以保证全簿唯一。
     /// </summary>
-    /// <param name="sourceName">源工作表名</param>
-    /// <param name="newName">副本名称；null 或空白时自动生成</param>
     public Worksheet Copy(string sourceName, string? newName = null)
     {
         if (string.IsNullOrWhiteSpace(sourceName))
@@ -95,7 +91,6 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
         return copy;
     }
 
-    /// <summary>校验新工作表名（与写出路径同规则：非空、≤31 字符、不含 \ / ? * [ ] :）</summary>
     private static void ValidateNewSheetName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -104,7 +99,6 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
             throw new InvalidSheetNameException(name, "Sheet 名不能为空/超过 31 字符/包含 \\ / ? * [ ] : 字符");
     }
 
-    /// <summary>生成「原名 (N)」形式的未占用名称；原名过长时截断以容纳序号后缀。</summary>
     private string GenerateCopyName(string baseName)
     {
         for (int i = 2; ; i++)

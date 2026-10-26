@@ -78,7 +78,6 @@ public sealed class SheetProtection
         SpinCount = spin;
     }
 
-    /// <summary>深拷贝（含明文密码与读取到的哈希），供复制工作表使用 </summary>
     internal SheetProtection Clone()
     {
         var clone = new SheetProtection

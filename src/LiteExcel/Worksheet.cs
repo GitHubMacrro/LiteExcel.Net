@@ -182,9 +182,7 @@ public sealed class Worksheet
 
     /// <summary>
     /// 复制当前工作表，副本追加到工作簿末尾并返回。
-    /// <paramref name="newName"/> 为 null 时自动生成「原名 (2)」「原名 (3)」…（超出 31 字符时截断原名再接序号）。
-    /// 值、样式、公式、超链接、批注、合并、行高列宽、筛选、数据验证、条件格式、图片、超级表、保护均深拷贝；修改副本不影响原表。
-    /// 副本不继承 VBA codeName、原始 sheetId 与源文件关联的图片/切片器部件引用。
+    /// <paramref name="newName"/> 为 null 时自动生成「原名 (2)」「原名 (3)」…。
     /// </summary>
     public Worksheet Copy(string? newName = null)
     {
@@ -194,7 +192,6 @@ public sealed class Worksheet
         return parent.Copy(Name, newName);
     }
 
-    /// <summary>把 <paramref name="source"/> 的全部内容深拷贝到当前（空）工作表。</summary>
     internal void CopyFrom(Worksheet source)
     {
         FreezeRows = source.FreezeRows;
@@ -260,13 +257,12 @@ public sealed class Worksheet
         TablesModified = _tables.Count > 0;
 
         if (source.Protection is { } p)
-            Protection = CloneProtection(p);
+            Protection = p.Clone();
 
         VisibleNoValidate(source.Visible);
         TabColor = source.TabColor;
 
-        // 逐格深拷贝：Cell.SetValue(Cell) 走 private CopyFrom（含值/公式/超链接深拷贝），
-        // 但其 Style 是引用共享，需另行 Clone；Owner 由 RebindOwners 统一重绑。
+        // SetValue(Cell) 会共享 Style，需单独 Clone
         for (int r = 0; r < source._grid.Count; r++)
         {
             var srcRow = source._grid[r];
@@ -282,7 +278,6 @@ public sealed class Worksheet
         }
         RebindOwners();
 
-        // 身份字段重置：副本复用源表的 sheetId / OrigIndex / 保留部件引用会产出重复或悬空部件。
         SheetId = "";
         OrigIndex = -1;
         SheetExtLstXml = null;
@@ -1359,10 +1354,7 @@ public sealed class Worksheet
         return clone;
     }
 
-    /// <summary>
-    /// 复制工作表时的表克隆：除深拷贝外，表名需在全簿唯一，且必须清空源部件引用
-    /// （否则 TablePlan 会原样透传同一 xl/tables/tableN.xml，产出重复 zip 条目）。
-    /// </summary>
+    // 必须清空 OriginEntry/OriginXml，否则 TablePlan 会透传同一 xl/tables/tableN.xml
     private XlTable CloneTableForCopy(XlTable t)
     {
         var clone = CloneTable(t);
@@ -1372,7 +1364,6 @@ public sealed class Worksheet
         return clone;
     }
 
-    /// <summary>在所属工作簿范围内分配唯一的表名：原名被占用时追加 _2、_3……</summary>
     private string AllocateTableName(string baseName)
     {
         var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

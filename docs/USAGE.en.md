@@ -1298,13 +1298,10 @@ var copy2 = wb.Worksheets["Detail"].Copy();        // equivalent convenience for
 wb.SaveAs("out.xlsx");
 ```
 
-- **Position**: the copy is always **appended to the end** of the workbook.
-- **Name**: when omitted, the name is generated as `Base (2)`, `Base (3)`, ... (the base is truncated so the total stays within 31 characters). An explicit name is validated immediately: empty, duplicate (case-insensitive), longer than 31 chars, or containing `\ / ? * [ ] :` all throw (`LiteExcelException` for duplicates, `InvalidSheetNameException` otherwise).
-- **What is copied** (all deep copies — mutating the copy never affects the source): cell values / formulas / number formats / styles / hyperlinks, row heights and column widths, row-level and column-level styles, header and default styles, merged ranges, freeze panes, comments, auto filter, data validation, conditional formatting (including color-scale / data-bar / icon-set thresholds), images (binary data and anchors), tables, and sheet protection (including an already-set password).
-- **Tables**: tables in the copy are renamed to stay workbook-unique (suffix `_2`, `_3` when the original name is taken) and written as new table parts rather than reusing the source's `xl/tables/tableN.xml`.
-- **Not inherited**: VBA `codeName`, the source `sheetId`, and references to worksheet-scoped advanced parts such as slicers (the copy is rebuilt as a normal new sheet to avoid duplicate or dangling parts).
-- **Fidelity paths**: adding a sheet invalidates the workbook-level verbatim / surgical-edit conditions, so xlsx / xlsb fall back to a full rebuild (ordinary content is unaffected; an xlsb with Power Query / data model reports degradation or is blocked in strict mode, per the established rules).
-- Relative references (`A1`, `$B$2`) and sheet-local ranges (merges, filters, conditional-format `Sqref`) are unchanged in the copy; **references qualified with a sheet name** (e.g. `Detail!A1` in a formula, or an internal hyperlink `#Detail!A1`) still point at the original sheet and must be rewritten manually.
+- The copy is **appended to the end** of the workbook; when no name is given it is generated as `Base (2)`, `Base (3)`, ... (within 31 characters).
+- Content is deep copied, so mutating the copy never affects the source: values, formulas, styles, hyperlinks, merges, row heights / column widths, comments, filters, data validation, conditional formatting, images, tables (renamed to stay workbook-unique), and sheet protection.
+- The copy does not inherit the VBA `codeName`, the source `sheetId`, or references to advanced parts such as slicers; adding a sheet makes the workbook fall back to a full rebuild.
+- Sheet-qualified references (e.g. `Detail!A1` in a formula, or `#Detail!A1` in an internal hyperlink) still point at the original sheet and must be rewritten manually.
 
 ---
 

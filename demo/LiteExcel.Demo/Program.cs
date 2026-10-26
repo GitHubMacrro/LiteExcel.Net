@@ -1273,9 +1273,9 @@ Demo28_IconSet(outDir);
         ws.Comments = new Dictionary<string, string> { { "B2", "monthly total" } };
         ws.FreezeRows = 1;
 
-        var copy = wb.Worksheets.Copy("Sheet1");          // -> "Sheet1 (2)"
-        copy.SetValue("A2", "Alice (archived)");          // 修改副本，原件不受影响
-        var named = wb.Worksheets.Copy("Sheet1", "Backup");
+        var copy = wb.Worksheets.Copy("Sheet1");
+        copy.SetValue("A2", "Alice (archived)");
+        wb.Worksheets.Copy("Sheet1", "Backup");
 
         var file = Path.Combine(dir, "demo34_copy_sheet.xlsx");
         wb.SaveAs(file);

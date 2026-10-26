@@ -3,10 +3,6 @@ using System.IO;
 
 namespace LiteExcel.Tests;
 
-/// <summary>
-/// 复制工作表回归：值/样式/公式/超链接/批注/合并/行高列宽/筛选/数据验证/条件格式/
-/// 图片/超级表/保护 的深拷贝与落盘往返，名称自动生成与校验，以及「改副本不影响原表」。
-/// </summary>
 public class CopySheetTests
 {
     private static string GetTempFile(string ext = ".xlsx") =>
