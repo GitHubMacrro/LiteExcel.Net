@@ -78,6 +78,36 @@ public sealed class SheetProtection
         SpinCount = spin;
     }
 
+    /// <summary>深拷贝（含明文密码与读取到的哈希），供复制工作表使用 </summary>
+    internal SheetProtection Clone()
+    {
+        var clone = new SheetProtection
+        {
+            _password = _password,
+            HashValue = HashValue,
+            SaltValue = SaltValue,
+            AlgorithmName = AlgorithmName,
+            SpinCount = SpinCount,
+            Enabled = Enabled,
+            SelectLockedCells = SelectLockedCells,
+            SelectUnlockedCells = SelectUnlockedCells,
+            FormatCells = FormatCells,
+            FormatColumns = FormatColumns,
+            FormatRows = FormatRows,
+            InsertColumns = InsertColumns,
+            InsertRows = InsertRows,
+            InsertHyperlinks = InsertHyperlinks,
+            DeleteColumns = DeleteColumns,
+            DeleteRows = DeleteRows,
+            Sort = Sort,
+            AutoFilter = AutoFilter,
+            PivotTables = PivotTables,
+            Objects = Objects,
+            Scenarios = Scenarios,
+        };
+        return clone;
+    }
+
     /// <summary>生成写入 sheetProtection 的密码属性片段（新设密码时现算 SHA-512 + 新 salt） </summary>
     internal string WriteHashAttributes()
     {
