@@ -20,6 +20,7 @@
 | 7 | [合并单元格](#7-合并单元格) |
 | 7.5 | [插入 / 删除行列](#75-插入--删除行列) |
 | 7.6 | [删除整张工作表](#76-删除整张工作表-worksheetdelete) |
+| 7.8 | [复制工作表](#78-复制工作表) |
 | 8 | [自动筛选](#8-自动筛选) |
 | 9 | [行高与列宽](#9-行高与列宽) |
 | 10 | [批注](#10-批注) |
@@ -142,7 +143,7 @@ Zhang San
 | 3.1 | [格式 `ExcelFormat`](#31-格式-excelformat) | 支持的文件格式与自动识别 |
 | 3.2 | [打开工作簿](#32-打开工作簿) | 从路径 / 流打开，读取选项 |
 | 3.3 | [新建工作簿](#33-新建工作簿) | 空簿创建、从数据源创建 |
-| 3.4 | [工作表：查询与管理](#34-工作表查询与管理) | 查询表名、增删移动遍历 |
+| 3.4 | [工作表：查询与管理](#34-工作表查询与管理) | 查询表名、增删复制移动遍历 |
 | 3.5 | [保存与写出](#35-保存与写出) | Save / SaveAs / Write，写入选项 |
 | 3.6 | [文档属性 `WorkbookProperties`](#36-文档属性-workbookproperties) | 读写 `WorkbookProperties` |
 
@@ -271,6 +272,7 @@ Console.WriteLine(wb.Worksheets.Contains("Sheet1"));         // true
 wb.Worksheets.Add("Data");                // 新增空表
 wb.Worksheets.Add("People", peopleList);  // 新增表并写 List<T>（首行表头）
 wb.Worksheets.Add("T", dataTable);        // 新增表并写 DataTable（首行列名）
+wb.Worksheets.Copy("Data");               // 复制工作表，副本追加到末尾
 wb.Worksheets.Move(0, 2);                 // 移动顺序（0-based）
 wb.Worksheets.Remove("Data");             // 按名称删除（存在返回 true）
 wb.Worksheets.RemoveAt(0);                // 按索引删除
@@ -1370,6 +1372,26 @@ wb.SaveAs("out.xlsx");
 - `TabColor`：xlsx / xlsm 读写；**xlsb / xls 不支持标签颜色**，写出时经 `DegradationCapability.SheetVisibility` 上报后丢弃。
 - 守卫：把工作簿**最后一张可见表**设为隐藏会抛 `LiteExcelException`（Excel 要求至少保留一张可见表）。
 - 修改可见性/标签颜色会标记工作表为已修改，确保变更真正写入文件。
+
+## 7.8 复制工作表
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+
+var copy = wb.Worksheets.Copy("明细");          // 名称自动生成为「明细 (2)」
+var named = wb.Worksheets.Copy("明细", "明细备份"); // 指定副本名称
+var copy2 = wb.Worksheets["明细"].Copy();        // 等价便捷写法
+
+wb.SaveAs("out.xlsx");
+```
+
+- **位置**：副本始终**追加到工作簿末尾**（`Worksheets.Count - 1`）。
+- **名称**：不指定时自动生成「原名 (2)」「原名 (3)」…；原名过长会截断以容纳序号后缀，保证不超过 31 字符。指定名称时立即校验：空名、重名（大小写不敏感）、超过 31 字符、含 `\ / ? * [ ] :` 均抛异常（重名抛 `LiteExcelException`，其余抛 `InvalidSheetNameException`）。
+- **复制内容**（全部深拷贝，改副本不影响原表）：单元格值 / 公式 / 数字格式 / 样式 / 超链接、行高列宽、行级与列级样式、表头样式与默认样式、合并区域、冻结窗格、批注、自动筛选、数据验证、条件格式（含色阶 / 数据条 / 图标集阈值）、图片（含二进制数据与锚点）、超级表、工作表保护（含已设密码）。
+- **超级表**：副本中的表会重新命名以保证全簿唯一（原名被占用时追加 `_2`、`_3`），并作为新表部件写出，不会复用源表的 `xl/tables/tableN.xml`。
+- **不继承**：VBA `codeName`、源文件 `sheetId`、工作表级切片器等高级部件的引用（副本按普通新表重建，避免重复或悬空部件）。
+- **保真路径**：新增工作表会使工作簿级的 verbatim / 手术式编辑条件失效，xlsx / xlsb 会走整本重建路径（普通内容不受影响；含 Power Query / 数据模型的 xlsb 会按既定规则上报降级或按严格模式阻止）。
+- 相对引用（`A1`、`$B$2`）与表内区域（合并、筛选、条件格式 `Sqref`）在副本中保持不变；**含表名限定的引用**（如公式里的 `明细!A1`、内部超链接 `#明细!A1`）仍指向原表，需要自行改写。
 
 ---
 
@@ -3732,6 +3754,9 @@ catch (Exception ex)
 | `Protection` | 工作表保护 |
 | `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | 样式 |
 | `ImportData(...)` | 导入数据 |
+| `Copy([newName])` | 复制本表到工作簿末尾（深拷贝），见 [7.8](#78-复制工作表) |
+| `Delete()` | 删除本表 |
+| `Visible` / `TabColor` | 可见性 / 标签颜色 |
 
 ## A.4 模型类
 

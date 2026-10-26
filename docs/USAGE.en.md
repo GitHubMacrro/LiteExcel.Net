@@ -20,6 +20,7 @@
 | 7 | [Merged Cells](#7-merged-cells) |
 | 7.5 | [Insert / Delete Rows and Columns](#75-insert--delete-rows-and-columns) |
 | 7.6 | [Deleting a Worksheet](#76-deleting-a-worksheet-worksheetdelete) |
+| 7.8 | [Copying a Worksheet](#78-copying-a-worksheet) |
 | 8 | [AutoFilter](#8-autofilter) |
 | 9 | [Row Height and Column Width](#9-row-height-and-column-width) |
 | 10 | [Comments](#10-comments) |
@@ -149,7 +150,7 @@ Chapters 3-19: the object-model API main line of capabilities; all day-to-day re
 | 3.6 | [Save and Save As](#36-save-and-save-as) |
 | 3.7 | [Format Enum `ExcelFormat`](#37-format-enum-excelformat) |
 | 3.8 | [List Worksheet Names](#38-list-worksheet-names) |
-| 3.9 | [Worksheet Management `Worksheets`](#39-worksheet-management-worksheets) |
+| 3.9 | [Worksheet Management `Worksheets`](#39-worksheet-management-worksheets) | List, add, copy, move, remove, iterate |
 | 3.10 | [Document Properties `WorkbookProperties`](#310-document-properties-workbookproperties) |
 
 ---
@@ -341,6 +342,7 @@ Console.WriteLine(wb.Worksheets.Contains("Sheet1"));         // true
 wb.Worksheets.Add("Data");                // add an empty sheet
 wb.Worksheets.Add("People", peopleList);  // add a sheet and write List<T> (first row is the header)
 wb.Worksheets.Add("T", dataTable);        // add a sheet and write DataTable (first row is column names)
+wb.Worksheets.Copy("Data");               // copy a sheet, appended to the end
 wb.Worksheets.Move(0, 2);                 // reorder (0-based)
 wb.Worksheets.Remove("Data");             // remove by name (returns true if present)
 wb.Worksheets.RemoveAt(0);                // remove by index
@@ -1283,6 +1285,26 @@ wb.SaveAs("out.xlsx");
 - `TabColor`: read/write for xlsx / xlsm; **xlsb / xls do not support tab color** — reported via `DegradationCapability.SheetVisibility` and dropped on write.
 - Guard: setting the **last visible sheet** to hidden throws `LiteExcelException` (Excel requires at least one visible sheet).
 - Changing visibility/tab color marks the worksheet as modified, so the change is actually written to the file.
+
+## 7.8 Copying a Worksheet
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+
+var copy = wb.Worksheets.Copy("Detail");           // name auto-generated as "Detail (2)"
+var named = wb.Worksheets.Copy("Detail", "Backup"); // explicit copy name
+var copy2 = wb.Worksheets["Detail"].Copy();        // equivalent convenience form
+
+wb.SaveAs("out.xlsx");
+```
+
+- **Position**: the copy is always **appended to the end** of the workbook.
+- **Name**: when omitted, the name is generated as `Base (2)`, `Base (3)`, ... (the base is truncated so the total stays within 31 characters). An explicit name is validated immediately: empty, duplicate (case-insensitive), longer than 31 chars, or containing `\ / ? * [ ] :` all throw (`LiteExcelException` for duplicates, `InvalidSheetNameException` otherwise).
+- **What is copied** (all deep copies — mutating the copy never affects the source): cell values / formulas / number formats / styles / hyperlinks, row heights and column widths, row-level and column-level styles, header and default styles, merged ranges, freeze panes, comments, auto filter, data validation, conditional formatting (including color-scale / data-bar / icon-set thresholds), images (binary data and anchors), tables, and sheet protection (including an already-set password).
+- **Tables**: tables in the copy are renamed to stay workbook-unique (suffix `_2`, `_3` when the original name is taken) and written as new table parts rather than reusing the source's `xl/tables/tableN.xml`.
+- **Not inherited**: VBA `codeName`, the source `sheetId`, and references to worksheet-scoped advanced parts such as slicers (the copy is rebuilt as a normal new sheet to avoid duplicate or dangling parts).
+- **Fidelity paths**: adding a sheet invalidates the workbook-level verbatim / surgical-edit conditions, so xlsx / xlsb fall back to a full rebuild (ordinary content is unaffected; an xlsb with Power Query / data model reports degradation or is blocked in strict mode, per the established rules).
+- Relative references (`A1`, `$B$2`) and sheet-local ranges (merges, filters, conditional-format `Sqref`) are unchanged in the copy; **references qualified with a sheet name** (e.g. `Detail!A1` in a formula, or an internal hyperlink `#Detail!A1`) still point at the original sheet and must be rewritten manually.
 
 ---
 
@@ -3692,6 +3714,8 @@ written to out.xlsx
 | `FreezeRows` / `FreezeColumns` / `FreezeHeader` | Frozen panes |
 | `ImportData<T>(data[, configure])` / `ImportData(DataTable[, includeHeader])` | Clears and rebuilds via import |
 | `ToSheetData()` | Exports to the low-level SheetData model |
+| `Copy([newName])` | Copies this sheet to the end of the workbook (deep copy), see [7.8](#78-copying-a-worksheet) |
+| `Delete()` | Deletes this sheet |
 | `RowCount` / `MaxColumn` | Size information |
 
 ## A.4 `Cells`
