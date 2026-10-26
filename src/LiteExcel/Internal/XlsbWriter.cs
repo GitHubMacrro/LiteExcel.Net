@@ -337,7 +337,6 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended));
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null, preserved));
         var runFontIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        // 先分配 run 字体索引，styles.bin 的字体表依赖它
         var sstBin = sst.Count > 0 ? BuildSharedStringsBin(sst, sstIndex, runFonts, runFontIndex) : Array.Empty<byte>();
         WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs, dxfRegistry.Styles, runFonts));
         if (vbaProject is not null && vbaProject.Length > 0)
@@ -2757,7 +2756,6 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             WriteRecord(ms, BrtEndFmts, Array.Empty<byte>());
         }
 
-        // 字体（默认 + 富文本 run 用到的字体）
         var runFontList = runFonts ?? new List<CellStyle?>();
         WriteRecord(ms, BrtBeginFonts, UInt32((uint)(1 + runFontList.Count)));
         WriteRecord(ms, BrtFont, Font());
