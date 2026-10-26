@@ -112,6 +112,23 @@ public sealed class Cell
     }
     private Hyperlink? _hyperlink;
 
+    /// <summary>富文本段（可选）。设置后 <see cref="Text"/> 同步为本值的拼接结果 </summary>
+    public RichText? RichText
+    {
+        get => _richText;
+        set
+        {
+            _richText = value;
+            if (value is not null)
+            {
+                _type = CellType.Text;
+                _text = value.Text;
+            }
+            Owner?.OnCellChanged(this);
+        }
+    }
+    private RichText? _richText;
+
     /// <summary>所属工作表（由高层 Worksheet 挂接，用于写回） </summary>
     internal Worksheet? Owner { get; set; }
 
@@ -164,6 +181,16 @@ public sealed class Cell
         {
             CopyFrom(cell);
         }
+        else if (value is RichText rich)
+        {
+            _type = CellType.Text;
+            _text = rich.Text;
+            _number = 0;
+            _date = default;
+            _boolean = false;
+            _isFormula = false;
+            _richText = rich;
+        }
         else if (value is null || value == DBNull.Value)
         {
             _type = CellType.Empty;
@@ -172,16 +199,17 @@ public sealed class Cell
             _date = default;
             _boolean = false;
             _isFormula = false;
+            _richText = null;
         }
         else
         {
             switch (value)
             {
                 case bool b:
-                    _type = CellType.Boolean; _boolean = b; _text = null; _number = 0; _date = default; _isFormula = false;
+                    _type = CellType.Boolean; _boolean = b; _text = null; _number = 0; _date = default; _isFormula = false; _richText = null;
                     break;
                 case DateTime dt:
-                    _type = CellType.Date; _date = dt; NumberFormat ??= "yyyy-MM-dd"; _text = null; _number = 0; _boolean = false; _isFormula = false;
+                    _type = CellType.Date; _date = dt; NumberFormat ??= "yyyy-MM-dd"; _text = null; _number = 0; _boolean = false; _isFormula = false; _richText = null;
                     break;
                 case sbyte n: SetNumber(n); break;
                 case byte n: SetNumber(n); break;
@@ -195,7 +223,7 @@ public sealed class Cell
                 case double n: SetNumber(n); break;
                 case decimal n: SetNumber((double)n); break;
                 default:
-                    _type = CellType.Text; _text = value.ToString(); _number = 0; _date = default; _boolean = false; _isFormula = false;
+                    _type = CellType.Text; _text = value.ToString(); _number = 0; _date = default; _boolean = false; _isFormula = false; _richText = null;
                     break;
             }
         }
@@ -211,6 +239,7 @@ public sealed class Cell
         _date = default;
         _boolean = false;
         _isFormula = false;
+        _richText = null;
     }
 
     private void CopyFrom(Cell other)
@@ -225,6 +254,7 @@ public sealed class Cell
         _isFormula = other._isFormula;
         _formula = other._formula;
         Hyperlink = other.Hyperlink?.Clone();
+        _richText = other._richText?.Clone();
     }
     /// <summary>以字符串读取值。Empty 返回 null，Number/Date/Boolean 按惯例格式化 </summary>
     public string? GetString()
