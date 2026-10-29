@@ -1125,8 +1125,34 @@ Output: (this example has no console output)
 ![Styles and number formats](screenshots/style_number.png)
 
 *Produced by the example code in this chapter, opened in Excel: font, color, border, alignment; currency / percent / date formats.*
----
 
+## 6.10 Rich Text Cells
+
+A single cell can hold several differently formatted segments. Compose `RichText` from `TextRun` items:
+
+```csharp
+var rich = new RichText();
+rich.Add("Key: ", new CellStyle { Bold = true, FontColor = "#FF0000" });
+rich.Add("plain text");
+rich.Add("(note)", verticalAlign: TextVerticalAlign.Superscript);
+
+ws.Cell("A1").SetValue(rich);      // Text becomes the concatenation; cell type is Text
+```
+
+On read, `Cell.Text` is still the full plain text while `Cell.RichText` keeps the segments:
+
+```csharp
+var cell = Excel.Open("out.xlsx").Worksheets[0].Cell("A1");
+Console.WriteLine(cell.Text);                       // Key: plain text(note)
+foreach (var run in cell.RichText!.Runs)
+    Console.WriteLine($"{run.Text} bold={run.Style?.Bold}");
+```
+
+- Run-level formatting covers font name / size / bold / italic / underline / strikeout / font color / superscript and subscript; fill, border and alignment stay cell-level (`Cell.Style`).
+- Read/write for xlsx / xlsm / xlsb / xls; csv flattens to plain text and reports `DegradationCapability.RichText`.
+- `Cell.Style` and run-level formatting do not interfere.
+
+---
 # 7. Merged Cells
 
 ## 📑 Contents

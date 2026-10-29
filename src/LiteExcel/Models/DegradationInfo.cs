@@ -67,6 +67,9 @@ public enum DegradationCapability
 
     /// <summary>工作表标签颜色（tabColor）；目标格式 xlsb/xls 不支持时被丢弃 </summary>
     SheetVisibility,
+
+    /// <summary>单元格富文本（同一单元格内多段不同字体）；目标格式不支持时被压平为纯文本 </summary>
+    RichText,
 }
 
 /// <summary>

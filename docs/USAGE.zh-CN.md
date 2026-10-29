@@ -1199,6 +1199,33 @@ ws.Cell("A1").Style = new CellStyle { Underline = true };
 ![样式与数字格式效果](screenshots/style_number.png)
 
 *上图由本章示例代码写出，在 Excel 中打开的效果：字体、颜色、边框、对齐，以及货币 / 百分比 / 日期格式。*
+
+## 6.10 富文本单元格
+
+一个单元格内可以有多种字体格式。用 `RichText` 组合若干 `TextRun`，每段单独设字体：
+
+```csharp
+var rich = new RichText();
+rich.Add("重点：", new CellStyle { Bold = true, FontColor = "#FF0000" });
+rich.Add("普通文字");
+rich.Add("（注）", verticalAlign: TextVerticalAlign.Superscript);
+
+ws.Cell("A1").SetValue(rich);      // Text 自动为拼接结果，单元格类型为 Text
+```
+
+读回时 `Cell.Text` 仍是完整纯文本，`Cell.RichText` 保留分段：
+
+```csharp
+var cell = Excel.Open("out.xlsx").Worksheets[0].Cell("A1");
+Console.WriteLine(cell.Text);                       // 重点：普通文字（注）
+foreach (var run in cell.RichText!.Runs)
+    Console.WriteLine($"{run.Text} bold={run.Style?.Bold}");
+```
+
+- 段级格式支持字体名 / 字号 / 加粗 / 斜体 / 下划线 / 删除线 / 字体色 / 上标下标；填充、边框、对齐属单元格级（用 `Cell.Style`）。
+- xlsx / xlsm / xlsb / xls 四格式读写；csv 写出时压平为纯文本并经 `DegradationCapability.RichText` 上报。
+- `Cell.Style` 与 run 级格式互不干扰。
+
 ---
 
 # 7. 合并单元格
@@ -3740,6 +3767,7 @@ catch (Exception ex)
 | `Cell` | 单元格（Text / Number / Date / Boolean） |
 | `CellRange` | 区域（0-based 含端点） |
 | `CellStyle` | 单元格样式 |
+| `RichText` / `TextRun` | 富文本（单元格内多段不同字体），见 [6.10](#610-富文本单元格) |
 | `BorderStyle` / `BorderEdge` | 边框 |
 | `Hyperlink` | 超链接 |
 | `NamedRange` | 命名区域 |

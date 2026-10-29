@@ -44,6 +44,7 @@ Demo28_IconSet(outDir);
         Demo31_ReadWithProgress(outDir);
         Demo32_InsertDeleteRows(outDir);
         Demo33_FormulaWritebackAndComment(outDir);
+        Demo35_RichText(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -1252,6 +1253,37 @@ Demo28_IconSet(outDir);
         var b1 = reopened.Worksheets[0].Cell("B1");
         var noteText = reopened.Worksheets[0].Comments?.TryGetValue("B1", out var note) == true ? note : "none";
         Console.WriteLine($"  B1.IsFormula={b1.IsFormula}, Formula={b1.Formula}, Comment={noteText}");
+        Console.WriteLine();
+    }
+
+    // 35. Rich text cells
+    private static void Demo35_RichText(string dir)
+    {
+        Console.WriteLine("[35] Rich Text Cells");
+
+        var rich = new RichText();
+        rich.Add("Bold red: ", new CellStyle { Bold = true, FontColor = "#FF0000" });
+        rich.Add("plain text ");
+        rich.Add("superscript", verticalAlign: TextVerticalAlign.Superscript);
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        ws.Cell("A1").SetValue(rich);
+        ws.Cell("A3").SetValue("plain cell");
+
+        foreach (var (fmt, ext) in new[]
+        {
+            (ExcelFormat.Xlsx, ".xlsx"), (ExcelFormat.Xlsb, ".xlsb"), (ExcelFormat.Xls, ".xls"),
+        })
+        {
+            var file = Path.Combine(dir, $"demo35_rich_text{ext}");
+            wb.SaveAs(file, fmt);
+
+            var cell = Excel.Open(file, fmt).Worksheets[0].Cell("A1");
+            var runs = cell.RichText?.Runs.Count ?? 0;
+            var firstBold = cell.RichText?.Runs[0].Style?.Bold;
+            Console.WriteLine($"  {ext}: text=[{cell.Text}] runs={runs} firstBold={firstBold}");
+        }
         Console.WriteLine();
     }
 }

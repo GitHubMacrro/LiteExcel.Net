@@ -126,7 +126,7 @@ public static partial class XlsxWriter
                 {
                     foreach (var cell in row)
                     {
-                        if (cell.Type == CellType.Text && !cell.IsFormula && cell.Text is not null)
+                        if (cell.Type == CellType.Text && !cell.IsFormula && cell.RichText is null && cell.Text is not null)
                             RegisterSharedString(cell.Text, sharedStrings, sharedIndex);
                     }
                 }
@@ -1346,7 +1346,13 @@ public static partial class XlsxWriter
                 break;
 
             case CellType.Text:
-                if (string.IsNullOrEmpty(cell.Text))
+                if (cell.RichText is { Runs.Count: > 0 } rich)
+                {
+                    sb.Append($"<c r=\"{cellRef}\"{styleAttr} t=\"inlineStr\"><is>");
+                    AppendRichTextRuns(sb, rich);
+                    sb.Append("</is></c>");
+                }
+                else if (string.IsNullOrEmpty(cell.Text))
                 {
                     sb.Append($"<c r=\"{cellRef}\"{styleAttr}/>");
                 }
@@ -1373,6 +1379,42 @@ public static partial class XlsxWriter
                 sb.Append($"<c r=\"{cellRef}\"{styleAttr} t=\"b\"><v>{(cell.Boolean ? 1 : 0)}</v></c>");
                 break;
         }
+    }
+
+    internal static void AppendRichTextRuns(StringBuilder sb, RichText rich)
+    {
+        foreach (var run in rich.Runs)
+        {
+            sb.Append("<r>");
+            AppendRunProperties(sb, run);
+            sb.Append("<t");
+            if (run.Text.Length > 0 && (char.IsWhiteSpace(run.Text[0]) || char.IsWhiteSpace(run.Text[run.Text.Length - 1])))
+                sb.Append(" xml:space=\"preserve\"");
+            sb.Append(">").Append(XmlEscape(run.Text)).Append("</t></r>");
+        }
+    }
+
+    /// <summary>按 CT_RPrElt schema 顺序输出；run 用 rFont（styles.xml 的 font 才用 name）</summary>
+    internal static void AppendRunProperties(StringBuilder sb, TextRun run)
+    {
+        var s = run.Style;
+        bool hasVert = run.VerticalAlign is not null and not TextVerticalAlign.Baseline;
+        if (s is null && !hasVert) return;
+
+        sb.Append("<rPr>");
+        if (!string.IsNullOrEmpty(s?.FontName))
+            sb.Append($"<rFont val=\"{XmlEscape(s!.FontName!)}\"/>");
+        if (s?.Bold == true) sb.Append("<b/>");
+        if (s?.Italic == true) sb.Append("<i/>");
+        if (s?.Strikeout == true) sb.Append("<strike/>");
+        if (!string.IsNullOrEmpty(s?.FontColor))
+            sb.Append($"<color rgb=\"FF{NormalizeColorRgb(s!.FontColor!)}\"/>");
+        if (s is not null && s.FontSize > 0)
+            sb.Append($"<sz val=\"{FormatDouble(s.FontSize)}\"/>");
+        if (s?.Underline == true) sb.Append("<u/>");
+        if (hasVert)
+            sb.Append($"<vertAlign val=\"{(run.VerticalAlign == TextVerticalAlign.Superscript ? "superscript" : "subscript")}\"/>");
+        sb.Append("</rPr>");
     }
 
     private static string ContentTypesXml(int sheetCount, IReadOnlyList<int> sheetsWithComments, bool hasProps, OoxmlPreservedParts? preserved, bool macroEnabled = false, ImagePlan? imagePlan = null, TablePlan? tablePlan = null, bool dropMacros = false)
