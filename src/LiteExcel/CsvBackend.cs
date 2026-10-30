@@ -256,8 +256,6 @@ internal static class CsvBackend
                     Report(DegradationCapability.Hyperlinks, $"CSV 不支持超链接，工作表 '{sheet.SheetName}' 的超链接已丢弃。");
                 if (cell.IsFormula || !string.IsNullOrEmpty(cell.Formula))
                     Report(DegradationCapability.Formulas, $"CSV 不支持公式，工作表 '{sheet.SheetName}' 的公式以文本值写出。");
-                if (cell.RichText is { Runs.Count: > 0 })
-                    Report(DegradationCapability.RichText, $"CSV 不支持富文本，工作表 '{sheet.SheetName}' 的富文本已压平为纯文本。");
             }
         }
         if (sheet.ConditionalFormats is { Count: > 0 })
