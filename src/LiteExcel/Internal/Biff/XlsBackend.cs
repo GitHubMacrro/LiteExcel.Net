@@ -94,8 +94,7 @@ internal static class XlsBackend
         s_hasPivotTables = false;
         foreach (var r in records)
             if (r.Opcode == BiffRecords.OpSxView) { s_hasPivotTables = true; break; }
-        var sst = new List<SharedStringEntry>();
-        var fonts = new List<CellStyle?>();
+        var sst = new List<string>();
         var formats = new Dictionary<int, string>();
         var xfIfmt = new List<int>();
         bool date1904 = false;
@@ -119,10 +118,7 @@ internal static class XlsBackend
                     boundSheets.Add(ParseBoundSheet(rec.Data));
                     break;
                 case BiffRecords.OpSst:
-                    ParseSst(records, ref i, sst, fonts);
-                    break;
-                case BiffRecords.OpFont:
-                    fonts.Add(ParseFont(rec.Data));
+                    ParseSst(records, ref i, sst);
                     break;
                 case BiffRecords.OpFormat:
                     ParseFormat(rec.Data, formats);
@@ -340,7 +336,7 @@ internal static class XlsBackend
         formats[ifmt] = code;
     }
 
-    private static void ParseSst(List<BiffRecords.Record> records, ref int i, List<SharedStringEntry> sst, List<CellStyle?> fonts)
+    private static void ParseSst(List<BiffRecords.Record> records, ref int i, List<string> sst)
     {
         var sstData = records[i].Data;
         if (sstData.Length < 8) return;
@@ -360,75 +356,14 @@ internal static class XlsBackend
         var reader = new BiffStringReader(segments);
         for (int k = 0; k < uniqueCount; k++)
         {
-            var s = reader.ReadStringWithRuns(out var runs);
+            var s = reader.ReadString();
             if (s is null) break; // 流耗尽或格式错误
-            sst.Add(new SharedStringEntry(s, BuildRuns(s, runs, fonts)));
+            sst.Add(s);
         }
     }
-
-    /// <summary>按 ich 切分字符串；ifnt 索引到 FONT 表。run 越界时放弃富文本，保留纯文本。</summary>
-    private static RichText? BuildRuns(string text, List<(int Ich, int Ifnt)>? runs, List<CellStyle?> fonts)
-    {
-        if (runs is null || runs.Count == 0) return null;
-
-        var rich = new RichText();
-        for (int i = 0; i < runs.Count; i++)
-        {
-            int begin = runs[i].Ich;
-            int end = i + 1 < runs.Count ? runs[i + 1].Ich : text.Length;
-            if (begin < 0 || begin > text.Length) return null;
-            if (end < begin || end > text.Length) end = text.Length;
-
-            int ifnt = runs[i].Ifnt;
-            var style = ifnt >= 0 && ifnt < fonts.Count ? fonts[ifnt]?.Clone() : null;
-            rich.Runs.Add(new TextRun { Text = text.Substring(begin, end - begin), Style = style });
-        }
-        return rich.Runs.Count > 0 ? rich : null;
-    }
-
-    /// <summary>解析 FONT 记录：dyHeight(2) grbit(2) icv(2) bls(2) sss(2) uls(1) family(1) charset(1) reserved(1) cch(1) name</summary>
-    private static CellStyle? ParseFont(byte[] d)
-    {
-        if (d.Length < 16) return null;
-
-        int dyHeight = BiffRecords.ReadU16(d, 0);
-        int grbit = BiffRecords.ReadU16(d, 2);
-        int icv = BiffRecords.ReadU16(d, 4);
-        int bls = BiffRecords.ReadU16(d, 6);
-        int cch = d[14];
-        int nameOffset = 16;
-
-        string? name = null;
-        if (cch > 0 && nameOffset + cch * 2 <= d.Length)
-            name = Encoding.Unicode.GetString(d, nameOffset, cch * 2);
-
-        return new CellStyle
-        {
-            FontName = string.IsNullOrEmpty(name) ? null : name,
-            FontSize = dyHeight > 0 ? dyHeight / 20.0 : 11,
-            Bold = bls >= 700 || (grbit & 0x01) != 0,
-            Italic = (grbit & 0x02) != 0,
-            Strikeout = (grbit & 0x08) != 0,
-            Underline = (grbit & 0x04) != 0,
-            FontColor = icv == 0x7FFF ? null : IcvToRgb(icv),
-        };
-    }
-
-    private static string? IcvToRgb(int icv) => icv switch
-    {
-        0 => "#000000",
-        1 => "#FFFFFF",
-        2 => "#FF0000",
-        3 => "#00FF00",
-        4 => "#0000FF",
-        5 => "#FFFF00",
-        6 => "#FF00FF",
-        7 => "#00FFFF",
-        _ => null,
-    };
 
     private static SheetData ParseSheet(List<BiffRecords.Record> records, ref int i,
-        List<SharedStringEntry> sst, Dictionary<int, string> formats, List<int> xfIfmt, bool date1904)
+        List<string> sst, Dictionary<int, string> formats, List<int> xfIfmt, bool date1904)
     {
         var sheet = new SheetData();
         var cells = new Dictionary<int, Dictionary<int, Cell>>();
@@ -467,12 +402,7 @@ internal static class XlsBackend
                     PutCell(cells, rec.Data, 0, 2, 4, (row, col, d) =>
                     {
                         int isst = ReadS32At(d, 6);
-                        if (isst >= 0 && isst < sst.Count)
-                        {
-                            var e = sst[isst];
-                            return e.Rich is { } r ? new Cell { RichText = r.Clone() } : Cell.FromText(e.Text);
-                        }
-                        return Cell.Empty;
+                        return isst >= 0 && isst < sst.Count ? Cell.FromText(sst[isst]) : Cell.Empty;
                     }, ref maxRow, ref maxCol);
                     break;
                 case BiffRecords.OpLabel:

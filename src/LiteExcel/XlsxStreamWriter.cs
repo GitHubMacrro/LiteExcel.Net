@@ -196,28 +196,11 @@ public sealed class XlsxStreamWriter : IDisposable
                 if (styleAttr is not null) _current.Writer.WriteAttributeString("s", styleAttr);
                 _current.Writer.WriteAttributeString("t", "inlineStr");
                 _current.Writer.WriteStartElement("is");
-                if (cell.RichText is { Runs.Count: > 0 } rich)
-                {
-                    foreach (var run in rich.Runs)
-                    {
-                        _current.Writer.WriteStartElement("r");
-                        WriteRunProperties(run);
-                        _current.Writer.WriteStartElement("t");
-                        if (run.Text.Length > 0 && (char.IsWhiteSpace(run.Text[0]) || char.IsWhiteSpace(run.Text[run.Text.Length - 1])))
-                            _current.Writer.WriteAttributeString("xml", "space", null, "preserve");
-                        _current.Writer.WriteString(run.Text);
-                        _current.Writer.WriteEndElement();
-                        _current.Writer.WriteEndElement();
-                    }
-                }
-                else
-                {
-                    _current.Writer.WriteStartElement("t");
-                    if (cell.Text is { Length: > 0 } && (char.IsWhiteSpace(cell.Text[0]) || char.IsWhiteSpace(cell.Text[cell.Text.Length - 1])))
-                        _current.Writer.WriteAttributeString("xml", "space", null, "preserve");
-                    _current.Writer.WriteString(cell.Text ?? "");
-                    _current.Writer.WriteEndElement(); // t
-                }
+                _current.Writer.WriteStartElement("t");
+                if (cell.Text is { Length: > 0 } && (char.IsWhiteSpace(cell.Text[0]) || char.IsWhiteSpace(cell.Text[cell.Text.Length - 1])))
+                    _current.Writer.WriteAttributeString("xml", "space", null, "preserve");
+                _current.Writer.WriteString(cell.Text ?? "");
+                _current.Writer.WriteEndElement(); // t
                 _current.Writer.WriteEndElement(); // is
                 _current.Writer.WriteEndElement(); // c
                 break;
@@ -253,45 +236,6 @@ public sealed class XlsxStreamWriter : IDisposable
                 _current.Writer.WriteEndElement();
                 break;
         }
-    }
-
-    private void WriteRunProperties(TextRun run)
-    {
-        var s = run.Style;
-        bool hasVert = run.VerticalAlign is not null and not TextVerticalAlign.Baseline;
-        if (s is null && !hasVert) return;
-
-        _current.Writer!.WriteStartElement("rPr");
-        if (!string.IsNullOrEmpty(s?.FontName))
-        {
-            _current.Writer.WriteStartElement("rFont");
-            _current.Writer.WriteAttributeString("val", s!.FontName!);
-            _current.Writer.WriteEndElement();
-        }
-        if (s?.Bold == true) _current.Writer.WriteElementString("b", null, "");
-        if (s?.Italic == true) _current.Writer.WriteElementString("i", null, "");
-        if (s?.Strikeout == true) _current.Writer.WriteElementString("strike", null, "");
-        if (!string.IsNullOrEmpty(s?.FontColor))
-        {
-            _current.Writer.WriteStartElement("color");
-            var c = s!.FontColor!.StartsWith("#") ? s.FontColor.Substring(1) : s.FontColor;
-            _current.Writer.WriteAttributeString("rgb", "FF" + c.ToUpperInvariant());
-            _current.Writer.WriteEndElement();
-        }
-        if (s is not null && s.FontSize > 0)
-        {
-            _current.Writer.WriteStartElement("sz");
-            _current.Writer.WriteAttributeString("val", s.FontSize.ToString(CultureInfo.InvariantCulture));
-            _current.Writer.WriteEndElement();
-        }
-        if (s?.Underline == true) _current.Writer.WriteElementString("u", null, "");
-        if (hasVert)
-        {
-            _current.Writer.WriteStartElement("vertAlign");
-            _current.Writer.WriteAttributeString("val", run.VerticalAlign == TextVerticalAlign.Superscript ? "superscript" : "subscript");
-            _current.Writer.WriteEndElement();
-        }
-        _current.Writer.WriteEndElement();
     }
 
     private void WriteStableHead()
