@@ -125,7 +125,7 @@ var age = opened.Worksheets[0].Cells[2, 2].GetDouble();
 - [更新日志](docs/CHANGELOG.md)：版本变更记录
 - [English README](README.en.md)
 
-仓库自带控制台示例（34 个 Demo，覆盖读写 / 样式 / 富文本 / 筛选 / 批注 / 密码 / 图片 / 条件格式 / 插删行列 / 公式写回等），在仓库根目录执行：
+仓库自带控制台示例（34 个 Demo，覆盖读写 / 样式 / 筛选 / 批注 / 密码 / 图片 / 条件格式 / 插删行列 / 复制工作表 / 公式写回等），在仓库根目录执行：
 
 ```powershell
 dotnet run --project demo/LiteExcel.Demo

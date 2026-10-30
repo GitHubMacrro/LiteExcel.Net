@@ -44,7 +44,7 @@ Demo28_IconSet(outDir);
         Demo31_ReadWithProgress(outDir);
         Demo32_InsertDeleteRows(outDir);
         Demo33_FormulaWritebackAndComment(outDir);
-        Demo35_RichText(outDir);
+        Demo34_CopyWorksheet(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -1256,34 +1256,37 @@ Demo28_IconSet(outDir);
         Console.WriteLine();
     }
 
-    // 35. Rich text cells
-    private static void Demo35_RichText(string dir)
+    // 34. Copy worksheet
+    private static void Demo34_CopyWorksheet(string dir)
     {
-        Console.WriteLine("[35] Rich Text Cells");
-
-        var rich = new RichText();
-        rich.Add("Bold red: ", new CellStyle { Bold = true, FontColor = "#FF0000" });
-        rich.Add("plain text ");
-        rich.Add("superscript", verticalAlign: TextVerticalAlign.Superscript);
+        Console.WriteLine("[34] Copy Worksheet");
 
         var wb = Excel.Create();
         var ws = wb.Worksheets["Sheet1"];
-        ws.Cell("A1").SetValue(rich);
-        ws.Cell("A3").SetValue("plain cell");
+        ws.SetValue("A1", "Name");
+        ws.SetValue("B1", "Amount");
+        ws.SetValue("A2", "Alice");
+        ws.SetValue("B2", 1200);
+        ws.SetValue("A3", "Bob");
+        ws.SetValue("B3", 850);
+        ws.Range("A1:B1").Style = new CellStyle { Bold = true };
+        ws.Comments = new Dictionary<string, string> { { "B2", "monthly total" } };
+        ws.FreezeRows = 1;
 
-        foreach (var (fmt, ext) in new[]
-        {
-            (ExcelFormat.Xlsx, ".xlsx"), (ExcelFormat.Xlsb, ".xlsb"), (ExcelFormat.Xls, ".xls"),
-        })
-        {
-            var file = Path.Combine(dir, $"demo35_rich_text{ext}");
-            wb.SaveAs(file, fmt);
+        var copy = wb.Worksheets.Copy("Sheet1");
+        copy.SetValue("A2", "Alice (archived)");
+        wb.Worksheets.Copy("Sheet1", "Backup");
 
-            var cell = Excel.Open(file, fmt).Worksheets[0].Cell("A1");
-            var runs = cell.RichText?.Runs.Count ?? 0;
-            var firstBold = cell.RichText?.Runs[0].Style?.Bold;
-            Console.WriteLine($"  {ext}: text=[{cell.Text}] runs={runs} firstBold={firstBold}");
-        }
+        var file = Path.Combine(dir, "demo34_copy_sheet.xlsx");
+        wb.SaveAs(file);
+
+        var reopened = Excel.Open(file);
+        Console.WriteLine($"  Sheets: {string.Join(", ", reopened.Worksheets.Names)}");
+        Console.WriteLine($"  Source A2={reopened.Worksheets["Sheet1"].Cell("A2").GetString()}, " +
+                          $"Copy A2={reopened.Worksheets["Sheet1 (2)"].Cell("A2").GetString()}");
+        Console.WriteLine($"  Copy B2={reopened.Worksheets["Sheet1 (2)"].Cell("B2").GetDouble()}, " +
+                          $"Comment={reopened.Worksheets["Sheet1 (2)"].Comments?["B2"]}, " +
+                          $"FreezeRows={reopened.Worksheets["Sheet1 (2)"].FreezeRows}");
         Console.WriteLine();
     }
 }

@@ -125,7 +125,7 @@ For `List<T>` mapping, DataTable, and low-level `SheetData`, see [usage guide ch
 - [Changelog](docs/CHANGELOG.md): version history
 - [中文 README](README.md)
 
-The repo ships a console sample with 34 demos covering read/write, styles, rich text, filters, comments, encryption, images, conditional formatting, row/column insert-delete, formula write-back, and more. From the repo root:
+The repo ships a console sample with 34 demos covering read/write, styles, filters, comments, encryption, images, conditional formatting, row/column insert-delete, worksheet copy, formula write-back, and more. From the repo root:
 
 ```powershell
 dotnet run --project demo/LiteExcel.Demo

@@ -180,6 +180,182 @@ public sealed class Worksheet
         return parent.Remove(Name);
     }
 
+    /// <summary>复制当前工作表到工作簿末尾并返回副本；<paramref name="newName"/> 为 null 时自动命名 </summary>
+    public Worksheet Copy(string? newName = null)
+    {
+        var parent = ParentCollection;
+        if (parent is null)
+            throw new LiteExcelException("工作表不属于任何工作簿，无法复制。");
+        return parent.Copy(Name, newName);
+    }
+
+    internal void CopyFrom(Worksheet source)
+    {
+        FreezeRows = source.FreezeRows;
+        FreezeColumns = source.FreezeColumns;
+
+        if (source.ColumnWidths is { Count: > 0 })
+            ColumnWidths = new Dictionary<int, double>(source.ColumnWidths);
+        if (source.RowHeights is { Count: > 0 })
+            RowHeights = new Dictionary<int, double>(source.RowHeights);
+
+        HeaderStyle = source.HeaderStyle?.Clone();
+        DefaultStyle = source.DefaultStyle?.Clone();
+        if (source.RowStyles is { Count: > 0 })
+        {
+            RowStyles = new Dictionary<int, CellStyle>();
+            foreach (var kv in source.RowStyles) RowStyles[kv.Key] = kv.Value?.Clone()!;
+        }
+        if (source.ColumnStyles is { Count: > 0 })
+        {
+            ColumnStyles = new Dictionary<int, CellStyle>();
+            foreach (var kv in source.ColumnStyles) ColumnStyles[kv.Key] = kv.Value?.Clone()!;
+        }
+
+        if (source.Comments is { Count: > 0 })
+            Comments = new Dictionary<string, string>(source.Comments, StringComparer.Ordinal);
+
+        if (source.Validations is { Count: > 0 })
+        {
+            Validations = new List<DataValidation>(source.Validations.Count);
+            foreach (var v in source.Validations) Validations.Add(CloneValidation(v));
+        }
+
+        if (source.Filter is { } f)
+        {
+            Filter = new AutoFilter
+            {
+                Range = f.Range,
+                Columns = f.Columns.Select(c => new FilterColumn
+                {
+                    ColumnIndex = c.ColumnIndex,
+                    Type = c.Type,
+                    Values = new List<string>(c.Values),
+                    Operator = c.Operator,
+                    MinValue = c.MinValue,
+                    MaxValue = c.MaxValue,
+                }).ToList(),
+                HiddenRows = new HashSet<int>(f.HiddenRows),
+            };
+        }
+
+        foreach (var cf in source.ConditionalFormats)
+            ConditionalFormats.Add(CloneConditionalFormat(cf));
+
+        foreach (var m in source._mergedRanges)
+            _mergedRanges.Add(new CellRange(m.FirstRow, m.LastRow, m.FirstCol, m.LastCol));
+
+        foreach (var img in source.Images)
+            Images.Add(CloneImage(img));
+
+        foreach (var table in source._tables)
+            _tables.Add(CloneTableForCopy(table));
+        TablesModified = _tables.Count > 0;
+
+        if (source.Protection is { } p)
+            Protection = p.Clone();
+
+        VisibleNoValidate(source.Visible);
+        TabColor = source.TabColor;
+
+        for (int r = 0; r < source._grid.Count; r++)
+        {
+            var srcRow = source._grid[r];
+            var dstRow = new List<Cell>(srcRow.Count);
+            foreach (var srcCell in srcRow)
+            {
+                var cell = new Cell();
+                cell.SetValue(srcCell);
+                cell.Style = srcCell.Style?.Clone();
+                dstRow.Add(cell);
+            }
+            _grid.Add(dstRow);
+        }
+        RebindOwners();
+
+        SheetId = "";
+        OrigIndex = -1;
+        SheetExtLstXml = null;
+        CodeName = null;
+        ModifiedCells.Clear();
+        IsModified = true;
+    }
+
+    private void VisibleNoValidate(SheetVisibility value) => _visible = value;
+
+    private static DataValidation CloneValidation(DataValidation v) => new()
+    {
+        Type = v.Type,
+        Sqref = v.Sqref,
+        Formula1 = v.Formula1,
+        Formula2 = v.Formula2,
+        AllowBlank = v.AllowBlank,
+        PromptTitle = v.PromptTitle,
+        Prompt = v.Prompt,
+    };
+
+    private static ConditionalFormat CloneConditionalFormat(ConditionalFormat cf) => new()
+    {
+        Sqref = cf.Sqref,
+        Type = cf.Type,
+        Formula = cf.Formula,
+        Formula2 = cf.Formula2,
+        Operator = cf.Operator,
+        Style = cf.Style?.Clone(),
+        ColorScale = cf.ColorScale is null ? null : new ColorScaleInfo
+        {
+            LowColor = cf.ColorScale.LowColor,
+            HighColor = cf.ColorScale.HighColor,
+            MidColor = cf.ColorScale.MidColor,
+        },
+        DataBar = cf.DataBar is null ? null : new DataBarInfo
+        {
+            Color = cf.DataBar.Color,
+            ShowValue = cf.DataBar.ShowValue,
+            MinLengthPercent = cf.DataBar.MinLengthPercent,
+            MaxLengthPercent = cf.DataBar.MaxLengthPercent,
+        },
+        IconSet = cf.IconSet is null ? null : new IconSetInfo
+        {
+            Style = cf.IconSet.Style,
+            CustomStyleName = cf.IconSet.CustomStyleName,
+            Percent = cf.IconSet.Percent,
+            ShowValue = cf.IconSet.ShowValue,
+            Reverse = cf.IconSet.Reverse,
+            Thresholds = cf.IconSet.Thresholds is null ? null : (double[])cf.IconSet.Thresholds.Clone(),
+        },
+        Text = cf.Text,
+        TimePeriod = cf.TimePeriod,
+        Rank = cf.Rank,
+        Percent = cf.Percent,
+        Priority = cf.Priority,
+    };
+
+    private static WorksheetImage CloneImage(WorksheetImage img) => new()
+    {
+        Data = (byte[])img.Data.Clone(),
+        Extension = img.Extension,
+        Row = img.Row,
+        Column = img.Column,
+        Placement = img.Placement,
+        WidthPx = img.WidthPx,
+        HeightPx = img.HeightPx,
+        Name = img.Name,
+        AltText = img.AltText,
+        Anchor = img.Anchor is null ? null : new ImageAnchor
+        {
+            TopLeftCell = img.Anchor.TopLeftCell,
+            TopLeftOffsetX = img.Anchor.TopLeftOffsetX,
+            TopLeftOffsetY = img.Anchor.TopLeftOffsetY,
+            WidthPixels = img.Anchor.WidthPixels,
+            HeightPixels = img.Anchor.HeightPixels,
+            MoveMode = img.Anchor.MoveMode,
+        },
+        FromPreservedDrawing = false,
+    };
+
+    private static SheetProtection CloneProtection(SheetProtection p) => p.Clone();
+
     /// <summary>总行数（1-based 有效行数，0 表示空表） </summary>
     public int RowCount => _grid.Count;
 
@@ -1163,6 +1339,33 @@ public sealed class Worksheet
         foreach (var c in t.Columns)
             clone.AddColumn(c.Clone());
         return clone;
+    }
+
+    private XlTable CloneTableForCopy(XlTable t)
+    {
+        var clone = CloneTable(t);
+        // 不清空 OriginEntry/OriginXml 会透传同一个 xl/tables/tableN.xml，产生重复 zip 条目
+        clone.OriginEntry = null;
+        clone.OriginXml = null;
+        clone.Name = AllocateTableName(t.Name);
+        return clone;
+    }
+
+    private string AllocateTableName(string baseName)
+    {
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ws in ParentCollection ?? Enumerable.Empty<Worksheet>())
+            foreach (var t in ws._tables)
+                taken.Add(t.Name);
+        foreach (var t in _tables)
+            taken.Add(t.Name);
+
+        if (!taken.Contains(baseName)) return baseName;
+        for (int i = 2; ; i++)
+        {
+            var candidate = $"{baseName}_{i}";
+            if (!taken.Contains(candidate)) return candidate;
+        }
     }
 
     private void RebindOwners()    {
