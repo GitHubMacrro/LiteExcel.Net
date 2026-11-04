@@ -392,7 +392,7 @@ internal sealed class Stylesheet
         var info = new StylesheetInfo();
         if (stylesDoc is null) return info;
 
-        var ns = stylesDoc.GetDefaultNamespace();
+        var ns = stylesDoc.Name.Namespace;
 
         // numFmts
         var numFmts = stylesDoc.Element(ns + "numFmts");
@@ -523,7 +523,7 @@ internal sealed class Stylesheet
     {
         var list = new List<CellStyle>();
         if (stylesDoc is null) return list;
-        var ns = stylesDoc.GetDefaultNamespace();
+        var ns = stylesDoc.Name.Namespace;
         var dxfsEl = stylesDoc.Element(ns + "dxfs");
         if (dxfsEl is null) return list;
 
