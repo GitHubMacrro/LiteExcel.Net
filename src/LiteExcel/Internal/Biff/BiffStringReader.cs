@@ -30,12 +30,8 @@ internal sealed class BiffStringReader
         _segIndex >= _segments.Count ? 0 : _segments[_segIndex].Length - _pos;
 
     /// <summary>读取一个 BIFF8 字符串（含富文本/拼音扩展）。格式错误时返回 null 并跳过该字符串。 </summary>
-    public string? ReadString() => ReadStringWithRuns(out _);
-
-    /// <summary>读取字符串并带回富文本 run（ich, ifnt 对）。无富文本时 runs 为 null。 </summary>
-    public string? ReadStringWithRuns(out List<(int Ich, int Ifnt)>? runs)
+    public string? ReadString()
     {
-        runs = null;
         // 若上一字符串恰好结束在记录边界，前进到下一个续接段再读 cch
         if (RemainingInSegment < 3)
         {
@@ -91,19 +87,7 @@ internal sealed class BiffStringReader
         // 富文本格式运行（每项 4 字节，无 grbit 续接）
         if (rtCount > 0)
         {
-            runs = new List<(int, int)>(rtCount);
-            for (int r = 0; r < rtCount; r++)
-            {
-                if (RemainingInSegment < 4)
-                {
-                    int short_ = RemainingInSegment;
-                    if (short_ > 0) SkipBytes(short_);
-                    if (RemainingInSegment < 4) { runs = null; return null; }
-                }
-                int ich = ReadU16();
-                int ifnt = ReadU16();
-                runs.Add((ich, ifnt));
-            }
+            if (!SkipBytes(rtCount * 4)) return null;
         }
 
         // 拼音扩展数据（无 grbit 续接）

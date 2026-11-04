@@ -199,21 +199,8 @@ internal static partial class XlsbWriter
             // 仅重建/转换路径才上报降级 —— 避免 verbatim 无损保存时误报 NamedRanges/DocumentProperties/Styles 等伪降级。
             ReportDegradations(sheets, names, properties, onDegradation, targetFormat);
 
-            var sst = new List<SharedStringEntry>();
+            var sst = new List<string>();
             var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-            var runFonts = new List<CellStyle?>();
-            var runFontIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-
-            int RegisterRunFont(CellStyle? style)
-            {
-                if (style is null) return 0;
-                var key = RunFontKey(style);
-                if (runFontIndex.TryGetValue(key, out var i)) return i;
-                i = 1 + runFonts.Count;
-                runFontIndex[key] = i;
-                runFonts.Add(style);
-                return i;
-            }
             var cellXfs = new List<(int Ifmt, string? FmtCode)>();
             var fmtCodeToXf = new Dictionary<string, int>(StringComparer.Ordinal);
             var customFmtIds = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -244,20 +231,10 @@ internal static partial class XlsbWriter
                 if (cell.IsEmpty) return;
                 if (!string.IsNullOrEmpty(cell.NumberFormat))
                     GetXf(cell.NumberFormat);
-                if (cell.Type != CellType.Text || cell.Text is null) return;
-
-                if (cell.RichText is { Runs.Count: > 0 } rich)
-                {
-                    foreach (var run in rich.Runs) RegisterRunFont(run.Style);
-                    var richKey = "\u0001" + string.Join("\u0001", rich.Runs.Select(r => RunFontKey(r.Style)));
-                    if (sstIndex.ContainsKey(richKey)) return;
-                    sstIndex[richKey] = sst.Count;
-                    sst.Add(new SharedStringEntry(rich.Text, rich));
-                }
-                else if (!sstIndex.ContainsKey(cell.Text))
+                if (cell.Type == CellType.Text && cell.Text is not null && !sstIndex.ContainsKey(cell.Text))
                 {
                     sstIndex[cell.Text] = sst.Count;
-                    sst.Add(new SharedStringEntry(cell.Text, null));
+                    sst.Add(cell.Text);
                 }
             }
 
@@ -268,7 +245,7 @@ internal static partial class XlsbWriter
 
             WriteRebuilt(stream, sheets, vbaProject, workbookCodeName, date1904,
                 fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended,
-                preserved, properties, sst, sstIndex, cellXfs, GetXf, runFonts);
+                preserved, properties, sst, sstIndex, cellXfs, GetXf);
         }
         else
         {
@@ -279,8 +256,7 @@ internal static partial class XlsbWriter
     private static void WriteRebuilt(Stream stream, IReadOnlyList<SheetData> sheets, byte[]? vbaProject, string? workbookCodeName, bool date1904,
         string? fileSharingHash, string? fileSharingSalt, int? fileSharingSpin, bool fileSharingReadOnlyRecommended,
         OoxmlPreservedParts? preserved, WorkbookProperties? properties,
-        List<SharedStringEntry> sst, Dictionary<string, int> sstIndex, List<(int Ifmt, string? FmtCode)> cellXfs, Func<string?, int> GetXf,
-        List<CellStyle?>? runFonts = null)
+        List<string> sst, Dictionary<string, int> sstIndex, List<(int Ifmt, string? FmtCode)> cellXfs, Func<string?, int> GetXf)
     {
         using var zip = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
 
@@ -336,13 +312,11 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         WriteEntry(zip, "_rels/.rels", RootRelsXml(properties is not null));
         WriteEntry(zip, "xl/workbook.bin", BuildWorkbookBin(sheets, workbookCodeName, date1904, fileSharingHash, fileSharingSalt, fileSharingSpin, fileSharingReadOnlyRecommended));
         WriteEntry(zip, "xl/_rels/workbook.bin.rels", WorkbookRelsXml(sheets.Count, sst.Count > 0, vbaProject is not null, preserved));
-        var runFontIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        var sstBin = sst.Count > 0 ? BuildSharedStringsBin(sst, sstIndex, runFonts, runFontIndex) : Array.Empty<byte>();
-        WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs, dxfRegistry.Styles, runFonts));
+        WriteEntry(zip, "xl/styles.bin", BuildStylesBin(cellXfs, dxfRegistry.Styles));
         if (vbaProject is not null && vbaProject.Length > 0)
             WriteEntry(zip, "xl/vbaProject.bin", vbaProject);
-        if (sstBin.Length > 0)
-            WriteEntry(zip, "xl/sharedStrings.bin", sstBin);
+        if (sst.Count > 0)
+            WriteEntry(zip, "xl/sharedStrings.bin", BuildSharedStringsBin(sst, sstIndex));
         if (properties is not null)
         {
             WriteEntry(zip, "docProps/core.xml", XlsxWriter.CorePropsXml(properties));
@@ -512,7 +486,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
 
         // 源共享字符串（文本单元格 → isst 索引；找不到则用内联字符串）
         var sst = vb.TryGetValue("xl/sharedStrings.bin", out var sstBin)
-            ? XlsbBackend.ParseSharedStrings(sstBin).Select(e => e.Text).ToList()
+            ? XlsbBackend.ParseSharedStrings(sstBin)
             : new List<string>();
         var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         for (int i = 0; i < sst.Count; i++)
@@ -2674,67 +2648,28 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         return ms.ToArray();
     }
 
-    private static string RunFontKey(CellStyle? style)
+    private static byte[] BuildSharedStringsBin(List<string> sst, Dictionary<string, int> sstIndex)
     {
-        if (style is null) return "";
-        return string.Join("|",
-            style.FontName ?? "", style.FontSize.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            style.Bold, style.Italic, style.Underline, style.Strikeout, style.FontColor ?? "");
-    }
-
-    private static byte[] BuildSharedStringsBin(List<SharedStringEntry> sst, Dictionary<string, int> sstIndex,
-        List<CellStyle?> runFonts, Dictionary<string, int> runFontIndex)
-    {
-        int RunFontId(CellStyle? style)
-        {
-            if (style is null) return 0;
-            var key = RunFontKey(style);
-            if (runFontIndex.TryGetValue(key, out var i)) return i;
-            i = 1 + runFonts.Count;
-            runFontIndex[key] = i;
-            runFonts.Add(style);
-            return i;
-        }
-
         var ms = new MemoryStream();
         var head = new byte[8];
         WriteU32To(head, 0, (uint)sst.Count);   // Count
         WriteU32To(head, 4, (uint)sst.Count);   // Unique
         WriteRecord(ms, BrtBeginSst, head);
-        foreach (var e in sst)
-        {
-            if (e.Rich is not { Runs.Count: > 0 } rich)
-            {
-                WriteRecord(ms, BrtSSTItem, RichStr(e.Text, null));
-                continue;
-            }
-
-            var item = new MemoryStream();
-            item.WriteByte(0x01);
-            WriteWideString(item, e.Text);
-            WriteS32(item, rich.Runs.Count);
-            int ich = 0;
-            foreach (var run in rich.Runs)
-            {
-                WriteS32(item, ich);
-                WriteS32(item, RunFontId(run.Style));
-                ich += run.Text.Length;
-            }
-            WriteRecord(ms, BrtSSTItem, item.ToArray());
-        }
+        foreach (var s in sst)
+            WriteRecord(ms, BrtSSTItem, RichStr(s));
         WriteRecord(ms, BrtEndSst, Array.Empty<byte>());
         return ms.ToArray();
     }
 
-    private static byte[] RichStr(string text, RichText? rich)
+    private static byte[] RichStr(string text)
     {
         var ms = new MemoryStream();
-        ms.WriteByte(0);
+        ms.WriteByte(0); // flags（无富文本）
         WriteWideString(ms, text);
         return ms.ToArray();
     }
 
-    private static byte[] BuildStylesBin(List<(int Ifmt, string? FmtCode)> cellXfs, IReadOnlyList<CellStyle>? dxfs = null, List<CellStyle?>? runFonts = null)
+    private static byte[] BuildStylesBin(List<(int Ifmt, string? FmtCode)> cellXfs, IReadOnlyList<CellStyle>? dxfs = null)
     {
         var ms = new MemoryStream();
         WriteRecord(ms, BrtBeginStyleSheet, Array.Empty<byte>());
@@ -2756,11 +2691,9 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
             WriteRecord(ms, BrtEndFmts, Array.Empty<byte>());
         }
 
-        var runFontList = runFonts ?? new List<CellStyle?>();
-        WriteRecord(ms, BrtBeginFonts, UInt32((uint)(1 + runFontList.Count)));
+        // 字体（默认 Calibri）
+        WriteRecord(ms, BrtBeginFonts, UInt32(1));
         WriteRecord(ms, BrtFont, Font());
-        foreach (var f in runFontList)
-            WriteRecord(ms, BrtFont, Font(f));
         WriteRecord(ms, BrtEndFonts, Array.Empty<byte>());
 
         // 填充：none + gray125
@@ -2822,49 +2755,6 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         var ms = new MemoryStream();
         WriteU16(ms, (ushort)id);
         WriteWideString(ms, code);
-        return ms.ToArray();
-    }
-
-    /// <summary>富文本 run 用的 BrtFont：sz、grbit（bold/italic/strike）、颜色、字体名</summary>
-    private static byte[] Font(CellStyle? style)
-    {
-        if (style is null) return Font();
-
-        var ms = new MemoryStream();
-        int szTwips = (int)Math.Round((style.FontSize > 0 ? style.FontSize : 11) * 20);
-        WriteU16(ms, (ushort)szTwips);
-
-        int grbit = 0;
-        if (style.Bold) grbit |= 0x01;
-        if (style.Italic) grbit |= 0x02;
-        if (style.Strikeout) grbit |= 0x08;
-        WriteU16(ms, (ushort)grbit);
-        WriteU16(ms, (ushort)(style.Bold ? 700 : 400));
-        WriteU16(ms, 0);
-        ms.WriteByte((byte)(style.Underline ? 1 : 0));
-        ms.WriteByte(2);
-        ms.WriteByte(0x86);
-        ms.WriteByte(0);
-
-        var rgb = (style.FontColor ?? "").TrimStart('#').ToUpperInvariant();
-        if (rgb.Length == 6)
-        {
-            ms.WriteByte(0x02);
-            ms.WriteByte(0);
-            ms.WriteByte(0);
-            ms.WriteByte(0);
-            ms.WriteByte(Convert.ToByte(rgb.Substring(0, 2), 16));
-            ms.WriteByte(Convert.ToByte(rgb.Substring(2, 2), 16));
-            ms.WriteByte(Convert.ToByte(rgb.Substring(4, 2), 16));
-            ms.WriteByte(0xFF);
-        }
-        else
-        {
-            ms.Write(new byte[] { 0x07, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF }, 0, 8);
-        }
-
-        ms.WriteByte(2);
-        WriteWideString(ms, string.IsNullOrEmpty(style.FontName) ? "Calibri" : style.FontName!);
         return ms.ToArray();
     }
 
@@ -3426,10 +3316,7 @@ WriteEntry(zip, "[Content_Types].xml", ContentTypesXml(sheets.Count, sst.Count >
         {
             case CellType.Text:
                 if (cell.Text is null) { WriteCellBlank(ms, col, xf, lastSeen); return; }
-                var sstKey = cell.RichText is { Runs.Count: > 0 } rt
-                    ? "\u0001" + string.Join("\u0001", rt.Runs.Select(r => RunFontKey(r.Style)))
-                    : cell.Text;
-                if (sstIndex.TryGetValue(sstKey, out var sstIdx))
+                if (sstIndex.TryGetValue(cell.Text, out var sstIdx))
                 {
                     if (lastSeen)
                         WriteRecord(ms, BrtShortIsst, ShortIsst(xf, sstIdx));

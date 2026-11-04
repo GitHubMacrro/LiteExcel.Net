@@ -17,7 +17,7 @@
 - **net48 与 net8.0 双目标**：同一套 API 同时服务老项目与新项目。
 - **Native AOT smoke 测试通过**：net8.0 设置 `IsAotCompatible`；反射仅用于 `List<T>` 映射，并已用 `[DynamicallyAccessedMembers]` 标注；仓库提供 Native AOT 发布 smoke（`tests/LiteExcel.AotSmoke`），覆盖 `List<T>` 映射、DataTable、条件格式等 10 组用例，本地实测通过。
 - **一套对象模型覆盖五种格式**：同一段代码换个格式参数即可写出 xls 或 csv。
-- **常用表格能力**：样式与数字格式、富文本、合并、行高列宽、自动筛选、批注、数据验证、超链接、冻结窗格、图片、条件格式、超级表、命名区域、公式、文件级密码、`List<T>` / DataTable 映射、流式读写、异步 API（Task + CancellationToken）。
+- **常用表格能力**：样式与数字格式、合并、行高列宽、自动筛选、批注、数据验证、超链接、冻结窗格、图片、条件格式、超级表、命名区域、公式、文件级密码、`List<T>` / DataTable 映射、流式读写、异步 API（Task + CancellationToken）。
 - **高级内容以保留为主**：图表、透视表、切片器、VBA 宏、Power Query、数据模型、外部连接、ActiveX 形状等高级内容在打开-保存时按既定路径保留，而不是作为对象模型的一部分去创建或修改。
 
 ### 五种格式一览

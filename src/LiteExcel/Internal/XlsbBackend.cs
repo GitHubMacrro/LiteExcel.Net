@@ -233,13 +233,12 @@ internal static class XlsbBackend
         var (sheets, date1904) = ParseWorkbook(wbBytes);
 
         var sstBytes = ReadEntry(zip, "xl/sharedStrings.bin");
+        var sst = sstBytes is not null ? ParseSharedStrings(sstBytes) : new List<string>();
 
         var stylesBytes = ReadEntry(zip, "xl/styles.bin");
-        var (formats, cellXfs, cellStyles, fonts) = stylesBytes is not null
+        var (formats, cellXfs, cellStyles) = stylesBytes is not null
             ? ParseStyles(stylesBytes)
-            : (new Dictionary<int, string>(), new List<int> { 0 }, new List<CellStyle?> { null }, new List<CellStyle?>());
-
-        var sst = sstBytes is not null ? ParseSharedStrings(sstBytes, fonts) : new List<SharedStringEntry>();
+            : (new Dictionary<int, string>(), new List<int> { 0 }, new List<CellStyle?> { null });
 
         var sheetPaths = MapSheetPaths(zip, sheets);
 
@@ -330,15 +329,12 @@ internal static class XlsbBackend
         var (sheets, date1904) = ParseWorkbook(wbBytes);
 
         var sstBytes = ReadEntry(zip, "xl/sharedStrings.bin");
+        var sst = sstBytes is not null ? ParseSharedStrings(sstBytes) : new List<string>();
 
         var stylesBytes = ReadEntry(zip, "xl/styles.bin");
-        var (formats, cellXfs, _, _) = stylesBytes is not null
+        var (formats, cellXfs, _) = stylesBytes is not null
             ? ParseStyles(stylesBytes)
-            : (new Dictionary<int, string>(), new List<int> { 0 }, new List<CellStyle?> { null }, new List<CellStyle?>());
-
-        var sst = sstBytes is not null
-            ? ParseSharedStrings(sstBytes).Select(e => e.Text).ToList()
-            : new List<string>();
+            : (new Dictionary<int, string>(), new List<int> { 0 }, new List<CellStyle?> { null });
 
         return (sheets, sst, formats, cellXfs, date1904);
     }
@@ -446,28 +442,19 @@ internal static class XlsbBackend
         return (result, unsupported);
     }
 
-    internal static List<SharedStringEntry> ParseSharedStrings(byte[] data, List<CellStyle?>? fonts = null)
+    internal static List<string> ParseSharedStrings(byte[] data)
     {
         var records = Biff12Records.ReadAll(data);
-        var result = new List<SharedStringEntry>();
+        var result = new List<string>();
         foreach (var rec in records)
         {
             if (rec.Rt == BrtSSTItem)
             {
                 var d = rec.Data;
                 if (d.Length < 5) continue;
-                int flags = d[0];
+                // BrtSSTItem = RichStr: flags(1) + XLWideString；富文本 run 数据忽略
                 int off = 1;
-                var text = Biff12Records.ReadWideString(d, ref off);
-                RichText? rich = null;
-
-                if ((flags & 0x01) != 0 && off + 4 <= d.Length)
-                {
-                    int cRun = Biff12Records.ReadS32(d, off);
-                    off += 4;
-                    rich = BuildRuns(text, d, off, cRun, fonts);
-                }
-                result.Add(new SharedStringEntry(text, rich));
+                result.Add(Biff12Records.ReadWideString(d, ref off));
             }
             else if (rec.Rt == BrtEndSst)
             {
@@ -477,37 +464,7 @@ internal static class XlsbBackend
         return result;
     }
 
-    /// <summary>按 rgsStrRun 的 ich 切分文本；ifnt 索引到字体表。run 数不足或越界时放弃富文本。</summary>
-    private static RichText? BuildRuns(string text, byte[] d, int off, int cRun, List<CellStyle?>? fonts)
-    {
-        if (cRun <= 0 || off + cRun * 8 > d.Length) return null;
-
-        var starts = new (int Ich, int Ifnt)[cRun];
-        for (int i = 0; i < cRun; i++)
-        {
-            starts[i] = (Biff12Records.ReadS32(d, off), Biff12Records.ReadS32(d, off + 4));
-            off += 8;
-        }
-
-        var rich = new RichText();
-        for (int i = 0; i < cRun; i++)
-        {
-            int begin = starts[i].Ich;
-            int end = i + 1 < cRun ? starts[i + 1].Ich : text.Length;
-            if (begin < 0 || begin > text.Length) return null;
-            if (end < begin || end > text.Length) end = text.Length;
-
-            CellStyle? style = null;
-            int ifnt = starts[i].Ifnt;
-            if (fonts is not null && ifnt >= 0 && ifnt < fonts.Count)
-                style = fonts[ifnt]?.Clone();
-
-            rich.Runs.Add(new TextRun { Text = text.Substring(begin, end - begin), Style = style });
-        }
-        return rich.Runs.Count > 0 ? rich : null;
-    }
-
-    private static (Dictionary<int, string> Formats, List<int> CellXfs, List<CellStyle?> CellStyles, List<CellStyle?> Fonts) ParseStyles(byte[] data)
+    private static (Dictionary<int, string> Formats, List<int> CellXfs, List<CellStyle?> CellStyles) ParseStyles(byte[] data)
     {
         var records = Biff12Records.ReadAll(data);
         var formats = new Dictionary<int, string>();
@@ -570,7 +527,7 @@ internal static class XlsbBackend
             styles.Add(s);
         }
 
-        return (formats, cellXfs, styles, fonts);
+        return (formats, cellXfs, styles);
     }
 
     /// <summary>解析 BrtFont（29+ 字节）。布局：sz(2 twips) grbit(2) weight(2) vertAlign(2) underline(1)
@@ -861,7 +818,7 @@ internal static class XlsbBackend
         return result;
     }
 
-    private static SheetData ParseWorksheet(byte[] data, string sheetName, List<SharedStringEntry> sst,
+    private static SheetData ParseWorksheet(byte[] data, string sheetName, List<string> sst,
         Dictionary<int, string> formats, List<int> cellXfs, List<CellStyle?> cellStyles, bool date1904, Dictionary<string, string>? hlinkRels = null)
     {
         var records = Biff12Records.ReadAll(data);
@@ -923,12 +880,7 @@ internal static class XlsbBackend
                         (valOff) =>
                         {
                             int idx = ReadS32(d, valOff);
-                            if (idx >= 0 && idx < sst.Count)
-                            {
-                                var e = sst[idx];
-                                return e.Rich is { } r ? new Cell { RichText = r.Clone() } : Cell.FromText(e.Text);
-                            }
-                            return Cell.Empty;
+                            return idx >= 0 && idx < sst.Count ? Cell.FromText(sst[idx]) : Cell.Empty;
                         }, ref maxRow, ref maxCol, cellStyles);
                     break;
                 case BrtFmlaString:

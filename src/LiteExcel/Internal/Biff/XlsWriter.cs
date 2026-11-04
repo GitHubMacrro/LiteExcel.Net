@@ -166,9 +166,8 @@ internal static class XlsWriter
 
     private static byte[] BuildWorkbookStream(IReadOnlyList<SheetData> sheets, bool date1904)
     {
-        var sst = new List<SharedStringEntry>();
+        var sst = new List<string>();
         var sstIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        var runFonts = new List<CellStyle?>();
         var formats = new List<string>(); // formats[k] -> ifmt = 164 + k，cell XF 索引 = 16 + k
         var xfIndex = new Dictionary<string, int>(StringComparer.Ordinal); // 格式码 -> cell XF 索引
 
@@ -188,21 +187,10 @@ internal static class XlsWriter
             switch (cell.Type)
             {
                 case CellType.Text:
-                    if (cell.Text is null) break;
-                    if (cell.RichText is { Runs.Count: > 0 } rich)
-                    {
-                        var richKey = "\u0001" + string.Join("\u0001", rich.Runs.Select(r => r.Style?.FontName ?? ""));
-                        if (!sstIndex.ContainsKey(richKey))
-                        {
-                            sstIndex[richKey] = sst.Count;
-                            sst.Add(new SharedStringEntry(rich.Text, rich));
-                        }
-                        break;
-                    }
-                    if (!sstIndex.ContainsKey(cell.Text))
+                    if (cell.Text is not null && !sstIndex.ContainsKey(cell.Text))
                     {
                         sstIndex[cell.Text] = sst.Count;
-                        sst.Add(new SharedStringEntry(cell.Text, null));
+                        sst.Add(cell.Text);
                     }
                     break;
                 case CellType.Date:
@@ -247,8 +235,6 @@ internal static class XlsWriter
         WriteRecord(global, 0x00DA, new byte[] { 0, 0 });             // BookBool
 
         WriteRecord(global, OpFont, Font());
-        foreach (var f in BuildRunFontIndex(sst, runFonts))
-            WriteRecord(global, OpFont, Font(f));
         foreach (var (id, code) in BuiltInFormats)
             WriteRecord(global, OpFormat, FormatRecord(id, code));
         for (int k = 0; k < formats.Count; k++)
@@ -269,7 +255,7 @@ internal static class XlsWriter
         }
 
         WriteRecord(global, OpCountry, new byte[] { 1, 0, 1, 0 });
-        WriteSst(global, sst, runFonts);
+        WriteSst(global, sst);
         WriteRecord(global, OpEof, Array.Empty<byte>());
 
         var globalBytes = global.ToArray();
@@ -294,7 +280,7 @@ internal static class XlsWriter
         return outMs.ToArray();
     }
 
-    private static byte[] BuildSheet(SheetData sheet, List<SharedStringEntry> sst, Dictionary<string, int> sstIndex,
+    private static byte[] BuildSheet(SheetData sheet, List<string> sst, Dictionary<string, int> sstIndex,
         Func<string?, int> getXf, bool date1904)
     {
         using var ms = new MemoryStream();
@@ -546,7 +532,7 @@ internal static class XlsWriter
     }
 
     private static void WriteCell(MemoryStream ms, int rw, int col, Cell cell,
-        List<SharedStringEntry> sst, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904)
+        List<string> sst, Dictionary<string, int> sstIndex, Func<string?, int> getXf, bool date1904)
     {
         int ixfe = getXf(cell.Type == CellType.Date || cell.Type == CellType.Number ? cell.NumberFormat : null);
 
@@ -566,15 +552,11 @@ internal static class XlsWriter
             case CellType.Text:
             {
                 var text = cell.Text ?? "";
-                string key = text;
-                if (cell.RichText is { Runs.Count: > 0 } rich)
-                    key = "\u0001" + string.Join("\u0001", rich.Runs.Select(r => r.Style?.FontName ?? ""));
-
-                if (!sstIndex.TryGetValue(key, out var isst))
+                if (!sstIndex.TryGetValue(text, out var isst))
                 {
                     isst = sst.Count;
-                    sst.Add(new SharedStringEntry(text, cell.RichText));
-                    sstIndex[key] = isst;
+                    sst.Add(text);
+                    sstIndex[text] = isst;
                 }
                 var d = new byte[10]; // rw(2) col(2) ixfe(2) isst(4)
                 WriteU16(d, 0, (ushort)rw);
@@ -712,7 +694,7 @@ internal static class XlsWriter
 
     /// <summary>写入 SST 记录（含 CONTINUE 续接）。字符串压缩仅限纯 ASCII，其余用 UTF-16。
     /// 无字符串时也写一条空 SST（count=0），与 Excel/SheetJS 一致。</summary>
-    private static void WriteSst(MemoryStream ms, List<SharedStringEntry> strings, List<CellStyle?> runFonts)
+    private static void WriteSst(MemoryStream ms, List<string> strings)
     {
         if (strings.Count == 0)
         {
@@ -734,8 +716,6 @@ internal static class XlsWriter
             curCap = MaxRecordData;
         }
 
-        var fontIndex = BuildRunFontIndex(strings, runFonts);
-
         // SST 头
         Append((byte)strings.Count);
         Append((byte)(strings.Count >> 8));
@@ -746,29 +726,17 @@ internal static class XlsWriter
         Append((byte)(strings.Count >> 16));
         Append((byte)(strings.Count >> 24));
 
-        foreach (var entry in strings)
+        foreach (var s in strings)
         {
-            var s = entry.Text;
             bool highByte = s.Any(c => c >= 0x80); // 纯 ASCII 压缩，其余 UTF-16（规避 cp1252 差异）
             byte[] chars = highByte ? Encoding.Unicode.GetBytes(s) : Latin1.GetBytes(s);
             int cch = s.Length;
-            var runs = entry.Rich?.Runs;
-            bool hasRuns = runs is { Count: > 0 };
-            // 富文本 run 数组不得跨段，需整块预留
-            int headerPlusRuns = 3 + (hasRuns ? 2 + runs!.Count * 4 : 0);
 
-            if (cur.Length + headerPlusRuns > curCap) StartSegment();
+            // 3 字节头必须完整落在同一段
+            if (cur.Length + 3 > curCap) StartSegment();
             Append((byte)(cch & 0xFF));
             Append((byte)((cch >> 8) & 0xFF));
-            Append(hasRuns ? (byte)((highByte ? 0x01 : 0x00) | 0x02) : (highByte ? (byte)0x01 : (byte)0x00));
-
-            if (hasRuns)
-            {
-                Append((byte)(runs!.Count & 0xFF));
-                Append((byte)((runs.Count >> 8) & 0xFF));
-            }
-
-            int charStart = (int)cur.Length;
+            Append(highByte ? (byte)0x01 : (byte)0x00);
 
             int pos = 0;
             while (pos < chars.Length)
@@ -792,52 +760,11 @@ internal static class XlsWriter
                 cur.Write(chars, pos, take);
                 pos += take;
             }
-
-            // run 数组位于字符区之后（BIFF8 顺序：cch, flags, [cRun], chars, runs）
-            if (hasRuns)
-            {
-                int ich = 0;
-                foreach (var run in runs!)
-                {
-                    Append((byte)(ich & 0xFF));
-                    Append((byte)((ich >> 8) & 0xFF));
-                    int ifnt = RunFontId(fontIndex, run.Style);
-                    Append((byte)(ifnt & 0xFF));
-                    Append((byte)((ifnt >> 8) & 0xFF));
-                    ich += run.Text.Length;
-                }
-            }
         }
         if (cur.Length > 0) segments.Add(cur.ToArray());
 
         for (int i = 0; i < segments.Count; i++)
             WriteRecord(ms, i == 0 ? OpSst : OpContinue, segments[i]);
-    }
-
-    private static List<CellStyle> BuildRunFontIndex(List<SharedStringEntry> strings, List<CellStyle?> runFonts)
-    {
-        var list = new List<CellStyle>();
-        foreach (var e in strings)
-        {
-            if (e.Rich is not { Runs.Count: > 0 } rich) continue;
-            foreach (var run in rich.Runs)
-            {
-                if (run.Style is null) continue;
-                bool dup = false;
-                foreach (var f in list)
-                    if (f.Equals(run.Style)) { dup = true; break; }
-                if (!dup) list.Add(run.Style);
-            }
-        }
-        return list;
-    }
-
-    private static int RunFontId(List<CellStyle> fonts, CellStyle? style)
-    {
-        if (style is null) return 0;
-        for (int i = 0; i < fonts.Count; i++)
-            if (fonts[i].Equals(style)) return 1 + i;
-        return 0;
     }
 
     private static byte[] FormatRecord(int ifmt, string code)
@@ -864,29 +791,6 @@ internal static class XlsWriter
     }
 
     /// <summary>默认字体（索引 0）：Arial 12pt 常规，与 SheetJS 写出字节一致</summary>
-    /// <summary>BIFF8 FONT 记录（26+ 字节）：dyHeight(2) grbit(2) icv(2) bls(2) ... 字体名</summary>
-    private static byte[] Font(CellStyle style)
-    {
-        var name = style.FontName;
-        var nameBytes = Encoding.Unicode.GetBytes(string.IsNullOrEmpty(name) ? "Arial" : name!);
-        int cch = (name ?? "Arial").Length;
-
-        var d = new byte[16 + nameBytes.Length];
-        WriteU16(d, 0, (ushort)Math.Round((style.FontSize > 0 ? style.FontSize : 11) * 20));
-        int grbit = 0;
-        if (style.Bold) grbit |= 0x01;
-        if (style.Italic) grbit |= 0x02;
-        if (style.Underline) grbit |= 0x04;
-        if (style.Strikeout) grbit |= 0x08;
-        WriteU16(d, 2, (ushort)grbit);
-        WriteU16(d, 4, 0x7FFF);
-        WriteU16(d, 6, (ushort)(style.Bold ? 700 : 400));
-        d[14] = (byte)cch;
-        d[15] = 1;
-        Array.Copy(nameBytes, 0, d, 16, nameBytes.Length);
-        return d;
-    }
-
     private static byte[] Font()
     {
         var d = new byte[26];

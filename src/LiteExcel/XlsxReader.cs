@@ -413,16 +413,9 @@ public static partial class XlsxReader
         public string? State;
     }
 
-    internal readonly struct SharedString
+    private static List<string> ReadSharedStrings(ZipArchive zip)
     {
-        public readonly string Text;
-        public readonly RichText? Rich;
-        public SharedString(string text, RichText? rich) { Text = text; Rich = rich; }
-    }
-
-    private static List<SharedString> ReadSharedStrings(ZipArchive zip)
-    {
-        var result = new List<SharedString>();
+        var result = new List<string>();
         var entry = zip.GetEntry("xl/sharedStrings.xml");
         if (entry is null) return result;
 
@@ -438,134 +431,24 @@ public static partial class XlsxReader
         return result;
     }
 
-    private static SharedString ReadRichText(XmlReader reader)
+    private static string ReadRichText(XmlReader reader)
     {
         var sb = new StringBuilder();
-        RichText? rich = null;
         var depth = reader.Depth;
         while (reader.Read())
         {
             if (reader.NodeType == XmlNodeType.EndElement && reader.Depth == depth) break;
 
-            if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "t" && !reader.IsEmptyElement)
-            {
-                sb.Append(reader.ReadElementContentAsString());
-            }
-            else if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "r" && !reader.IsEmptyElement)
-            {
-                using var runReader = reader.ReadSubtree();
-                var run = ReadRun(runReader);
-                if (run is not null)
-                {
-                    (rich ??= new RichText()).Runs.Add(run);
-                    sb.Append(run.Text);
-                }
-            }
-            else if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "rPh" && !reader.IsEmptyElement)
-            {
-                // 注音（拼音）不是正文，跳过整个子树，否则其 <t> 会被拼进文本
-                reader.Skip();
-            }
-            else if (reader.NodeType == XmlNodeType.Text || reader.NodeType == XmlNodeType.CDATA)
+            if (reader.NodeType == XmlNodeType.Text || reader.NodeType == XmlNodeType.CDATA)
             {
                 sb.Append(reader.Value);
             }
-        }
-        return new SharedString(sb.ToString(), rich);
-    }
-
-    private static TextRun? ReadRun(XmlReader reader)
-    {
-        var run = new TextRun();
-        CellStyle? style = null;
-        TextVerticalAlign? vertAlign = null;
-        bool hasStyle = false;
-
-        while (reader.Read())
-        {
-            if (reader.NodeType != XmlNodeType.Element) continue;
-
-            switch (reader.LocalName)
+            else if (reader.NodeType == XmlNodeType.Element && reader.LocalName == "t" && !reader.IsEmptyElement)
             {
-                case "t":
-                    if (!reader.IsEmptyElement) run.Text += reader.ReadElementContentAsString();
-                    break;
-
-                case "rPr":
-                    {
-                        using var rpr = reader.ReadSubtree();
-                        while (rpr.Read())
-                        {
-                            if (rpr.NodeType != XmlNodeType.Element) continue;
-                            switch (rpr.LocalName)
-                            {
-                                case "rFont":
-                                    style ??= new CellStyle();
-                                    style.FontName = rpr.GetAttribute("val");
-                                    hasStyle = true;
-                                    break;
-                                case "sz":
-                                    if (double.TryParse(rpr.GetAttribute("val"), NumberStyles.Float, CultureInfo.InvariantCulture, out var sz))
-                                    {
-                                        style ??= new CellStyle();
-                                        style.FontSize = sz;
-                                        hasStyle = true;
-                                    }
-                                    break;
-                                case "b":
-                                    style ??= new CellStyle();
-                                    style.Bold = !IsFalse(rpr);
-                                    hasStyle = true;
-                                    break;
-                                case "i":
-                                    style ??= new CellStyle();
-                                    style.Italic = !IsFalse(rpr);
-                                    hasStyle = true;
-                                    break;
-                                case "u":
-                                    style ??= new CellStyle();
-                                    style.Underline = !IsFalse(rpr);
-                                    hasStyle = true;
-                                    break;
-                                case "strike":
-                                    style ??= new CellStyle();
-                                    style.Strikeout = !IsFalse(rpr);
-                                    hasStyle = true;
-                                    break;
-                                case "color":
-                                    style ??= new CellStyle();
-                                    style.FontColor = NormalizeRunColor(rpr.GetAttribute("rgb"));
-                                    hasStyle = true;
-                                    break;
-                                case "vertAlign":
-                                    vertAlign = rpr.GetAttribute("val") switch
-                                    {
-                                        "superscript" => TextVerticalAlign.Superscript,
-                                        "subscript" => TextVerticalAlign.Subscript,
-                                        _ => (TextVerticalAlign?)null,
-                                    };
-                                    break;
-                            }
-                        }
-                    }
-                    break;
+                sb.Append(reader.ReadElementContentAsString());
             }
         }
-
-        if (string.IsNullOrEmpty(run.Text) && !hasStyle && vertAlign is null) return null;
-        run.Style = hasStyle ? style : null;
-        run.VerticalAlign = vertAlign;
-        return run;
-    }
-
-    private static bool IsFalse(XmlReader reader) =>
-        string.Equals(reader.GetAttribute("val"), "0", StringComparison.Ordinal)
-        || string.Equals(reader.GetAttribute("val"), "false", StringComparison.OrdinalIgnoreCase);
-
-    private static string? NormalizeRunColor(string? rgb)
-    {
-        if (string.IsNullOrEmpty(rgb)) return null;
-        return rgb!.Length == 8 ? "#" + rgb.Substring(2) : "#" + rgb;
+        return sb.ToString();
     }
 
     private static StylesheetInfo ReadStyles(ZipArchive zip)
@@ -780,7 +663,7 @@ public static partial class XlsxReader
     internal static string? WorkbookExtLstXmlSnapshot => s_workbookExtLstXml;
 
     private static SheetData ReadWorksheet(ZipArchive zip, string sheetPath, string sheetName,
-        List<SharedString> shared, StylesheetInfo styles, bool firstRowIsHeader, string sheetId = "", string? sheetState = null)
+        List<string> shared, StylesheetInfo styles, bool firstRowIsHeader, string sheetId = "", string? sheetState = null)
     {
         var entry = zip.GetEntry(sheetPath)
             ?? throw new LiteExcelException($"缺少工作表文件: {sheetPath}");
@@ -1693,7 +1576,7 @@ public static partial class XlsxReader
         }
     }
 
-    private static IReadOnlyList<Cell>? ParseRow(XmlReader rowReader, List<SharedString> shared, StylesheetInfo styles)
+    private static IReadOnlyList<Cell>? ParseRow(XmlReader rowReader, List<string> shared, StylesheetInfo styles)
     {
         var cells = new List<(int col, Cell cell)>();
         int maxCol = -1;
@@ -1711,7 +1594,6 @@ public static partial class XlsxReader
             bool hasValue = false;
             string formula = "";
             bool hasFormula = false;
-            RichText? inlineRich = null;
 
             if (!rowReader.IsEmptyElement)
             {
@@ -1734,9 +1616,7 @@ public static partial class XlsxReader
                     else if (rowReader.LocalName == "is")
                     {
                         using var sub = rowReader.ReadSubtree();
-                        var ss = ReadRichText(sub);
-                        raw = ss.Text;
-                        inlineRich = ss.Rich;
+                        raw = ReadRichText(sub);
                         hasValue = true;
                     }
                 }
@@ -1756,7 +1636,7 @@ public static partial class XlsxReader
             }
             else
             {
-                var cell = ConvertCellValue(raw, t, sAttr, shared, styles, inlineRich);
+                var cell = ConvertCellValue(raw, t, sAttr, shared, styles);
                 if (hasFormula)
                 {
                     // 将公式文本存入 Formula，不覆盖缓存值。
@@ -1790,7 +1670,7 @@ public static partial class XlsxReader
         cell.NumberFormat = GetNumberFormat(xfId, styles);
     }
 
-    private static Cell ConvertCellValue(string raw, string t, string? sAttr, List<SharedString> shared, StylesheetInfo styles, RichText? inlineRich = null)
+    private static Cell ConvertCellValue(string raw, string t, string? sAttr, List<string> shared, StylesheetInfo styles)
     {
         Cell cell;
 
@@ -1800,9 +1680,7 @@ public static partial class XlsxReader
             if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var idx)
                 && idx >= 0 && idx < shared.Count)
             {
-                cell = shared[idx].Rich is { } rich
-                    ? new Cell { RichText = rich.Clone() }
-                    : Cell.FromText(shared[idx].Text);
+                cell = Cell.FromText(shared[idx]);
             }
             else
             {
@@ -1811,9 +1689,7 @@ public static partial class XlsxReader
         }
         else if (t == "str" || t == "inlineStr")
         {
-            cell = inlineRich is not null
-                ? new Cell { RichText = inlineRich }
-                : Cell.FromText(raw);
+            cell = Cell.FromText(raw);
         }
         else if (t == "b")
         {
