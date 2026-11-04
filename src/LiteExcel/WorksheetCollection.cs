@@ -70,6 +70,44 @@ public sealed class WorksheetCollection : IEnumerable<Worksheet>
         return sheet;
     }
 
+    /// <summary>复制指定工作表到末尾并返回副本；<paramref name="newName"/> 为 null 时自动命名。内容为深拷贝，改副本不影响原表 </summary>
+    public Worksheet Copy(string sourceName, string? newName = null)
+    {
+        if (string.IsNullOrWhiteSpace(sourceName))
+            throw new ArgumentException("源工作表名不能为空", nameof(sourceName));
+
+        var source = Find(sourceName)
+            ?? throw new LiteExcelException($"找不到工作表：{sourceName}");
+
+        var name = string.IsNullOrWhiteSpace(newName) ? GenerateCopyName(source.Name) : newName!;
+        ValidateNewSheetName(name);
+
+        var copy = Add(name);
+        copy.CopyFrom(source);
+        return copy;
+    }
+
+    private static void ValidateNewSheetName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("工作表名不能为空", nameof(name));
+        if (name.Length > 31 || name.IndexOfAny(new[] { '\\', '/', '?', '*', '[', ']', ':' }) >= 0)
+            throw new InvalidSheetNameException(name, "Sheet 名不能为空/超过 31 字符/包含 \\ / ? * [ ] : 字符");
+    }
+
+    private string GenerateCopyName(string baseName)
+    {
+        for (int i = 2; ; i++)
+        {
+            var suffix = $" ({i})";
+            var head = baseName.Length + suffix.Length > 31
+                ? baseName.Substring(0, 31 - suffix.Length)
+                : baseName;
+            var candidate = head + suffix;
+            if (Find(candidate) is null) return candidate;
+        }
+    }
+
     /// <summary>按名称删除工作表,存在则删除并返回 true，否则 false </summary>
     public bool Remove(string name)
     {

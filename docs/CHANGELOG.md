@@ -1,5 +1,21 @@
 ﻿# Changelog
 
+## [2.5.0] - 2026-10-26
+
+### Added
+
+- **异步 API（公开门面全量覆盖，net48 与 net8.0 行为一致，零新增依赖）**：`Excel` 与 `Workbook` 的全部 IO 方法提供 `Async` 后缀 + 末位可选 `CancellationToken` 的异步版本（`Task` / `Task<T>`），语义、参数校验与降级行为与同步版完全一致：
+  - `Excel`：`OpenAsync`（路径 ×2 / Stream）、`WriteAsync`（Workbook / SheetData / DataTable / `List<T>`）、`ReadAsync<T>`（路径 / Stream）、`ReadSheetAsync`（按索引 / 按表名 × 路径 / Stream）、`ReadAsDataTableAsync`（路径 / Stream）、`GetSheetNamesAsync`（路径 / Stream）、`StreamRowsAsync`（路径 / Stream）、`ReadWithProgressAsync`、`AppendAsync`，共 24 个重载。
+  - `Workbook`：`SaveAsync()`、`SaveAsAsync(path)`、`SaveAsAsync(path, format)`、`SaveAsync(Stream, format)`。
+  - 实现为 `Task.Run` 包装（底层 BCL 均为同步 IO）；取消令牌仅在任务启动前生效（已取消抛 `OperationCanceledException`，启动后不可中断）；回调（`onRow` / `onProgress`）与 Stream 读写发生在后台线程，文档已注明 UI 封送与并发注意事项。
+  - **不提供 `IAsyncEnumerable`**（net48 无此类型且需第三方包，违背零依赖定位）；异步流式场景用 `StreamRowsAsync` 覆盖，`EnumerateRows` 保持同步。
+  - `Excel` / `Workbook` 类声明加 `partial`（源 / 二进制兼容），异步成员独立于 `Excel.Async.cs` / `Workbook.Async.cs`；同步 API 零改动。
+  - 文档：使用手册中英双语新增 §21.7「异步 API」，§21.6 末尾的"自行 Task.Run 包装"指引改为指向官方异步 API；附录 A.1 / A.2 成员表同步。
+
+### Tests
+
+- 新增 `AsyncApiTests`（17 例）：SaveAsAsync/OpenAsync 往返、四格式（xlsx/xlsb/xls/csv）路由、WriteAsync 全部重载、ReadAsync（路径/Stream）、ReadSheetAsync ×3、ReadAsDataTableAsync ×2、GetSheetNamesAsync ×2、StreamRowsAsync / ReadWithProgressAsync / AppendAsync、SaveAsync(Stream)、Workbook.SaveAsync(CurrentPath)、预取消令牌语义。全量 **808** 测试通过（net8.0），net48 构建通过。
+
 ## [2.4.80] - 2026-10-07
 
 ### Fixed

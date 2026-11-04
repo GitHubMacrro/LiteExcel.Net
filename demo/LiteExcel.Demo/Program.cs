@@ -44,6 +44,7 @@ Demo28_IconSet(outDir);
         Demo31_ReadWithProgress(outDir);
         Demo32_InsertDeleteRows(outDir);
         Demo33_FormulaWritebackAndComment(outDir);
+        Demo34_CopyWorksheet(outDir);
 
         Console.WriteLine("\n=== All demos completed! ===");
         Console.WriteLine($"Output files in: {outDir}");
@@ -1252,6 +1253,40 @@ Demo28_IconSet(outDir);
         var b1 = reopened.Worksheets[0].Cell("B1");
         var noteText = reopened.Worksheets[0].Comments?.TryGetValue("B1", out var note) == true ? note : "none";
         Console.WriteLine($"  B1.IsFormula={b1.IsFormula}, Formula={b1.Formula}, Comment={noteText}");
+        Console.WriteLine();
+    }
+
+    // 34. Copy worksheet
+    private static void Demo34_CopyWorksheet(string dir)
+    {
+        Console.WriteLine("[34] Copy Worksheet");
+
+        var wb = Excel.Create();
+        var ws = wb.Worksheets["Sheet1"];
+        ws.SetValue("A1", "Name");
+        ws.SetValue("B1", "Amount");
+        ws.SetValue("A2", "Alice");
+        ws.SetValue("B2", 1200);
+        ws.SetValue("A3", "Bob");
+        ws.SetValue("B3", 850);
+        ws.Range("A1:B1").Style = new CellStyle { Bold = true };
+        ws.Comments = new Dictionary<string, string> { { "B2", "monthly total" } };
+        ws.FreezeRows = 1;
+
+        var copy = wb.Worksheets.Copy("Sheet1");
+        copy.SetValue("A2", "Alice (archived)");
+        wb.Worksheets.Copy("Sheet1", "Backup");
+
+        var file = Path.Combine(dir, "demo34_copy_sheet.xlsx");
+        wb.SaveAs(file);
+
+        var reopened = Excel.Open(file);
+        Console.WriteLine($"  Sheets: {string.Join(", ", reopened.Worksheets.Names)}");
+        Console.WriteLine($"  Source A2={reopened.Worksheets["Sheet1"].Cell("A2").GetString()}, " +
+                          $"Copy A2={reopened.Worksheets["Sheet1 (2)"].Cell("A2").GetString()}");
+        Console.WriteLine($"  Copy B2={reopened.Worksheets["Sheet1 (2)"].Cell("B2").GetDouble()}, " +
+                          $"Comment={reopened.Worksheets["Sheet1 (2)"].Comments?["B2"]}, " +
+                          $"FreezeRows={reopened.Worksheets["Sheet1 (2)"].FreezeRows}");
         Console.WriteLine();
     }
 }

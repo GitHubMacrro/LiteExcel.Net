@@ -20,6 +20,7 @@
 | 7 | [合并单元格](#7-合并单元格) |
 | 7.5 | [插入 / 删除行列](#75-插入--删除行列) |
 | 7.6 | [删除整张工作表](#76-删除整张工作表-worksheetdelete) |
+| 7.8 | [复制工作表](#78-复制工作表) |
 | 8 | [自动筛选](#8-自动筛选) |
 | 9 | [行高与列宽](#9-行高与列宽) |
 | 10 | [批注](#10-批注) |
@@ -142,7 +143,7 @@ Zhang San
 | 3.1 | [格式 `ExcelFormat`](#31-格式-excelformat) | 支持的文件格式与自动识别 |
 | 3.2 | [打开工作簿](#32-打开工作簿) | 从路径 / 流打开，读取选项 |
 | 3.3 | [新建工作簿](#33-新建工作簿) | 空簿创建、从数据源创建 |
-| 3.4 | [工作表：查询与管理](#34-工作表查询与管理) | 查询表名、增删移动遍历 |
+| 3.4 | [工作表：查询与管理](#34-工作表查询与管理) | 查询表名、增删复制移动遍历 |
 | 3.5 | [保存与写出](#35-保存与写出) | Save / SaveAs / Write，写入选项 |
 | 3.6 | [文档属性 `WorkbookProperties`](#36-文档属性-workbookproperties) | 读写 `WorkbookProperties` |
 
@@ -271,6 +272,7 @@ Console.WriteLine(wb.Worksheets.Contains("Sheet1"));         // true
 wb.Worksheets.Add("Data");                // 新增空表
 wb.Worksheets.Add("People", peopleList);  // 新增表并写 List<T>（首行表头）
 wb.Worksheets.Add("T", dataTable);        // 新增表并写 DataTable（首行列名）
+wb.Worksheets.Copy("Data");               // 复制工作表，副本追加到末尾
 wb.Worksheets.Move(0, 2);                 // 移动顺序（0-based）
 wb.Worksheets.Remove("Data");             // 按名称删除（存在返回 true）
 wb.Worksheets.RemoveAt(0);                // 按索引删除
@@ -1370,6 +1372,23 @@ wb.SaveAs("out.xlsx");
 - `TabColor`：xlsx / xlsm 读写；**xlsb / xls 不支持标签颜色**，写出时经 `DegradationCapability.SheetVisibility` 上报后丢弃。
 - 守卫：把工作簿**最后一张可见表**设为隐藏会抛 `LiteExcelException`（Excel 要求至少保留一张可见表）。
 - 修改可见性/标签颜色会标记工作表为已修改，确保变更真正写入文件。
+
+## 7.8 复制工作表
+
+```csharp
+var wb = Excel.Open("report.xlsx");
+
+var copy = wb.Worksheets.Copy("明细");             // 名称自动生成为「明细 (2)」
+var named = wb.Worksheets.Copy("明细", "明细备份"); // 指定副本名称
+var copy2 = wb.Worksheets["明细"].Copy();          // 等价便捷写法
+
+wb.SaveAs("out.xlsx");
+```
+
+- 副本追加到工作簿**末尾**；不指定名称时自动生成「原名 (2)」「原名 (3)」…（不超过 31 字符）。
+- 内容全部深拷贝，改副本不影响原表：值、公式、样式、超链接、合并、行高列宽、批注、筛选、数据验证、条件格式、图片、超级表（自动改名保证全簿唯一）、工作表保护。
+- 副本不继承 VBA `codeName`、源 `sheetId` 与切片器等高级部件引用；新增表会使工作簿走整本重建路径。
+- 含表名限定的引用（如公式 `明细!A1`、内部超链接 `#明细!A1`）仍指向原表，需自行改写。
 
 ---
 
@@ -3020,6 +3039,7 @@ wb.SaveAs("macro_copy.xlsm");
 | 21.4 | [流式写入 `CreateWriter`](#214-流式写入-createwriter) | `XlsxStreamWriter` 逐行写 |
 | 21.5 | [大文件与内存模型](#215-大文件与内存模型) | 流式与内存模型 |
 | 21.6 | [拉取式枚举 `EnumerateRows`](#216-拉取式枚举-enumeraterows) | LINQ 可组合、提前中断、不跳首行 |
+| 21.7 | [异步 API `Async`](#217-异步-api-async) | Task 包装 + 取消令牌，UI 不卡死 |
 
 ---
 
@@ -3285,15 +3305,41 @@ foreach (var row in Excel.EnumerateRows("big.xlsx"))
 
 `sheetName` 为 null 时取第一张表。支持 xlsx / xlsm / xlsb / xls（csv 除外）。迭代器释放时关闭文件句柄，`break` 提前退出也会释放。
 
+`EnumerateRows` 本身保持同步（`IEnumerable`）；异步场景请改用 [§21.7 异步 API](#217-异步-api-async) 的 `StreamRowsAsync` 等官方异步方法，无需再自行 `Task.Run` 包装。
+
+## 21.7 异步 API Async
+
+公开门面（`Excel` 与 `Workbook`）提供与同步版一一对应的异步方法：命名加 `Async` 后缀、返回 `Task` / `Task&lt;T&gt;`、末位可选 `CancellationToken`。net48 与 net8.0 行为一致，无新增依赖。
+
 ```csharp
-// WinForms 异步调用，避免 UI 线程卡死
-var names = await Task.Run(() => Excel.GetSheetNames(sPath));
-await Task.Run(() =>
-{
-    foreach (var row in Excel.EnumerateRows(sPath, names[0]))
-        Handle(row);
-});
+// 打开 / 保存
+var wb = await Excel.OpenAsync("data.xlsx");
+await wb.SaveAsAsync("copy.xlsx");
+
+// List<T> / DataTable / 低层模型
+var list = await Excel.ReadAsync<Person>("data.xlsx");
+await Excel.WriteAsync("out.xlsx", list);
+
+// 流式逐行 + 进度 + 追加
+await Excel.StreamRowsAsync("big.xlsx", "Sheet1", row => Handle(row));
+await Excel.ReadWithProgressAsync("big.xlsx", 0, (current, total) => UpdateUI(current, total));
+await Excel.AppendAsync("log.xlsx", newData);
+
+// 取消（仅任务启动前生效；已取消的令牌立即抛 OperationCanceledException）
+using var cts = new CancellationTokenSource();
+cts.CancelAfter(TimeSpan.FromSeconds(30));
+var list2 = await Excel.ReadAsync<Person>("big.xlsx", cancellationToken: cts.Token);
 ```
+
+覆盖清单：`Excel.OpenAsync`（路径 / Stream）、`WriteAsync`（Workbook / SheetData / DataTable / `List<T>`）、`ReadAsync<T>`、`ReadSheetAsync`（按索引 / 按表名，路径 / Stream）、`ReadAsDataTableAsync`、`GetSheetNamesAsync`、`StreamRowsAsync`、`ReadWithProgressAsync`、`AppendAsync`；`Workbook.SaveAsync` / `SaveAsAsync` / `SaveAsync(Stream)`。
+
+行为边界：
+
+- **线程模型**：经 `Task.Run` 在后台线程执行对应的同步实现，语义、参数校验与降级行为与同步版完全一致。
+- **取消语义**：`cancellationToken` 仅在任务**启动前**生效（已取消则抛 `OperationCanceledException`）；任务开始后不可中断。
+- **回调线程**：`StreamRowsAsync` 的 `onRow`、`ReadWithProgressAsync` 的 `onProgress` 在后台线程触发，UI 场景请自行封送回 UI 线程。
+- **Stream 重载**：流的读写发生在后台线程，任务期间请勿并发操作该流。
+- **不提供 `IAsyncEnumerable`**：net48 无此类型且需第三方包（违背零依赖定位）；异步流式场景用 `StreamRowsAsync`（推送回调）覆盖，`EnumerateRows` 保持同步。
 
 # 22. 降级回调 OnDegradation
 
@@ -3666,6 +3712,7 @@ catch (Exception ex)
 | `Append(path, SheetData[, properties])` | 追加数据 |
 | `DetectFormat(path)` | 按扩展名返回格式 |
 | `ReadWithProgress(path, sheetIndex, onProgress)` | 带进度读取 |
+| `OpenAsync` / `WriteAsync` / `ReadAsync` / `ReadSheetAsync` / `ReadAsDataTableAsync` / `GetSheetNamesAsync` / `StreamRowsAsync` / `ReadWithProgressAsync` / `AppendAsync` | 异步版（Task + CancellationToken），参数与同步版一致，见 [21.7](#217-异步-api-async) |
 
 ## A.2 Workbook
 
@@ -3679,6 +3726,7 @@ catch (Exception ex)
 | `Format` | 当前工作簿格式 |
 | `Save()` / `SaveAs(path[, format])` | 保存 / 另存 |
 | `Save(stream, format)` | 存到流 |
+| `SaveAsync([ct])` / `SaveAsAsync(path[, format, ct])` / `SaveAsync(stream, format[, ct])` | 异步保存（Task + CancellationToken），见 [21.7](#217-异步-api-async) |
 
 ## A.3 Worksheet
 
@@ -3703,6 +3751,9 @@ catch (Exception ex)
 | `Protection` | 工作表保护 |
 | `HeaderStyle` / `DefaultStyle` / `RowStyles` / `ColumnStyles` | 样式 |
 | `ImportData(...)` | 导入数据 |
+| `Copy([newName])` | 复制本表到工作簿末尾（深拷贝），见 [7.8](#78-复制工作表) |
+| `Delete()` | 删除本表 |
+| `Visible` / `TabColor` | 可见性 / 标签颜色 |
 
 ## A.4 模型类
 
