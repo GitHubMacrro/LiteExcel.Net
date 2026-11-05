@@ -392,7 +392,7 @@ public static partial class XlsxReader
         if (appEntry is not null)
         {
             var doc = XElement.Load(appEntry.Open());
-            var ns = doc.GetDefaultNamespace();
+            var ns = doc.Name.Namespace;
             props.Application = GetElementText(doc, ns + "Application");
         }
 
@@ -466,7 +466,7 @@ public static partial class XlsxReader
         var wbEntry = zip.GetEntry("xl/workbook.xml")
             ?? throw new LiteExcelException("这不是有效的 xlsx 文件");
         var workbook = XElement.Load(wbEntry.Open());
-        var ns = workbook.GetDefaultNamespace();
+        var ns = workbook.Name.Namespace;
 
         // 检测 1904 日期系统；同时捕获工作簿宿主 VBA 代码名（保存时写回 workbookPr@codeName）
         var wbPr = workbook.Element(ns + "workbookPr");
@@ -600,7 +600,7 @@ public static partial class XlsxReader
         var result = new List<NamedRange>();
         if (string.IsNullOrEmpty(rawXml)) return result;
         var doc = XElement.Parse(rawXml);
-        var ns = doc.GetDefaultNamespace();
+        var ns = doc.Name.Namespace;
         foreach (var el in doc.Elements(ns + "definedName"))
         {
             result.Add(new NamedRange
@@ -852,7 +852,7 @@ public static partial class XlsxReader
             }
             else if (reader.LocalName == "tablePart")
             {
-                var rid = reader.GetAttribute("r:id");
+                var rid = reader.GetAttribute("id", "http://schemas.openxmlformats.org/officeDocument/2006/relationships");
                 if (!string.IsNullOrEmpty(rid))
                     (sheet.TablesRawRelIds ??= new List<string>()).Add(rid);
             }
@@ -1075,7 +1075,7 @@ public static partial class XlsxReader
             TotalsRowShown = tableEl.Attribute("totalsRowShown")?.Value == "1",
         };
 
-        var styleInfo = tableEl.Element(tableEl.GetDefaultNamespace() + "tableStyleInfo");
+        var styleInfo = tableEl.Element(tableEl.Name.Namespace + "tableStyleInfo");
         if (styleInfo is not null)
         {
             var styleName = styleInfo.Attribute("name")?.Value;
@@ -1096,13 +1096,13 @@ public static partial class XlsxReader
             tbl.ShowRowStripes = false;
         }
 
-        var autoFilter = tableEl.Element(tableEl.GetDefaultNamespace() + "autoFilter");
+        var autoFilter = tableEl.Element(tableEl.Name.Namespace + "autoFilter");
         tbl.AutoFilter = autoFilter is not null;
 
-        var columnsEl = tableEl.Element(tableEl.GetDefaultNamespace() + "tableColumns");
+        var columnsEl = tableEl.Element(tableEl.Name.Namespace + "tableColumns");
         if (columnsEl is not null)
         {
-            foreach (var colEl in columnsEl.Elements(tableEl.GetDefaultNamespace() + "tableColumn"))
+            foreach (var colEl in columnsEl.Elements(tableEl.Name.Namespace + "tableColumn"))
             {
                 var colName = colEl.Attribute("name")?.Value;
                 if (string.IsNullOrEmpty(colName)) continue;
